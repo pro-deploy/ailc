@@ -1,0 +1,11 @@
+[package]
+name = "ailc-capabilities"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ailc-contracts = { path = "../ailc-contracts" }
+ailc-core = { path = "../ailc-core" }
+serde_json = "1"
+regex = "1"

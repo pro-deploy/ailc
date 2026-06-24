@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    name: Сборка и тесты
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Сборка (release)
+        run: cargo build --workspace --release
+      - name: Тесты
+        run: cargo test --workspace
+      - name: Clippy (информационно, не блокирует)
+        run: cargo clippy --workspace --all-targets
+        continue-on-error: true

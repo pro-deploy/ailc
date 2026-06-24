@@ -1,0 +1,44 @@
+# Данные правил для мастера комплаенса (вынесены из .rs, чтобы детекторы co-mcp не
+# ловили токены в собственном исходнике). Секция = @условие; ниже её строки выдаются,
+# если условие профиля выполнено. Строки # — заголовки/комментарии (идут в вывод как есть).
+@pdn
+# -- ПДн в логах — 152-ФЗ ст.13.11; утечка 3-15 млн --
+FORBID passport_number
+FORBID passportSeries
+FORBID паспорт
+FORBID снилс
+FORBID СНИЛС
+FORBID snils
+# -- Пароли/секреты — 152-ФЗ ст.19 --
+FORBID md5(password
+FORBID sha1(password
+FORBID password_plain
+FORBID AKIA
+# -- Согласие/политика — 152-ФЗ ст.9, ст.18.1 --
+FORBID defaultChecked
+FORBID checked={true}
+REQUIRE privacy
+REQUIRE delete_account
+@pdn_ru
+# -- Локализация — 242-ФЗ; 1-6 / 6-18 млн --
+FORBID rds.amazonaws.com
+FORBID mongodb.net
+FORBID .firebaseio.com
+FORBID .supabase.co
+FORBID us-east-1
+FORBID eu-west-1
+@pdn_foreign
+# -- Трансгранична — 152-ФЗ ст.12; УК до 8 лет --
+FORBID google-analytics.com
+FORBID googletagmanager.com
+FORBID connect.facebook.net
+FORBID api.amplitude.com
+FORBID ingest.sentry.io
+FORBID api.sendgrid.com
+@biometrics
+# -- Биометрия — 572-ФЗ; только ЕБС --
+FORBID raw_biometric
+FORBID face_embedding_store
+@ads
+# -- Маркировка рекламы — 38-ФЗ; до 700 тыс --
+REQUIRE erid

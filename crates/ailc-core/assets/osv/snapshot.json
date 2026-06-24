@@ -1,0 +1,205 @@
+{
+  "generated_at": "2026-06-21",
+  "count": 22,
+  "source": "Подборка известных уязвимостей OSV.dev, собрана вручную для офлайн-снимка. Прод-обновление: выгрузить per-ecosystem дампы OSV.dev и пересобрать массив vulns.",
+  "vulns": [
+    {
+      "id": "CVE-2021-23337",
+      "ecosystem": "npm",
+      "package": "lodash",
+      "introduced": "0",
+      "fixed": "4.17.21",
+      "severity": "HIGH",
+      "summary": "Command injection через шаблонные строки lodash"
+    },
+    {
+      "id": "CVE-2021-44906",
+      "ecosystem": "npm",
+      "package": "minimist",
+      "introduced": "0",
+      "fixed": "1.2.6",
+      "severity": "HIGH",
+      "summary": "Prototype pollution в minimist"
+    },
+    {
+      "id": "CVE-2019-10744",
+      "ecosystem": "npm",
+      "package": "lodash",
+      "introduced": "0",
+      "fixed": "4.17.12",
+      "severity": "HIGH",
+      "summary": "Prototype pollution через defaultsDeep"
+    },
+    {
+      "id": "CVE-2022-24999",
+      "ecosystem": "npm",
+      "package": "express",
+      "introduced": "0",
+      "fixed": "4.17.3",
+      "severity": "HIGH",
+      "summary": "Prototype pollution через qs в express (раскрытие свойств запроса)"
+    },
+    {
+      "id": "CVE-2024-29041",
+      "ecosystem": "npm",
+      "package": "express",
+      "introduced": "0",
+      "fixed": "4.19.2",
+      "severity": "MEDIUM",
+      "summary": "Открытое перенаправление через нормализацию URL в express"
+    },
+    {
+      "id": "CVE-2020-7598",
+      "ecosystem": "npm",
+      "package": "minimist",
+      "introduced": "0",
+      "fixed": "0.2.1",
+      "severity": "MEDIUM",
+      "summary": "Prototype pollution в minimist (ветка 0.x)"
+    },
+    {
+      "id": "CVE-2020-28493",
+      "ecosystem": "PyPI",
+      "package": "jinja2",
+      "introduced": "0",
+      "fixed": "2.11.3",
+      "severity": "MEDIUM",
+      "summary": "ReDoS в регулярном выражении urlize"
+    },
+    {
+      "id": "CVE-2018-18074",
+      "ecosystem": "PyPI",
+      "package": "requests",
+      "introduced": "0",
+      "fixed": "2.20.0",
+      "severity": "HIGH",
+      "summary": "Утечка учётных данных при перенаправлении HTTPS на HTTP"
+    },
+    {
+      "id": "CVE-2020-14343",
+      "ecosystem": "PyPI",
+      "package": "pyyaml",
+      "introduced": "0",
+      "fixed": "5.4",
+      "severity": "HIGH",
+      "summary": "Исполнение кода через yaml.full_load"
+    },
+    {
+      "id": "CVE-2024-22195",
+      "ecosystem": "PyPI",
+      "package": "jinja2",
+      "introduced": "0",
+      "fixed": "3.1.3",
+      "severity": "MEDIUM",
+      "summary": "XSS через атрибут xmlattr в Jinja2"
+    },
+    {
+      "id": "RUSTSEC-2020-0071",
+      "ecosystem": "crates.io",
+      "package": "time",
+      "introduced": "0",
+      "fixed": "0.2.23",
+      "severity": "HIGH",
+      "summary": "Segfault при работе с localtime в многопоточности"
+    },
+    {
+      "id": "RUSTSEC-2021-0079",
+      "ecosystem": "crates.io",
+      "package": "hyper",
+      "introduced": "0",
+      "fixed": "0.14.12",
+      "severity": "HIGH",
+      "summary": "Некорректный разбор заголовка Content-Length"
+    },
+    {
+      "id": "RUSTSEC-2022-0040",
+      "ecosystem": "crates.io",
+      "package": "owning_ref",
+      "introduced": "0",
+      "fixed": "0.5.0",
+      "severity": "HIGH",
+      "summary": "Множественные нарушения безопасности памяти в owning_ref"
+    },
+    {
+      "id": "RUSTSEC-2023-0034",
+      "ecosystem": "crates.io",
+      "package": "h2",
+      "introduced": "0",
+      "fixed": "0.3.17",
+      "severity": "MEDIUM",
+      "summary": "Утечка памяти при сбросе потоков HTTP/2 ведёт к отказу в обслуживании"
+    },
+    {
+      "id": "CVE-2022-32149",
+      "ecosystem": "Go",
+      "package": "golang.org/x/text",
+      "introduced": "0",
+      "fixed": "0.3.8",
+      "severity": "HIGH",
+      "summary": "DoS при разборе Accept-Language в golang.org/x/text/language"
+    },
+    {
+      "id": "CVE-2023-39325",
+      "ecosystem": "Go",
+      "package": "golang.org/x/net",
+      "introduced": "0",
+      "fixed": "0.17.0",
+      "severity": "HIGH",
+      "summary": "HTTP/2 rapid reset, отказ в обслуживании"
+    },
+    {
+      "id": "CVE-2021-38561",
+      "ecosystem": "Go",
+      "package": "golang.org/x/text",
+      "introduced": "0",
+      "fixed": "0.3.7",
+      "severity": "HIGH",
+      "summary": "Выход за границы среза при нормализации в golang.org/x/text/language"
+    },
+    {
+      "id": "CVE-2021-44228",
+      "ecosystem": "Maven",
+      "package": "org.apache.logging.log4j:log4j-core",
+      "introduced": "2.0",
+      "fixed": "2.15.0",
+      "severity": "CRITICAL",
+      "summary": "Log4Shell, удалённое исполнение кода через JNDI lookup"
+    },
+    {
+      "id": "CVE-2021-45046",
+      "ecosystem": "Maven",
+      "package": "org.apache.logging.log4j:log4j-core",
+      "introduced": "2.0",
+      "fixed": "2.16.0",
+      "severity": "CRITICAL",
+      "summary": "Неполное исправление Log4Shell, исполнение кода и отказ в обслуживании"
+    },
+    {
+      "id": "CVE-2022-22965",
+      "ecosystem": "Maven",
+      "package": "org.springframework:spring-beans",
+      "introduced": "0",
+      "fixed": "5.3.18",
+      "severity": "CRITICAL",
+      "summary": "Spring4Shell, удалённое исполнение кода через привязку данных"
+    },
+    {
+      "id": "CVE-2022-23305",
+      "ecosystem": "Packagist",
+      "package": "guzzlehttp/guzzle",
+      "introduced": "0",
+      "fixed": "6.5.6",
+      "severity": "MEDIUM",
+      "summary": "Утечка заголовка Authorization при кросс-доменном перенаправлении в Guzzle"
+    },
+    {
+      "id": "CVE-2015-9284",
+      "ecosystem": "RubyGems",
+      "package": "omniauth",
+      "introduced": "0",
+      "fixed": "1.9.2",
+      "severity": "MEDIUM",
+      "summary": "CSRF в фазе запроса OmniAuth ведёт к перехвату учётной записи"
+    }
+  ]
+}

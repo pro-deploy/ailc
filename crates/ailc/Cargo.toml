@@ -1,0 +1,15 @@
+[package]
+name = "ailc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ailc"
+path = "src/main.rs"
+
+[dependencies]
+ailc-contracts = { path = "../ailc-contracts" }
+ailc-core = { path = "../ailc-core" }
+ailc-capabilities = { path = "../ailc-capabilities" }
+serde_json = "1"

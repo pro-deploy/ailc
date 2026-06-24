@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ailc-contracts",
+    "crates/ailc-core",
+    "crates/ailc-capabilities",
+    "crates/ailc",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.4.0"
+license = "Apache-2.0"
+
+# Профиль release: плотный бинарь + защита IP (труднее реверсить).
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
