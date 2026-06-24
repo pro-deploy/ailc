@@ -1,7 +1,8 @@
 name: Release
 
-# Собирает релизный бинарь ailc под Linux и macOS и прикрепляет его к релизу GitHub.
-# Запускается при пуше тега вида v* (например v0.4.0) или вручную.
+# Собирает релизный бинарь ailc под все платформы и прикрепляет к релизу GitHub:
+# Linux (x86_64, aarch64), macOS (Intel и Apple Silicon), Windows (x86_64), плюс
+# установочные скрипты install.sh и install.ps1. Запускается на теге вида v* или вручную.
 
 on:
   push:
@@ -13,33 +14,67 @@ permissions:
 
 jobs:
   build:
-    name: Сборка ${{ matrix.target }}
+    name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - os: macos-latest
-            target: aarch64-apple-darwin
+          - { os: ubuntu-latest,    target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: macos-13,         target: x86_64-apple-darwin }
+          - { os: macos-latest,     target: aarch64-apple-darwin }
+          - { os: windows-latest,   target: x86_64-pc-windows-msvc }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+
       - name: Сборка release
         run: cargo build --release --target ${{ matrix.target }} -p ailc
-      - name: Упаковка бинаря
+
+      - name: Упаковка (Linux, macOS)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
-          bin="target/${{ matrix.target }}/release/ailc"
-          tar -czf "ailc-${{ matrix.target }}.tar.gz" -C "$(dirname "$bin")" ailc
-          sha256sum "ailc-${{ matrix.target }}.tar.gz" > "ailc-${{ matrix.target }}.tar.gz.sha256" 2>/dev/null \
-            || shasum -a 256 "ailc-${{ matrix.target }}.tar.gz" > "ailc-${{ matrix.target }}.tar.gz.sha256"
+          archive="ailc-${{ matrix.target }}.tar.gz"
+          tar -czf "$archive" -C "target/${{ matrix.target }}/release" ailc
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$archive" > "$archive.sha256"
+          else
+            shasum -a 256 "$archive" > "$archive.sha256"
+          fi
+
+      - name: Упаковка (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = "ailc-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/ailc.exe" -DestinationPath $archive -Force
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+          "$hash  $archive" | Out-File -Encoding ascii "$archive.sha256"
+
       - name: Прикрепить к релизу
         uses: softprops/action-gh-release@v2
         with:
+          fail_on_unmatched_files: false
           files: |
             ailc-${{ matrix.target }}.tar.gz
             ailc-${{ matrix.target }}.tar.gz.sha256
+            ailc-${{ matrix.target }}.zip
+            ailc-${{ matrix.target }}.zip.sha256
+
+  scripts:
+    name: установочные скрипты
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Прикрепить установщики к релизу
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: false
+          files: |
+            install.sh
+            install.ps1
