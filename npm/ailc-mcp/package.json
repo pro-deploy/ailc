@@ -1,0 +1,36 @@
+{
+  "name": "ailc-mcp",
+  "version": "0.4.0",
+  "description": "ailc (AI Life Cycle): автономный оркестратор качества и безопасности кода как MCP-сервер. Обёртка скачивает готовый бинарь для вашей платформы и запускает его.",
+  "bin": {
+    "ailc-mcp": "bin/ailc-mcp.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/pro-deploy/ailc",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pro-deploy/ailc.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pro-deploy/ailc/issues"
+  },
+  "keywords": [
+    "mcp",
+    "security",
+    "sast",
+    "taint-analysis",
+    "code-quality",
+    "sarif",
+    "owasp",
+    "devsecops",
+    "offline",
+    "compliance"
+  ]
+}
