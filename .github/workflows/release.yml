@@ -1,0 +1,45 @@
+name: Release
+
+# Собирает релизный бинарь ailc под Linux и macOS и прикрепляет его к релизу GitHub.
+# Запускается при пуше тега вида v* (например v0.4.0) или вручную.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Сборка ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Сборка release
+        run: cargo build --release --target ${{ matrix.target }} -p ailc
+      - name: Упаковка бинаря
+        run: |
+          bin="target/${{ matrix.target }}/release/ailc"
+          tar -czf "ailc-${{ matrix.target }}.tar.gz" -C "$(dirname "$bin")" ailc
+          sha256sum "ailc-${{ matrix.target }}.tar.gz" > "ailc-${{ matrix.target }}.tar.gz.sha256" 2>/dev/null \
+            || shasum -a 256 "ailc-${{ matrix.target }}.tar.gz" > "ailc-${{ matrix.target }}.tar.gz.sha256"
+      - name: Прикрепить к релизу
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ailc-${{ matrix.target }}.tar.gz
+            ailc-${{ matrix.target }}.tar.gz.sha256
