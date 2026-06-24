@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+# Рантайм-телеметрия инструмента ailc (предшественник) — к co-mcp не относится.
+/.ailc/
+.DS_Store
+# Личные настройки Claude Code (allowlist разрешений) — у каждого свои, не коммитим.
+.claude/settings.local.json

@@ -1,0 +1,14 @@
+{
+    "model_type": "model2vec",
+    "architectures": [
+        "StaticModel"
+    ],
+    "tokenizer_name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "apply_pca": 128,
+    "sif_coefficient": 0.0001,
+    "hidden_dim": 128,
+    "seq_length": 1000000,
+    "normalize": true,
+    "pooling": "mean",
+    "embedding_dtype": "int8"
+}
