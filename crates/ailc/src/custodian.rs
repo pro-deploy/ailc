@@ -3,7 +3,7 @@
 //!
 //! Цикл: наблюдай → прогони быстрый статический гейт → авто-обнови документацию
 //! (идемпотентно — «починка» дрейфа) → уведоми (консоль · macOS · ALERT.md · чат-фид) →
-//! запиши статус в .co/custodian/. Код сам НЕ правит. Kill-switch: файл .co/custodian/STOP.
+//! запиши статус в .ailc/custodian/. Код сам НЕ правит. Kill-switch: файл .ailc/custodian/STOP.
 //!
 //! `ailc custodian install <путь> [сек]` ставит launchd-агент (по умолчанию каждые 900с),
 //! который переживает перезапуск машины и сам зовёт `custodian <путь> --once`.
@@ -31,7 +31,7 @@ pub fn run(root: &str, interval_secs: u64, fix: bool) {
     let mut reg = Registry::new();
     ailc_capabilities::register_core(&mut reg);
     let ctx = Ctx::new(root);
-    let stop = Path::new(root).join(".co/custodian/STOP");
+    let stop = Path::new(root).join(".ailc/custodian/STOP");
 
     println!(
         "ailc · custodian: слежу за «{root}» (опрос каждые {interval_secs}с){}.\n  Остановить: создайте файл {}",
@@ -122,7 +122,7 @@ fn run_cycle(reg: &Registry, ctx: &Ctx, cycle: u64, fix: bool) {
         println!("   ⚠ нужно решение: {d}");
     }
 
-    // 4. Статус на диск (.co/custodian/status.md) + журнал (events.jsonl).
+    // 4. Статус на диск (.ailc/custodian/status.md) + журнал (events.jsonl).
     let status = format!(
         "# Статус сопровождения ailc\n\nЦикл: {cycle}\n\n{}\n\nПроверок: {} · блокеров: {} · предупреждений: {} · качество: {:.0}/100\n\nПравила вынесенных решений:\n{}\n",
         ledger.headline,
@@ -162,7 +162,7 @@ fn notify(ctx: &Ctx, ledger: &QualityLedger) {
     let alert = ledger.blocking > 0
         || !ledger.open_decisions.is_empty()
         || !ledger.advisories.is_empty();
-    let alert_path = ctx.root.join(".co/custodian/ALERT.md");
+    let alert_path = ctx.root.join(".ailc/custodian/ALERT.md");
 
     if !alert {
         let _ = std::fs::remove_file(&alert_path); // чисто — снимаем флаг
@@ -241,9 +241,9 @@ pub fn install(root: &str, interval_secs: u64) {
     let label = agent_label(&abs_root);
     let agents_dir = home.join("Library/LaunchAgents");
     let _ = std::fs::create_dir_all(&agents_dir);
-    let _ = std::fs::create_dir_all(abs_root.join(".co/custodian"));
+    let _ = std::fs::create_dir_all(abs_root.join(".ailc/custodian"));
     let plist_path = agents_dir.join(format!("{label}.plist"));
-    let log = abs_root.join(".co/custodian/launchd.log");
+    let log = abs_root.join(".ailc/custodian/launchd.log");
     let interval = interval_secs.max(60);
 
     let plist = format!(
@@ -290,7 +290,7 @@ pub fn install(root: &str, interval_secs: u64) {
     println!("  непрерывно (fg):  ailc custodian {} 900", abs_root.display());
     println!("  снять автозапуск: ailc custodian uninstall {}", abs_root.display());
     println!("  лог:    {}", log.display());
-    println!("  алерты: {}/.co/custodian/ALERT.md", abs_root.display());
+    println!("  алерты: {}/.ailc/custodian/ALERT.md", abs_root.display());
 }
 
 /// Снять launchd-агент.

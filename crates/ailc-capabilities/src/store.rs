@@ -1,4 +1,4 @@
-//! CORE-capability на E7 Store — состояние проекта как файлы под `.co/`.
+//! CORE-capability на E7 Store — состояние проекта как файлы под `.ailc/`.
 //!
 //! ПРИНЦИП тот же, что и у сканеров: capability = тонкий конфиг поверх одного движка.
 //! Память, журнал решений и бэклог — это разные пространства имён одного `Store`,
@@ -18,7 +18,7 @@ const STORE_SCHEMA: &str =
 /// Схема для чисто читающих операций — без обязательных полей.
 const READ_SCHEMA: &str = r#"{"type":"object","properties":{}}"#;
 
-/// Пространство имён памяти и бэклога (каталоги под `.co/`).
+/// Пространство имён памяти и бэклога (каталоги под `.ailc/`).
 const NS_MEMORY: &str = "memory-bank";
 const NS_BACKLOG: &str = "backlog";
 
@@ -71,7 +71,7 @@ impl Capability for MemoryRead {
 
         // Инвариант «нет молчаливых пропусков»: пустая память — явная причина.
         if items.is_empty() {
-            out.skipped = Some("память пуста (нет .co/memory-bank)".into());
+            out.skipped = Some("память пуста (нет .ailc/memory-bank)".into());
             out.summary = "memory/read: память пуста".into();
             return Ok(out);
         }
@@ -139,7 +139,7 @@ impl Capability for MemoryUpdate {
             .unwrap_or("active-context.md");
 
         Store::write(ctx, NS_MEMORY, name, content)?;
-        let artifact = format!(".co/{NS_MEMORY}/{name}");
+        let artifact = format!(".ailc/{NS_MEMORY}/{name}");
         out.artifacts.push(artifact.clone());
         out.summary = format!("memory/update: память сохранена → {artifact}");
         Ok(out)
@@ -193,7 +193,7 @@ impl Capability for DecisionLog {
         };
 
         Store::append(ctx, NS_MEMORY, "decision-log.md", line)?;
-        let artifact = format!(".co/{NS_MEMORY}/decision-log.md");
+        let artifact = format!(".ailc/{NS_MEMORY}/decision-log.md");
         out.artifacts.push(artifact.clone());
         out.summary = format!("memory/decision-log: решение записано → {artifact}");
         Ok(out)
@@ -249,7 +249,7 @@ impl Capability for BacklogAdd {
         // Атомарно выделяем id-файл, затем наполняем его описанием.
         let name = Store::alloc_id(ctx, NS_BACKLOG, "md")?;
         Store::write(ctx, NS_BACKLOG, &name, body)?;
-        let artifact = format!(".co/{NS_BACKLOG}/{name}");
+        let artifact = format!(".ailc/{NS_BACKLOG}/{name}");
         out.artifacts.push(artifact.clone());
         out.summary = format!("backlog/add: задача создана → {artifact}");
         Ok(out)
@@ -295,7 +295,7 @@ impl Capability for BacklogList {
 
         // Инвариант «нет молчаливых пропусков»: пустой бэклог — явная причина.
         if items.is_empty() {
-            out.skipped = Some("бэклог пуст (нет .co/backlog)".into());
+            out.skipped = Some("бэклог пуст (нет .ailc/backlog)".into());
             out.summary = "backlog/list: бэклог пуст".into();
             return Ok(out);
         }

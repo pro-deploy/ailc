@@ -1,7 +1,7 @@
 //! Контракт публичного API: снимок (`generate/api-baseline`) и проверка слома
 //! (`verify/api-break`). Из ailc — но по-честному, детерминированно и офлайн.
 //!
-//! Снимок = отсортированный набор публичных символов (язык·вид·имя) в `.co/api/baseline.txt`.
+//! Снимок = отсортированный набор публичных символов (язык·вид·имя) в `.ailc/api/baseline.txt`.
 //! Проверка сравнивает текущее публичное API со снимком: символ был в снимке и пропал →
 //! слом контракта (удалён/переименован). Перемещение между файлами сломом НЕ считается
 //! (ключ — без файла). Параметры/типы не сравниваются (символы их не несут) — честное
@@ -67,7 +67,7 @@ impl ApiBaseline {
                 id: "generate/api-baseline",
                 family: Family::Generate,
                 engine: EngineKind::Generator,
-                when_to_use: "Зафиксировать снимок публичного API в .co/api/baseline.txt — эталон, против которого verify/api-break ловит слом контракта.",
+                when_to_use: "Зафиксировать снимок публичного API в .ailc/api/baseline.txt — эталон, против которого verify/api-break ловит слом контракта.",
                 input_schema: TARGET_SCHEMA,
                 tier: Tier::Core,
                 deterministic: true,
@@ -90,7 +90,7 @@ impl Capability for ApiBaseline {
         }
         let body = api.iter().cloned().collect::<Vec<_>>().join("\n");
         Store::write(ctx, NS, BASELINE, &body)?;
-        out.artifacts.push(format!(".co/{NS}/{BASELINE}"));
+        out.artifacts.push(format!(".ailc/{NS}/{BASELINE}"));
         out.metrics.push(("public_symbols".into(), api.len() as f64));
         out.summary = format!("generate/api-baseline: снимок {} публичных символов", api.len());
         Ok(out)
@@ -114,7 +114,7 @@ impl ApiBreak {
                 id: "verify/api-break",
                 family: Family::Verify,
                 engine: EngineKind::CodeIntel,
-                when_to_use: "Проверить, не сломан ли публичный контракт: удалённые/переименованные публичные символы относительно снимка .co/api/baseline.txt.",
+                when_to_use: "Проверить, не сломан ли публичный контракт: удалённые/переименованные публичные символы относительно снимка .ailc/api/baseline.txt.",
                 input_schema: TARGET_SCHEMA,
                 tier: Tier::Core,
                 deterministic: true,
@@ -129,7 +129,7 @@ impl Capability for ApiBreak {
     }
     fn run(&self, ctx: &Ctx, input: &RunInput) -> Result<CapabilityOutput> {
         let mut out = CapabilityOutput::default();
-        // Снимок: один файл baseline.txt в .co/api/.
+        // Снимок: один файл baseline.txt в .ailc/api/.
         let baseline: Option<String> = Store::read_all(ctx, NS)?
             .into_iter()
             .find(|(name, _)| name == BASELINE)
@@ -138,7 +138,7 @@ impl Capability for ApiBreak {
             Some(b) => b,
             None => {
                 out.skipped = Some(
-                    "нет снимка API (.co/api/baseline.txt) — сделай: ailc cap generate/api-baseline".into(),
+                    "нет снимка API (.ailc/api/baseline.txt) — сделай: ailc cap generate/api-baseline".into(),
                 );
                 out.summary = "verify/api-break: снимок не сделан".into();
                 return Ok(out);

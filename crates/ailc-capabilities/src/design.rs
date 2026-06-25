@@ -109,7 +109,7 @@ impl Capability for FeatureSpec {
 ## Последствия\n_Что станет проще/сложнее после — заполни._\n"
         );
         Store::write(ctx, "decisions", &adr_name, &adr)?;
-        let adr_rel = format!(".co/decisions/{adr_name}");
+        let adr_rel = format!(".ailc/decisions/{adr_name}");
 
         // Карта кода — куда встраивать (снимок на момент проектирования).
         let stats = CodeIntelEngine::module_stats(ctx, input)?;
