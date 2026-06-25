@@ -313,7 +313,7 @@ impl ConstitutionCheck {
                 id: "quality.check/constitution",
                 family: Family::Quality,
                 engine: EngineKind::Scan,
-                when_to_use: "Проверить код на соответствие конституции проекта (правила FORBID/REQUIRE/REQUIRE_EACH из .co/constitution.md).",
+                when_to_use: "Проверить код на соответствие конституции проекта (правила FORBID/REQUIRE/REQUIRE_EACH из .ailc/constitution.md).",
                 input_schema: TARGET_SCHEMA,
                 tier: Tier::Core,
                 deterministic: true,
@@ -331,15 +331,15 @@ impl Capability for ConstitutionCheck {
     fn run(&self, ctx: &Ctx, input: &RunInput) -> Result<CapabilityOutput> {
         let mut out = CapabilityOutput::default();
 
-        // Файл правил: сначала .co/constitution.md, затем constitution.md в корне.
-        let primary = ctx.root.join(".co").join("constitution.md");
+        // Файл правил: сначала .ailc/constitution.md, затем constitution.md в корне.
+        let primary = ctx.root.join(".ailc").join("constitution.md");
         let fallback = ctx.root.join("constitution.md");
         let rules_path = if primary.is_file() {
             primary
         } else if fallback.is_file() {
             fallback
         } else {
-            out.skipped = Some("нет файла конституции (.co/constitution.md)".into());
+            out.skipped = Some("нет файла конституции (.ailc/constitution.md)".into());
             out.summary = "quality.check/constitution: пропущено (нет файла конституции)".into();
             return Ok(out);
         };
@@ -598,7 +598,7 @@ impl LayersCheck {
                 id: "quality.check/layers",
                 family: Family::Quality,
                 engine: EngineKind::CodeIntel,
-                when_to_use: "Проверить архитектурные слои: какие модули кому разрешено зависеть (правила из .co/layers.txt).",
+                when_to_use: "Проверить архитектурные слои: какие модули кому разрешено зависеть (правила из .ailc/layers.txt).",
                 input_schema: TARGET_SCHEMA,
                 tier: Tier::Core,
                 deterministic: true,
@@ -616,9 +616,9 @@ impl Capability for LayersCheck {
     fn run(&self, ctx: &Ctx, input: &RunInput) -> Result<CapabilityOutput> {
         let mut out = CapabilityOutput::default();
 
-        let rules_path: PathBuf = ctx.root.join(".co").join("layers.txt");
+        let rules_path: PathBuf = ctx.root.join(".ailc").join("layers.txt");
         if !rules_path.is_file() {
-            out.skipped = Some("нет файла слоёв (.co/layers.txt)".into());
+            out.skipped = Some("нет файла слоёв (.ailc/layers.txt)".into());
             out.summary = "quality.check/layers: пропущено (нет файла слоёв)".into();
             return Ok(out);
         }
@@ -844,7 +844,7 @@ REQUIRE_EACH // SPDX
     #[test]
     fn forbid_reports_every_executable_occurrence() {
         let dir = tmp();
-        write(&dir, ".co/constitution.md", "FORBID unwrap()\n");
+        write(&dir, ".ailc/constitution.md", "FORBID unwrap()\n");
         write(
             &dir,
             "src/a.rs",
@@ -868,7 +868,7 @@ REQUIRE_EACH // SPDX
     #[test]
     fn forbid_ignores_comments_and_string_literals() {
         let dir = tmp();
-        write(&dir, ".co/constitution.md", "FORBID unwrap()\n");
+        write(&dir, ".ailc/constitution.md", "FORBID unwrap()\n");
         // Только комментарий и строковый литерал: ни одной находки быть не должно.
         write(
             &dir,
@@ -887,7 +887,7 @@ REQUIRE_EACH // SPDX
     #[test]
     fn forbid_ignores_test_files() {
         let dir = tmp();
-        write(&dir, ".co/constitution.md", "FORBID unwrap()\n");
+        write(&dir, ".ailc/constitution.md", "FORBID unwrap()\n");
         // Исполняемое вхождение, но в тест-файле: фикстура, не нарушение прод-кода.
         write(&dir, "src/foo_test.go", "func T() { x.unwrap() }\n");
         let out = run_const(&dir);
@@ -904,7 +904,7 @@ REQUIRE_EACH // SPDX
     #[test]
     fn require_not_satisfied_by_comment_only_occurrence() {
         let dir = tmp();
-        write(&dir, ".co/constitution.md", "REQUIRE LICENSE-HEADER\n");
+        write(&dir, ".ailc/constitution.md", "REQUIRE LICENSE-HEADER\n");
         // Маркер встречается ТОЛЬКО в комментарии: требование не закрыто.
         write(&dir, "src/a.rs", "// LICENSE-HEADER\nfn a() {}\n");
         let out = run_const(&dir);
@@ -919,7 +919,7 @@ REQUIRE_EACH // SPDX
     #[test]
     fn require_not_satisfied_by_test_file_only() {
         let dir = tmp();
-        write(&dir, ".co/constitution.md", "REQUIRE MARKER\n");
+        write(&dir, ".ailc/constitution.md", "REQUIRE MARKER\n");
         // Маркер только в тест-файле: фейк-маркер не должен подделывать покрытие.
         write(&dir, "src/foo_test.go", "// MARKER\nfunc T() {}\n");
         write(&dir, "src/a.go", "package a\n");
@@ -935,7 +935,7 @@ REQUIRE_EACH // SPDX
     #[test]
     fn require_satisfied_by_real_executable_occurrence() {
         let dir = tmp();
-        write(&dir, ".co/constitution.md", "REQUIRE register_all\n");
+        write(&dir, ".ailc/constitution.md", "REQUIRE register_all\n");
         write(&dir, "src/a.rs", "fn boot() { register_all(); }\n");
         let out = run_const(&dir);
         assert_eq!(
@@ -951,7 +951,7 @@ REQUIRE_EACH // SPDX
     #[test]
     fn require_each_flags_only_files_without_marker() {
         let dir = tmp();
-        write(&dir, ".co/constitution.md", "REQUIRE_EACH GUARD\n");
+        write(&dir, ".ailc/constitution.md", "REQUIRE_EACH GUARD\n");
         // Один файл содержит маркер как исполняемую подстроку (покрыт), другой нет.
         write(&dir, "src/has.rs", "fn f() { let GUARD = 1; }\n");
         write(&dir, "src/missing.rs", "fn g() { do_work(); }\n");
@@ -979,7 +979,7 @@ REQUIRE_EACH // SPDX
     #[test]
     fn require_each_ignores_marker_in_comment_or_test() {
         let dir = tmp();
-        write(&dir, ".co/constitution.md", "REQUIRE_EACH MARK\n");
+        write(&dir, ".ailc/constitution.md", "REQUIRE_EACH MARK\n");
         // Маркер только в комментарии: покрытие НЕ закрыто, файл нарушает требование.
         write(&dir, "src/a.rs", "// MARK\nfn a() {}\n");
         // Тест-файл вообще не входит в покрытие (не релевантен) и находки не даёт.
@@ -1000,7 +1000,7 @@ REQUIRE_EACH // SPDX
     #[test]
     fn require_each_all_covered_yields_no_findings() {
         let dir = tmp();
-        write(&dir, ".co/constitution.md", "REQUIRE_EACH MARK\n");
+        write(&dir, ".ailc/constitution.md", "REQUIRE_EACH MARK\n");
         write(&dir, "src/a.rs", "fn a() { let MARK = 1; }\n");
         write(&dir, "src/b.rs", "fn b() { use_MARK(); }\n");
         let out = run_const(&dir);

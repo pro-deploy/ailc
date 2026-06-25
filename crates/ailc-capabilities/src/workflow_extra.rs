@@ -3,7 +3,7 @@
 //! ПРИНЦИП тот же, что у остальных: capability = тонкий конфиг поверх одного из
 //! девяти движков. Здесь — журнал архитектурных решений (E5/E7), сборка имени
 //! ветки (детерминированная, без диска), черновик сообщения коммита (E2 Runner)
-//! и идемпотентное развёртывание скелета `.co/` (E5 Generator). Никакого
+//! и идемпотентное развёртывание скелета `.ailc/` (E5 Generator). Никакого
 //! дублирования логики движков: только сборка входа и оформление выхода.
 
 use ailc_contracts::{
@@ -20,7 +20,7 @@ const QUERY_SCHEMA: &str =
 /// Схема для операций без обязательных полей (черновик коммита, развёртывание).
 const EMPTY_SCHEMA: &str = r#"{"type":"object","properties":{}}"#;
 
-/// Пространство имён журнала решений (каталог под `.co/`).
+/// Пространство имён журнала решений (каталог под `.ailc/`).
 const NS_DECISIONS: &str = "decisions";
 
 // ───────────────────────── generate/adr ─────────────────────────
@@ -80,7 +80,7 @@ impl Capability for GenerateAdr {
         );
         Store::write(ctx, NS_DECISIONS, &name, &body)?;
 
-        let artifact = format!(".co/{NS_DECISIONS}/{name}");
+        let artifact = format!(".ailc/{NS_DECISIONS}/{name}");
         out.artifacts.push(artifact.clone());
         out.summary = format!("generate/adr: ADR-{number} записан → {artifact}");
         Ok(out)
@@ -413,9 +413,9 @@ impl Capability for SetupInit {
 
         // (относительный путь, содержимое шаблона) — идемпотентно: уже существующие не трогаем.
         let files: [(&str, &str); 3] = [
-            (".co/constitution.md", CONSTITUTION_TEMPLATE),
-            (".co/layers.txt", LAYERS_TEMPLATE),
-            (".co/memory-bank/active-context.md", ACTIVE_CONTEXT_TEMPLATE),
+            (".ailc/constitution.md", CONSTITUTION_TEMPLATE),
+            (".ailc/layers.txt", LAYERS_TEMPLATE),
+            (".ailc/memory-bank/active-context.md", ACTIVE_CONTEXT_TEMPLATE),
         ];
 
         let mut created = 0usize;

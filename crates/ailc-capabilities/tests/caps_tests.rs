@@ -567,12 +567,12 @@ fn feature_design_scaffolds_spec_and_adr() {
     let doc = std::fs::read_to_string(ctx.root.join("docs/фичи/корзина-покупок.md")).unwrap();
     assert!(doc.contains("Критерии приёмки"), "секция DoD есть");
     assert!(doc.contains("Затрагиваемые части"), "карта кода есть");
-    let adr = std::fs::read_to_string(ctx.root.join(".co/decisions/1.md")).unwrap();
+    let adr = std::fs::read_to_string(ctx.root.join(".ailc/decisions/1.md")).unwrap();
     assert!(adr.contains("## Решение") && adr.contains("корзина покупок"), "ADR Nygard");
     // Идемпотентно: повторный вызов не плодит файлы и НЕ создаёт лишний ADR.
     let out2 = cap.run(&ctx, &q).unwrap();
     assert!(out2.skipped.is_some(), "повторное проектирование не дублирует");
-    assert!(!ctx.root.join(".co/decisions/2.md").exists(), "лишний ADR не создан");
+    assert!(!ctx.root.join(".ailc/decisions/2.md").exists(), "лишний ADR не создан");
 }
 
 #[test]
@@ -823,7 +823,7 @@ fn workflow_adr_branchname_setup() {
     let r = reg();
     let q = |s: &str| RunInput { target: None, query: Some(s.into()) };
     r.get("generate/adr").unwrap().run(&ctx, &q("Выбор хранилища")).unwrap();
-    let adr = std::fs::read_to_string(ctx.root.join(".co/decisions/1.md")).unwrap();
+    let adr = std::fs::read_to_string(ctx.root.join(".ailc/decisions/1.md")).unwrap();
     assert!(adr.contains("Выбор хранилища") && adr.contains("## Решение"), "ADR Nygard: {adr}");
     let bn = r.get("deliver/branch-name").unwrap().run(&ctx, &q("Сделать корзину покупок")).unwrap();
     assert!(bn.records.iter().any(|x| x.contains("korzin")), "слаг ветки: {:?}", bn.records);
@@ -835,7 +835,7 @@ fn workflow_adr_branchname_setup() {
 
 #[test]
 fn governance_constitution_and_layers() {
-    let ctx = tmp(&[(".co/constitution.md", "FORBID eval(\n"), ("app.py", "x = eval(user_input)\n")]);
+    let ctx = tmp(&[(".ailc/constitution.md", "FORBID eval(\n"), ("app.py", "x = eval(user_input)\n")]);
     let r = reg();
     let cons = r.get("quality.check/constitution").unwrap().run(&ctx, &RunInput::default()).unwrap();
     assert!(
@@ -844,7 +844,7 @@ fn governance_constitution_and_layers() {
         cons.findings.iter().map(|f| f.rule.as_str()).collect::<Vec<_>>()
     );
     let lay = r.get("quality.check/layers").unwrap().run(&ctx, &RunInput::default()).unwrap();
-    assert!(lay.skipped.is_some(), "нет .co/layers.txt → явный skip, не молчание");
+    assert!(lay.skipped.is_some(), "нет .ailc/layers.txt → явный skip, не молчание");
 }
 
 #[test]

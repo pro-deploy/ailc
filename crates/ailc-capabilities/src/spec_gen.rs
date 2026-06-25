@@ -203,7 +203,7 @@ const ARCH_SCAFFOLD: &str = "# Архитектура\n\n\
 ## 1. Введение и цели\n_Главная задача системы и качественные цели — заполни._\n\n\
 ## 2. Ограничения\n_Технологические и организационные ограничения — заполни._\n\n\
 ## 4. Стратегия решения\n_Ключевые архитектурные решения и их обоснование — заполни \
-(или веди ADR в .co/decisions)._\n";
+(или веди ADR в .ailc/decisions)._\n";
 
 /// Грубое определение стека по манифестам сборки в корне.
 /// Стек проекта для раздела «Развёртывание». Единый источник распознавания —
@@ -223,7 +223,7 @@ pub(crate) fn build_arch_auto(ctx: &Ctx, input: &RunInput) -> Result<String> {
     let pmap = CodeIntelEngine::project_map(ctx, input)?;
     let s = surface::extract(ctx, input)?;
     let cycles = graph.cycles();
-    let adr_n = fs::read_dir(ctx.root.join(".co/decisions"))
+    let adr_n = fs::read_dir(ctx.root.join(".ailc/decisions"))
         .map(|d| d.flatten().count())
         .unwrap_or(0);
 
@@ -252,11 +252,11 @@ pub(crate) fn build_arch_auto(ctx: &Ctx, input: &RunInput) -> Result<String> {
         detect_stack(ctx)
     ));
     d.push_str(&format!(
-        "### 9. Архитектурные решения\nADR в .co/decisions: {adr_n}. {}\n\n",
+        "### 9. Архитектурные решения\nADR в .ailc/decisions: {adr_n}. {}\n\n",
         if adr_n == 0 {
             "Фиксируй решения: `ailc cap generate/adr <путь> \"заголовок\"`."
         } else {
-            "См. .co/decisions/."
+            "См. .ailc/decisions/."
         }
     ));
     d.push_str("### 10–11. Качество и риски\n");

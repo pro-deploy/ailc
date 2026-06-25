@@ -299,7 +299,7 @@ fn run_plan(reg: &Registry, sess: &mut Session, args: &Value) -> Value {
 
 /// Алерт фонового custodian (ALERT.md) одной строкой — чтобы ИИ увидел его «в чате».
 fn custodian_alert(path: &str) -> Option<String> {
-    let p = std::path::Path::new(path).join(".co/custodian/ALERT.md");
+    let p = std::path::Path::new(path).join(".ailc/custodian/ALERT.md");
     let body = std::fs::read_to_string(&p).ok()?;
     let head: String = body
         .lines()
@@ -307,7 +307,7 @@ fn custodian_alert(path: &str) -> Option<String> {
         .take(2)
         .collect::<Vec<_>>()
         .join(" · ");
-    Some(format!("🔔 Custodian: {} (детали: .co/custodian/ALERT.md)", head.trim()))
+    Some(format!("🔔 Custodian: {} (детали: .ailc/custodian/ALERT.md)", head.trim()))
 }
 
 fn find_capability_schema() -> Value {
