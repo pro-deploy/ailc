@@ -404,6 +404,32 @@ _Над чем идёт работа прямо сейчас. Заполняет
 ## Открытые вопросы
 ";
 
+/// Идемпотентно развернуть скелет состояния `.ailc/`: конституция, карта слоёв, рабочая
+/// память. Уже существующие файлы не трогает. Возвращает список реально СОЗДАННЫХ файлов.
+/// Эту функцию использует и capability `setup/scaffold`, и MCP-сервер при инициализации,
+/// чтобы среда ставилась сама при первом подключении, а не только правило в CLAUDE.md.
+pub fn scaffold_state(ctx: &Ctx) -> std::io::Result<Vec<&'static str>> {
+    let files: [(&str, &str); 3] = [
+        (".ailc/constitution.md", CONSTITUTION_TEMPLATE),
+        (".ailc/layers.txt", LAYERS_TEMPLATE),
+        (".ailc/memory-bank/active-context.md", ACTIVE_CONTEXT_TEMPLATE),
+    ];
+    let mut created = Vec::new();
+    for (rel, template) in files {
+        let path = ctx.root.join(rel);
+        // Идемпотентность: существующий файл не перезатираем.
+        if path.exists() {
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, template)?;
+        created.push(rel);
+    }
+    Ok(created)
+}
+
 impl Capability for SetupInit {
     fn manifest(&self) -> &CapabilityManifest {
         &self.manifest
@@ -411,36 +437,20 @@ impl Capability for SetupInit {
     fn run(&self, ctx: &Ctx, _input: &RunInput) -> Result<CapabilityOutput> {
         let mut out = CapabilityOutput::default();
 
-        // (относительный путь, содержимое шаблона) — идемпотентно: уже существующие не трогаем.
-        let files: [(&str, &str); 3] = [
-            (".ailc/constitution.md", CONSTITUTION_TEMPLATE),
-            (".ailc/layers.txt", LAYERS_TEMPLATE),
-            (".ailc/memory-bank/active-context.md", ACTIVE_CONTEXT_TEMPLATE),
-        ];
-
-        let mut created = 0usize;
-        let mut existing = 0usize;
-        for (rel, template) in files {
-            let path = ctx.root.join(rel);
-            // Идемпотентность: существующий файл не перезатираем.
-            if path.exists() {
-                existing += 1;
-                continue;
-            }
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&path, template)?;
+        // Та же логика, что выполняется и при подключении MCP-сервера.
+        let created = scaffold_state(ctx)?;
+        let created_n = created.len();
+        let existing = 3 - created_n;
+        for rel in created {
             out.artifacts.push(rel.to_string());
-            created += 1;
         }
 
-        out.metrics.push(("created".into(), created as f64));
+        out.metrics.push(("created".into(), created_n as f64));
         out.metrics.push(("existing".into(), existing as f64));
-        out.summary = if created == 0 {
+        out.summary = if created_n == 0 {
             "среда ailc развёрнута (всё уже на месте, ничего не менялось)".into()
         } else {
-            format!("среда ailc развёрнута (создано файлов: {created}, уже было: {existing})")
+            format!("среда ailc развёрнута (создано файлов: {created_n}, уже было: {existing})")
         };
         Ok(out)
     }

@@ -44,6 +44,10 @@ mod verify_extra;
 mod web_security;
 mod workflow_extra;
 
+// Развёртывание скелета состояния `.ailc/` доступно бинарю: MCP-сервер ставит среду
+// (конституцию и заготовки) сам при первом подключении, а не только правило в CLAUDE.md.
+pub use workflow_extra::scaffold_state;
+
 /// Единая JSON-схема входа для проверок «по проекту».
 const TARGET_SCHEMA: &str = r#"{"type":"object","properties":{"target":{"type":"string"}}}"#;
 

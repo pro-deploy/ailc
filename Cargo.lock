@@ -33,7 +33,7 @@ dependencies = [
 
 [[package]]
 name = "ailc"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "ailc-capabilities",
  "ailc-contracts",
@@ -43,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "ailc-capabilities"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "ailc-contracts",
  "ailc-core",
@@ -53,14 +53,14 @@ dependencies = [
 
 [[package]]
 name = "ailc-contracts"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ailc-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "ailc-contracts",
  "model2vec-rs",
