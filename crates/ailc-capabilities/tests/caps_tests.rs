@@ -829,7 +829,7 @@ fn workflow_adr_branchname_setup() {
     assert!(bn.records.iter().any(|x| x.contains("korzin")), "слаг ветки: {:?}", bn.records);
     assert!(
         !r.get("setup/init").unwrap().run(&ctx, &RunInput::default()).unwrap().artifacts.is_empty(),
-        "setup/init развернул скелет .co"
+        "setup/init развернул скелет .ailc"
     );
 }
 
