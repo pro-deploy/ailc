@@ -2,7 +2,9 @@ name: Release
 
 # Собирает релизный бинарь ailc под все платформы и прикрепляет к релизу GitHub:
 # Linux (x86_64, aarch64), macOS (Intel и Apple Silicon), Windows (x86_64), плюс
-# установочные скрипты install.sh и install.ps1. Запускается на теге вида v* или вручную.
+# установочные скрипты install.sh и install.ps1. После сборки бинарников публикует в
+# реестр npm обёртку ailc-mcp той же версии (job publish-npm), чтобы GitHub-релиз и npm
+# всегда поднимались одним пушем тега. Запускается на теге вида v* или вручную.
 
 on:
   push:
@@ -82,3 +84,45 @@ jobs:
           files: |
             install.sh
             install.ps1
+
+  publish-npm:
+    name: публикация обёртки в npm
+    # Идёт только по тегу и только после успешной сборки всех бинарников: к моменту
+    # публикации ассеты релиза v<версия> уже на месте, поэтому npx ailc-mcp@<версия>
+    # сразу найдёт бинарь и не упрётся в 404. Требует секрет репозитория NPM_TOKEN
+    # (npm Automation-токен либо гранулярный токен с правом publish и обходом 2FA).
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Сверка версии тега с версией обёртки
+        working-directory: npm/ailc-mcp
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::версия тега ($tag) не совпадает с версией обёртки ($pkg)"
+            exit 1
+          fi
+          echo "версия согласована: $pkg"
+
+      - name: Публикация в npm (идемпотентно)
+        working-directory: npm/ailc-mcp
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          if npm view "ailc-mcp@$pkg" version >/dev/null 2>&1; then
+            echo "ailc-mcp@$pkg уже опубликован, пропускаю."
+            exit 0
+          fi
+          npm publish --provenance --access public
