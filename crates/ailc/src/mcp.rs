@@ -5,7 +5,7 @@
 //! `Sampler`, поэтому ядро ничего не знает о транспорте. Наружу — один front-door
 //! инструмент `plan`.
 
-use ailc_contracts::{Ctx, QualityLedger, RunInput};
+use ailc_contracts::{Ctx, Family, QualityLedger, RunInput};
 use ailc_core::agent::AgentOrchestrator;
 use ailc_core::engines::generator::Generator;
 use ailc_core::engines::index::Index;
@@ -322,12 +322,14 @@ fn handle(
 fn plan_tool_schema() -> Value {
     json!({
         "name": "plan",
-        "description": "АДАПТИВНО прогнать проект под намерение: ИИ строит план, выполняет проверки, при нехватке ДОВЫЗЫВАЕТ ещё инструменты, безопасно ЧИНИТ и перепроверяет, затем выносит ДЕТЕРМИНИРОВАННЫЙ вердикт (QualityLedger) и решения для человека. Зови на ЛЮБОЙ запрос вида «проверь / посмотри / всё ок? / готово ли / ревью / можно сдавать». Намерение — простым языком. Требует клиента с поддержкой sampling (LLM).",
+        "description": "АДАПТИВНО прогнать проект под намерение: строится план, выполняются проверки, ложные находки отсеиваются, затем выносится ДЕТЕРМИНИРОВАННЫЙ вердикт (QualityLedger) и решения для человека. Зови на ЛЮБОЙ запрос вида «проверь / посмотри / всё ок? / готово ли / ревью / можно сдавать». Намерение задавай простым языком. Работает с ЛЮБЫМ клиентом: при поддержке sampling петлю целиком ведёт сервер; без sampling планировщик это ТЫ (модель агента): первый вызов без steps даёт базовый прогон и карту инструментов, дальше передавай steps с id инструментов, чини найденное и перепроверяй.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "intent": { "type": "string", "description": "Что хочешь сделать, простыми словами" },
-                "path": { "type": "string", "description": "Путь к проекту (по умолчанию текущая папка)" }
+                "path": { "type": "string", "description": "Путь к проекту (по умолчанию текущая папка)" },
+                "steps": { "type": "array", "items": { "type": "string" }, "description": "Твой план: id инструментов для прогона (возьми из find_capability). Только для клиента без sampling: ты планируешь, сервер выполняет, отсеивает ложное и выносит вердикт" },
+                "strict": { "type": "boolean", "description": "true, если это сдача / релиз / мерж в прод: недоделанное блокирует, а не предупреждает. Только для клиента без sampling (при sampling режим решает модель в фазе PLAN)" }
             },
             "required": ["intent"]
         },
@@ -363,16 +365,13 @@ fn run_plan(reg: &Registry, sess: &mut Session, args: &Value) -> Value {
         .unwrap_or(".")
         .to_string();
 
-    // Адаптивная петля требует нейросеть IDE (sampling). Без неё — НЕ keyword-фолбэк, а
-    // честное направление на детерминированные команды (инвариант «без молчаливых пропусков»).
+    // ИНВЕРСИЯ ПЕТЛИ для клиента без sampling: роль нейросети играет сама модель агента
+    // среды (она и есть LLM), поэтому plan не отказывает. Агент передал steps: сервер
+    // выполняет ровно этот план (EXECUTE, VERIFY, GATE). Агент не передал steps: базовый
+    // детерминированный набор по паспорту проекта. В обоих случаях вердикт выносит
+    // детерминированный гейт, а ответ содержит инструкцию продолжения петли для агента.
     if !sess.sampling {
-        return json!({
-            "content": [{ "type": "text", "text":
-                "Адаптивный режим `plan` требует клиента с поддержкой sampling (LLM): план, довызов \
-                 инструментов и починку ведёт модель IDE. Детерминированно, без LLM — используй \
-                 инструменты `dod` (вердикт «готово?») или `sarif` (полный скан), либо CLI `ailc custodian`." }],
-            "isError": true
-        });
+        return run_plan_inverted(reg, &intent, &path, args);
     }
 
     let ctx = Ctx::new(&path);
@@ -388,6 +387,66 @@ fn run_plan(reg: &Registry, sess: &mut Session, args: &Value) -> Value {
     if let Some(alert) = custodian_alert(&path) {
         text = format!("{alert}\n\n{text}");
     }
+    json!({
+        "content": [ { "type": "text", "text": text } ],
+        "structuredContent": structured
+    })
+}
+
+/// Инвертированная адаптивная петля: клиент без sampling, планировщиком выступает
+/// модель агента среды. Без steps: базовый детерминированный набор семейств,
+/// расширенный паспортом проекта (тот же безопасный фолбэк, что и при сбое LLM в
+/// серверной петле). Со steps: прогон ровно заявленных инструментов. Вердикт в обоих
+/// случаях выносит детерминированный гейт, а в конец ответа добавляется инструкция
+/// продолжения петли (рефлексию ведёт агент: довызвать, починить или завершить).
+fn run_plan_inverted(reg: &Registry, intent: &str, path: &str, args: &Value) -> Value {
+    let ctx = Ctx::new(path);
+    let input = RunInput::default();
+    let strict = args.get("strict").and_then(Value::as_bool).unwrap_or(false);
+    let steps: Vec<String> = args
+        .get("steps")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let ledger = if steps.is_empty() {
+        let mut fams = vec![Family::Security, Family::Quality, Family::Spec];
+        let prof = ailc_core::profile::detect(&ctx.root);
+        for f in prof.extra_families() {
+            if !fams.contains(&f) {
+                fams.push(f);
+            }
+        }
+        let mut l = Orchestrator::deterministic_gate(reg, &ctx, &input, intent, &fams, strict);
+        l.rounds.push(format!(
+            "клиент без sampling: базовый набор по паспорту ({}); адаптивную петлю ведёшь ты",
+            prof.summary()
+        ));
+        l
+    } else {
+        Orchestrator::declared_gate(reg, &ctx, &input, intent, &steps, strict)
+    };
+
+    let structured = serde_json::to_value(&ledger).unwrap_or(Value::Null);
+    let mut text = format_ledger(&ledger);
+    if let Some(alert) = custodian_alert(path) {
+        text = format!("{alert}\n\n{text}");
+    }
+    // Инструкция продолжения: в клиенте без sampling фазу REFLECT выполняет агент.
+    text.push_str(
+        "\n🔁 Продолжение петли (её ведёшь ты, агент среды):\n \
+         • мало проверок под намерение: подбери инструменты через find_capability и вызови plan \
+         повторно, передав steps=[id, ...] (точечный запуск: run);\n \
+         • есть блокеры: почини их правками кода (формат и линт безопасно чинит CLI `ailc fix`), \
+         затем перепроверь тем же plan;\n \
+         • это сдача / релиз: повтори с strict=true;\n \
+         • проверок достаточно и блокеров нет: финальный детерминированный вердикт даёт `dod`.\n",
+    );
     json!({
         "content": [ { "type": "text", "text": text } ],
         "structuredContent": structured
@@ -531,7 +590,7 @@ fn autofix_schema() -> Value {
 fn run_autofix(reg: &Registry, sess: &mut Session, args: &Value) -> Value {
     if !sess.sampling {
         return json!({
-            "content": [{ "type": "text", "text": "autofix требует клиента с поддержкой sampling (LLM). Для безопасной починки формата/линта без LLM используй `ailc fix`." }],
+            "content": [{ "type": "text", "text": "Серверный autofix требует клиента с поддержкой sampling (LLM). В твоём клиенте роль LLM играешь ты: возьми находки из plan или dod и почини их правками кода сам, затем перепроверь. Формат и линт без LLM безопасно чинит CLI `ailc fix`." }],
             "isError": true
         });
     }

@@ -303,6 +303,62 @@ impl Orchestrator {
             },
         )
     }
+
+    /// Прогон ЗАЯВЛЕННОГО плана (инверсия адаптивной петли для клиентов без sampling):
+    /// роль планировщика играет сама модель агента среды, она выбирает инструменты
+    /// (через find_capability или список tools) и передаёт их id, а сервер выполняет
+    /// EXECUTE, VERIFY и GATE. Инвариант сохраняется: ЧТО запускать решает нейросеть
+    /// (пусть и клиентская), вердикт PASS/FAIL выносит детерминированный гейт.
+    /// Неизвестные id не глотаются молча, а попадают в пропущенные с причиной.
+    pub fn declared_gate(
+        reg: &Registry,
+        ctx: &Ctx,
+        input: &RunInput,
+        intent: &str,
+        step_ids: &[String],
+        strict: bool,
+    ) -> QualityLedger {
+        let (pack, policy_note) = policy::load(&ctx.root);
+        let mut ids: Vec<String> = vec!["code.intel/symbols".to_string()];
+        let mut unknown: Vec<(String, String)> = Vec::new();
+        for id in step_ids {
+            if reg.get(id).is_none() {
+                unknown.push((
+                    id.clone(),
+                    "нет такого инструмента (актуальный id возьми из find_capability)".to_string(),
+                ));
+            } else if !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+        let pipeline = Pipeline {
+            name: "declared".into(),
+            steps: ids.iter().map(|id| Step::of(id)).collect(),
+        };
+        let results = PipelineEngine::execute(reg, ctx, input, &pipeline);
+        let mut collected = collect_results(results);
+        collected.checks_skipped.extend(unknown);
+        let (confirmed, refuted) = crate::verify::Verifier::verify(ctx, collected.findings);
+        finalize_ledger(
+            ctx,
+            &pack,
+            policy_note,
+            intent,
+            LedgerInput {
+                map_summary: collected.map_summary,
+                confirmed,
+                checks_run: collected.checks_run,
+                checks_skipped: collected.checks_skipped,
+                artifacts: collected.artifacts,
+                refuted: refuted.len(),
+                strict,
+                rounds: vec![format!(
+                    "план агента среды: заявлено шагов {} (петлю ведёт клиентская модель, sampling не нужен)",
+                    step_ids.len()
+                )],
+            },
+        )
+    }
 }
 
 // ───────────────────────── Сплошной скан для отчётов (SARIF) ─────────────────────────
