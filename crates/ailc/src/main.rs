@@ -10,6 +10,7 @@
 
 mod compliance_wizard;
 mod custodian;
+mod doctor;
 mod mcp;
 
 use ailc_contracts::{Ctx, RunInput};
@@ -112,6 +113,13 @@ fn main() {
     // Интерактивный мастер комплаенса РФ: `ailc compliance-ru [путь-для-вывода]`
     if args.get(1).map(String::as_str) == Some("compliance-ru") {
         compliance_wizard::run(&args);
+        return;
+    }
+
+    // Диагностика подключения: `ailc doctor [путь]` — где бинарь, виден ли npx,
+    // подключён ли ailc в редакторах, готовые сниппеты. Без LLM и без сети.
+    if args.get(1).map(String::as_str) == Some("doctor") {
+        doctor::run(&args);
         return;
     }
 
@@ -377,6 +385,7 @@ fn cli_demo(args: &[String]) {
          \u{20}\u{20}ailc dod {root}        — многоосевой вердикт «готово?»\n\
          \u{20}\u{20}ailc sarif {root}      — полный скан (отчёт SARIF для CI)\n\
          \u{20}\u{20}ailc custodian {root}  — непрерывный фоновый гейт\n\
-         \u{20}\u{20}ailc fix {root}        — безопасная починка формата/линта"
+         \u{20}\u{20}ailc fix {root}        — безопасная починка формата/линта\n\
+         \u{20}\u{20}ailc doctor {root}     — диагностика подключения и готовые сниппеты"
     );
 }

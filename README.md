@@ -10,6 +10,16 @@
 
 ## Установка
 
+### В один клик (если редактор установлен)
+
+[Добавить в Cursor](https://cursor.com/install-mcp?name=ailc&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImFpbGMtbWNwIl19) · [Добавить в VS Code](https://vscode.dev/redirect/mcp/install?name=ailc&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22ailc-mcp%22%5D%7D) · для Claude Code одна команда:
+
+```sh
+claude mcp add ailc -- npx -y ailc-mcp
+```
+
+Ссылки открывают редактор, и он сам прописывает сервер (запуск через `npx ailc-mcp`, нужен Node.js). Если что-то не завелось, команда `ailc doctor` печатает диагностику: где бинарь, виден ли npx, подключён ли сервер в конфигах редакторов, и готовый сниппет под вашу среду.
+
 ### Через npx (проще всего, если есть Node.js)
 
 Отдельная установка не нужна. Впишите в `.mcp.json` (Claude Code) или в `~/.cursor/mcp.json` (Cursor) три строки, и при первом запуске пакет `ailc-mcp` сам скачает готовый бинарь нужной платформы из релиза и запустит сервер:
@@ -84,6 +94,7 @@ ailc skills [папка]                # экспорт возможносте�
 ailc custodian <путь> [сек] [--fix] [--once]   # непрерывный фоновый присмотр
 ailc custodian install <путь> [сек]            # автозапуск через launchd (macOS)
 ailc compliance-ru [папка]         # интерактивный мастер комплаенса РФ
+ailc doctor [путь]                 # диагностика подключения и готовые сниппеты
 ```
 
 Например:
