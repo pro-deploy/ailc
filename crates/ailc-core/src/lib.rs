@@ -5,12 +5,15 @@
 
 pub mod agent;
 pub mod autofix;
+pub mod baseline;
 pub mod engines;
 pub mod fixer;
 pub mod i18n;
+pub mod memory_log;
 pub mod orchestrator;
 pub mod pipeline;
 pub mod policy;
+pub mod profile;
 pub mod registry;
 pub mod sarif;
 pub mod skills;

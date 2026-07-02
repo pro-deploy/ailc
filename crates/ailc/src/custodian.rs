@@ -75,13 +75,21 @@ fn run_cycle(reg: &Registry, ctx: &Ctx, cycle: u64, fix: bool) {
 
     // 1. Проверка — быстрый ДЕТЕРМИНИРОВАННЫЙ статический гейт (Security+Quality, без
     //    тестов/линта: на каждое сохранение их гонять дорого; тяжёлый прогон — по явному
-    //    намерению «релиз»). RecipePlanner с keyword-маршрутом «качество и безопасность».
+    //    намерению «релиз»). Набор семейств расширяется ПАСПОРТОМ проекта: у проекта с
+    //    признаками РФ и ПДн в присмотр входит комплаенс без каких-либо настроек.
+    let prof = ailc_core::profile::detect(&ctx.root);
+    let mut families = vec![Family::Security, Family::Quality];
+    for f in prof.extra_families() {
+        if !families.contains(&f) {
+            families.push(f);
+        }
+    }
     let ledger = Orchestrator::deterministic_gate(
         reg,
         ctx,
         &input,
         "качество и безопасность",
-        &[Family::Security, Family::Quality],
+        &families,
         false,
     );
 
@@ -170,17 +178,32 @@ fn notify(ctx: &Ctx, ledger: &QualityLedger) {
     }
 
     // ALERT.md — машино/человеко-читаемый флаг (его же сёрфит `ailc serve` в чат).
+    // Формат эскалации: нашёл · рекомендую · последствие бездействия — человеку
+    // остаётся сказать «да», а не разбираться, что с этим делать.
     let mut body = format!("# 🔔 ailc custodian — нужно внимание\n\n{}\n\n", ledger.headline);
     if ledger.blocking > 0 {
-        body.push_str(&format!("Блокеров: {}\n", ledger.blocking));
+        body.push_str(&format!(
+            "Нашёл: блокеров {}. Рекомендую: открыть отчёт и починить их первыми \
+             (формат/линт можно доверить `ailc fix`). Последствие бездействия: вердикт \
+             сдачи останется красным, и гейт не пропустит выкатку.\n\n",
+            ledger.blocking
+        ));
     }
     for d in ledger.open_decisions.iter().take(8) {
-        body.push_str(&format!("- ⚠ {d}\n"));
+        body.push_str(&format!("- ⚠ нужно решение: {d}\n"));
     }
     for a in ledger.advisories.iter().take(8) {
-        body.push_str(&format!("- 📋 {a}\n"));
+        body.push_str(&format!("- 📋 совет: {a}\n"));
     }
     let _ = Store::write(ctx, "custodian", "ALERT.md", &body);
+
+    // Серверная память: эскалация custodian — событие проекта, след остаётся сам.
+    ailc_core::memory_log::note(
+        ctx,
+        "custodian",
+        "",
+        &format!("{} (блокеров {})", ledger.headline, ledger.blocking),
+    );
 
     // Чат-фид: одна строка на событие (читается ИИ/интеграцией).
     let _ = Store::append(

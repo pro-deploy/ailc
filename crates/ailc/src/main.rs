@@ -123,6 +123,13 @@ fn main() {
         return;
     }
 
+    // Базовая линия долга: `ailc baseline <путь>` — заморозить текущие находки как
+    // исторический долг (перемирие с легаси). Дальше DoD блокируют только новые.
+    if args.get(1).map(String::as_str) == Some("baseline") {
+        run_baseline(&args);
+        return;
+    }
+
     cli_demo(&args);
 }
 
@@ -165,6 +172,24 @@ fn run_fix(args: &[String]) {
     );
 }
 
+/// Заморозить текущие находки как базовую линию долга (см. ailc_core::baseline).
+fn run_baseline(args: &[String]) {
+    let root = args.get(2).cloned().unwrap_or_else(|| ".".to_string());
+    let mut reg = Registry::new();
+    ailc_capabilities::register_core(&mut reg);
+    let ctx = Ctx::new(&root);
+    println!("ailc baseline — фиксирую базовую линию долга ({root})…");
+    let report = Orchestrator::scan_all(&reg, &ctx, &RunInput::default());
+    match ailc_core::baseline::record(&ctx, &report.findings) {
+        Ok(n) => println!(
+            "Заморожено находок: {n} → .ailc/baseline/findings.txt\n\
+             С этого момента сдачу блокируют только НОВЫЕ находки; долг гасится порциями\n\
+             и виден в `ailc dod` отдельной строкой. Пересборка линии — эта же команда."
+        ),
+        Err(e) => println!("ОШИБКА: {e}"),
+    }
+}
+
 fn run_dod(args: &[String]) {
     let root = args.get(2).cloned().unwrap_or_else(|| ".".to_string());
     let mut reg = Registry::new();
@@ -172,7 +197,11 @@ fn run_dod(args: &[String]) {
     let ctx = Ctx::new(&root);
     let report = Orchestrator::dod(&reg, &ctx, &RunInput::default());
 
-    println!("DOD CHECK — Definition of Done ({root})\n");
+    println!("DOD CHECK — Definition of Done ({root})");
+    println!(
+        "Паспорт: {}\n",
+        ailc_core::profile::detect(std::path::Path::new(&root)).summary()
+    );
     for a in &report.axes {
         let mark = if !a.ran {
             "⊘"
@@ -190,6 +219,12 @@ fn run_dod(args: &[String]) {
             format!("находок: {}", a.findings)
         };
         println!("  {mark} {:<20} [{kind}] — {detail}", a.name);
+    }
+    if report.baseline_frozen {
+        println!(
+            "\nДолг (заморожен базовой линией): {} — не блокирует, гасите порциями",
+            report.debt
+        );
     }
     println!(
         "\nВЕРДИКТ: {}",

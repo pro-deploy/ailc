@@ -185,6 +185,65 @@ fn install_agent_rule(req: &Value) {
     // Идемпотентно: существующие файлы не трогаются. Так среда ставится сама при первом
     // подключении, и проекту не нужен отдельный вызов setup/scaffold.
     let _ = ailc_capabilities::scaffold_state(&ctx);
+
+    // Паспорт проекта: определяется и пишется в .ailc/profile.md при каждом подключении
+    // (идемпотентный авто-блок). От него зависят умолчания проверок и жёсткость осей DoD.
+    let profile = ailc_core::profile::ensure(&ctx);
+
+    // Бутстрап рабочей памяти: активный контекст получает паспорт вместо пустой
+    // заглушки. Дальше журнал ведёт сам сервер при каждом вызове инструмента.
+    ailc_core::memory_log::bootstrap(&ctx, &profile.summary());
+
+    // Перемирие с легаси: при ПЕРВОМ контакте фоновая заморозка текущих находок как
+    // базовой линии долга (дальше DoD блокируют только новые). Фоном, чтобы не держать
+    // рукопожатие MCP на большом проекте. Опт-аут: env CO_MCP_NO_BASELINE; осознанная
+    // пересборка линии — команда `ailc baseline <путь>`.
+    if !ailc_core::baseline::exists(&ctx) && std::env::var_os("CO_MCP_NO_BASELINE").is_none() {
+        let root = ctx.root.clone();
+        std::thread::spawn(move || {
+            let mut reg = Registry::new();
+            ailc_capabilities::register_core(&mut reg);
+            let ctx = Ctx::new(&root);
+            let report =
+                ailc_core::orchestrator::Orchestrator::scan_all(&reg, &ctx, &Default::default());
+            let n = ailc_core::baseline::record(&ctx, &report.findings).unwrap_or(0);
+            ailc_core::memory_log::note(
+                &ctx,
+                "baseline",
+                "",
+                &format!("первый контакт: заморожено {n} находок как исторический долг"),
+            );
+        });
+    }
+}
+
+/// Серверная память: записать след вызова инструмента в журнал проекта. Деталь берём
+/// из аргументов (намерение / фича / id), краткий итог — из первой строки текстового
+/// ответа. Ошибки глотаются: память не имеет права ломать основной вызов.
+fn memory_note(tool: &str, args: &Value, result: &Value) {
+    let path = args.get("path").and_then(Value::as_str).unwrap_or(".");
+    let ctx = Ctx::new(path);
+    let detail = args
+        .get("intent")
+        .or_else(|| args.get("feature"))
+        .or_else(|| args.get("id"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    // Итоговая строка ответа информативнее заголовка: сначала ищем строку вердикта
+    // (ВЕРДИКТ / Балл / DoD:), иначе берём первую непустую.
+    let digest = result
+        .pointer("/content/0/text")
+        .and_then(Value::as_str)
+        .map(|t| {
+            t.lines()
+                .find(|l| l.contains("ВЕРДИКТ") || l.contains("Балл") || l.starts_with("DoD:"))
+                .or_else(|| t.lines().find(|l| !l.trim().is_empty()))
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        })
+        .unwrap_or_default();
+    ailc_core::memory_log::note(&ctx, tool, detail, &digest);
 }
 
 fn handle(
@@ -196,9 +255,34 @@ fn handle(
     match method {
         "initialize" => Ok(json!({
             "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": { "tools": {} },
+            "capabilities": { "tools": {}, "prompts": {} },
             "serverInfo": { "name": "ailc", "version": env!("CARGO_PKG_VERSION") }
         })),
+        // Готовые промпты среды: «введи меня в курс дела» появляется у пользователя
+        // в списке команд редактора и опирается на память, которую ведёт сервер.
+        "prompts/list" => Ok(json!({ "prompts": [{
+            "name": "onboarding",
+            "description": "Введи меня в курс дела: что за проект, что сделано, что дальше (по памяти AILC)"
+        }] })),
+        "prompts/get" => {
+            let name = params
+                .and_then(|p| p.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if name != "onboarding" {
+                return Err((-32602, format!("неизвестный промпт: {name}")));
+            }
+            Ok(json!({ "messages": [{
+                "role": "user",
+                "content": { "type": "text", "text":
+                    "Введи меня в курс дела по проекту. Сначала вызови MCP-инструмент ailc \
+                     `run` с id `memory/read` (память проекта: активный контекст, журнал, \
+                     журнал решений), затем прочитай файл .ailc/profile.md (паспорт проекта). \
+                     Перескажи коротко и по-человечески: что это за проект, что уже сделано, \
+                     что сейчас в работе и какой разумный следующий шаг. В конце вызови \
+                     инструмент `dod`, чтобы показать текущую готовность." }
+            }] }))
+        }
         "tools/list" => Ok(json!({ "tools": [
             plan_tool_schema(),
             find_capability_schema(),
@@ -212,16 +296,23 @@ fn handle(
             let p = params.ok_or((-32602, "missing params".to_string()))?;
             let name = p.get("name").and_then(Value::as_str).unwrap_or("");
             let args = p.get("arguments").cloned().unwrap_or_else(|| json!({}));
-            match name {
-                "plan" => Ok(run_plan(reg, sess, &args)),
-                "find_capability" => Ok(find_capability(reg, &args)),
-                "run" => Ok(run_capability(reg, &args)),
-                "autofix" => Ok(run_autofix(reg, sess, &args)),
-                "dod" => Ok(run_dod_tool(reg, &args)),
-                "sarif" => Ok(run_sarif_tool(reg, &args)),
-                "design" => Ok(run_design_tool(reg, &args)),
-                other => Err((-32602, format!("неизвестный инструмент: {other}"))),
+            let result = match name {
+                "plan" => run_plan(reg, sess, &args),
+                "find_capability" => find_capability(reg, &args),
+                "run" => run_capability(reg, &args),
+                "autofix" => run_autofix(reg, sess, &args),
+                "dod" => run_dod_tool(reg, &args),
+                "sarif" => run_sarif_tool(reg, &args),
+                "design" => run_design_tool(reg, &args),
+                other => return Err((-32602, format!("неизвестный инструмент: {other}"))),
+            };
+            // Серверная память: след о вызове оставляет сам сервер, не агент. Побочный
+            // эффект, безопасный к ошибкам; find_capability и sarif не шумят в журнал
+            // (первый — поиск, второй — отчёт для CI без изменения состояния работы).
+            if !matches!(name, "find_capability" | "sarif") {
+                memory_note(name, &args, &result);
             }
+            Ok(result)
         }
         "ping" => Ok(json!({})),
         _ => Err((-32601, format!("метод не найден: {method}"))),
@@ -547,6 +638,12 @@ fn run_dod_tool(reg: &Registry, args: &Value) -> Value {
             "findings": a.findings, "high": a.high, "ok": a.ok
         }));
     }
+    if report.baseline_frozen {
+        text.push_str(&format!(
+            "\nДолг (заморожен базовой линией): {} — не блокирует\n",
+            report.debt
+        ));
+    }
     text.push_str(&format!(
         "\nВЕРДИКТ: {}",
         if report.passed {
@@ -557,7 +654,12 @@ fn run_dod_tool(reg: &Registry, args: &Value) -> Value {
     ));
     json!({
         "content": [{ "type": "text", "text": text }],
-        "structuredContent": { "passed": report.passed, "axes": axes }
+        "structuredContent": {
+            "passed": report.passed,
+            "axes": axes,
+            "debt": report.debt,
+            "baselineFrozen": report.baseline_frozen
+        }
     })
 }
 

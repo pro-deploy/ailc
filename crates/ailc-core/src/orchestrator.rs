@@ -429,6 +429,12 @@ pub struct DodReport {
     /// Охват нулевой: ни одна проверка не выполнилась (пустой/несорсовый репозиторий).
     /// Такой репозиторий не имеет права давать вердикт «можно сдавать» (см. T85).
     pub zero_coverage: bool,
+    /// Замороженный долг: сколько находок отфильтровано базовой линией (`.ailc/baseline`).
+    /// Ноль и при отсутствии линии, и при полностью погашенном долге; наличие линии
+    /// различается через `baseline_frozen`.
+    pub debt: usize,
+    /// Базовая линия зафиксирована (перемирие с легаси действует).
+    pub baseline_frozen: bool,
 }
 
 impl Orchestrator {
@@ -443,6 +449,15 @@ impl Orchestrator {
     /// прогону без тулчейна выдать ложно-зелёный вердикт.
     pub fn dod(reg: &Registry, ctx: &Ctx, input: &RunInput) -> DodReport {
         let (pack, _note) = policy::load(&ctx.root);
+        // Паспорт проекта: от него зависит, какие профильные оси считать жёсткими
+        // (доступность у UI-проекта, комплаенс у проекта с признаками РФ и ПДн,
+        // безопасность ИИ у проекта с LLM). Дёшев, вычисляется на каждый прогон.
+        let prof = crate::profile::detect(&ctx.root);
+        // Базовая линия долга: находки из неё НЕ блокируют сдачу (перемирие с легаси),
+        // а считаются отдельно. Долг применяется только к статическим находкам; оси
+        // verify (тесты/линт) под долг не попадают — тесты обязаны проходить всегда.
+        let base = crate::baseline::load(ctx);
+        let mut debt = 0usize;
         let mut policy = pack.gate;
         // Семейства, которые гейт собирает САМ: Security/Quality (находки осей),
         // Spec (дрейф доков) и Compliance (РФ). Семейство Verify СОЗНАТЕЛЬНО исключаем
@@ -497,6 +512,12 @@ impl Orchestrator {
             if direct_caps.contains(&f.source.as_str()) {
                 continue; // прямой прогон считает их сам
             }
+            // Замороженный долг не блокирует: находка из базовой линии уходит в метрику
+            // долга (verify-источники сюда не попадают: семейство исключено из гейта).
+            if base.contains(&crate::baseline::fingerprint(f)) {
+                debt += 1;
+                continue;
+            }
             let e = by_src.entry(f.source.as_str()).or_default();
             e.0 += 1;
             if f.severity >= Severity::High {
@@ -521,8 +542,23 @@ impl Orchestrator {
             "verify/api-break",
         ] {
             let heavy = SECURITY_FLOOR_CAPS.contains(&id);
-            let (outcome, refuted) =
-                Self::run_axis_direct(reg, ctx, input, id, heavy, &mut by_src);
+            // Долг применим только к статическим сканерам; verify-оси (тесты, линт,
+            // покрытие, контракт API) обязаны проходить всегда, их долг не спасает.
+            let base_for_axis = if id.starts_with("verify/") {
+                None
+            } else {
+                Some(&base)
+            };
+            let (outcome, refuted) = Self::run_axis_direct(
+                reg,
+                ctx,
+                input,
+                id,
+                heavy,
+                &mut by_src,
+                base_for_axis,
+                &mut debt,
+            );
             direct_outcomes.insert(id, outcome);
             direct_refuted.insert(id, refuted);
         }
@@ -547,6 +583,9 @@ impl Orchestrator {
             ("Циклы зависимостей", "quality.check/cycles", false),
             ("Мёртвый код", "quality.check/dead-code", false),
             ("Доки/Спека актуальны", "spec.check/drift", true),
+            // Мягкая ось spec-first: изменение прослеживается к спеке или задаче
+            // бэклога. Нудж к «чертежам до кода», не блокер (вне git пропускается).
+            ("Изменение со спекой", "spec.check/trace", false),
             ("Контракт API не сломан", "verify/api-break", true),
         ];
 
@@ -607,8 +646,11 @@ impl Orchestrator {
             });
         }
 
-        // Агрегатная ось «Комплаенс РФ» — сумма по всем compliance.ru/* (ориентир, soft:
-        // регуляторные риски эвристичны, окончательно решает юрист, см. compliance-ru/).
+        // Агрегатная ось «Комплаенс РФ» — сумма по всем compliance.ru/*. По умолчанию
+        // soft (регуляторные риски эвристичны, окончательно решает юрист), но паспорт
+        // делает её ЖЁСТКОЙ, когда проект русскоязычный и работает с ПДн: у такого
+        // проекта сдача с комплаенс-находками недопустима без явного решения человека.
+        let comp_hard = prof.ru_locale && prof.has_pdn;
         let comp_ran = report
             .checks_run
             .iter()
@@ -620,9 +662,15 @@ impl Orchestrator {
                 c_high += high;
             }
         }
+        if comp_hard && comp_ran && c_cnt > 0 {
+            hard_failed = true;
+        }
+        if comp_hard && !comp_ran {
+            hard_not_run.push("Комплаенс РФ");
+        }
         axes.push(DodAxis {
             name: "Комплаенс РФ",
-            hard: false,
+            hard: comp_hard,
             ran: comp_ran,
             findings: c_cnt,
             high: c_high,
@@ -635,6 +683,76 @@ impl Orchestrator {
                 Some("не выполнялась".into())
             },
         });
+
+        // Профильная ось «Доступность UI» — сумма по quality.ui/*; появляется только у
+        // проекта с интерфейсом и сразу жёсткая. Блокируют находки уровня HIGH и выше
+        // (как у OWASP-оси): советы по улучшению видны, но сдачу не валят.
+        if prof.has_ui {
+            let ui_ran = report.checks_run.iter().any(|x| x.starts_with("quality.ui/"));
+            let (mut u_cnt, mut u_high) = (0usize, 0usize);
+            for (src, (cnt, high)) in &by_src {
+                if src.starts_with("quality.ui/") {
+                    u_cnt += cnt;
+                    u_high += high;
+                }
+            }
+            if ui_ran && u_high > 0 {
+                hard_failed = true;
+            }
+            if !ui_ran {
+                hard_not_run.push("Доступность UI");
+            }
+            axes.push(DodAxis {
+                name: "Доступность UI",
+                hard: true,
+                ran: ui_ran,
+                findings: u_cnt,
+                high: u_high,
+                ok: u_high == 0,
+                refuted: 0,
+                out_of_scope: 0,
+                not_run_reason: if ui_ran {
+                    None
+                } else {
+                    Some("не выполнялась".into())
+                },
+            });
+        }
+
+        // Профильная ось «Безопасность ИИ» — сумма по security.ai/* (OWASP LLM01/LLM02);
+        // появляется только у проекта с обращениями к нейросетям и сразу жёсткая: любая
+        // подтверждённая находка (инъекция в подсказку, исполнение вывода модели) блокирует.
+        if prof.has_llm {
+            let ai_ran = report.checks_run.iter().any(|x| x.starts_with("security.ai/"));
+            let (mut a_cnt, mut a_high) = (0usize, 0usize);
+            for (src, (cnt, high)) in &by_src {
+                if src.starts_with("security.ai/") {
+                    a_cnt += cnt;
+                    a_high += high;
+                }
+            }
+            if ai_ran && a_cnt > 0 {
+                hard_failed = true;
+            }
+            if !ai_ran {
+                hard_not_run.push("Безопасность ИИ");
+            }
+            axes.push(DodAxis {
+                name: "Безопасность ИИ",
+                hard: true,
+                ran: ai_ran,
+                findings: a_cnt,
+                high: a_high,
+                ok: a_cnt == 0,
+                refuted: 0,
+                out_of_scope: 0,
+                not_run_reason: if ai_ran {
+                    None
+                } else {
+                    Some("не выполнялась".into())
+                },
+            });
+        }
 
         // Третье состояние вердикта (см. T85/T03): «можно сдавать» только когда ни одна
         // выполненная hard-ось не провалена, все hard-оси РЕАЛЬНО выполнились и охват
@@ -650,6 +768,8 @@ impl Orchestrator {
             confirmed,
             hard_not_run,
             zero_coverage,
+            debt,
+            baseline_frozen: crate::baseline::exists(ctx),
         }
     }
 
@@ -666,6 +786,7 @@ impl Orchestrator {
     /// ОТСОЕДИНЁННОМ потоке (его нельзя безопасно join'ить при зависании), результат
     /// ждём через канал с таймаутом, как делает пайплайн (`pipeline::STEP_TIMEOUT`).
     /// Лёгкие verify-оси исполняем синхронно (они сами ограничены раннером).
+    #[allow(clippy::too_many_arguments)]
     fn run_axis_direct(
         reg: &Registry,
         ctx: &Ctx,
@@ -673,6 +794,8 @@ impl Orchestrator {
         id: &'static str,
         heavy: bool,
         by_src: &mut HashMap<&str, (usize, usize)>,
+        base: Option<&std::collections::HashSet<String>>,
+        debt: &mut usize,
     ) -> (CheckOutcome, usize) {
         let Some(cap) = reg.get_arc(id) else {
             // Capability не зарегистрирована: это осознанный пропуск с явной причиной,
@@ -743,6 +866,13 @@ impl Orchestrator {
                 // неверифицированные находки в подсчёт не идут (см. gate_counts_only_verified).
                 if !f.verified && !heavy {
                     continue;
+                }
+                // Замороженный долг не блокирует ось (см. baseline): в метрику долга.
+                if let Some(b) = base {
+                    if b.contains(&crate::baseline::fingerprint(&f)) {
+                        *debt += 1;
+                        continue;
+                    }
                 }
                 e.0 += 1;
                 if f.severity >= Severity::High {

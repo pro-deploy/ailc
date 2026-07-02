@@ -54,21 +54,24 @@ impl AgentOrchestrator {
             .unwrap_or_default();
 
         // Фолбэк: LLM не дал валидный план → детерминированный безопасный набор
-        // (security+quality+доки). Это НЕ keyword-роутинг — фиксированное безопасное
-        // умолчание, чтобы инструмент не «молчал» при сбое модели.
+        // (security+quality+доки), расширенный ПАСПОРТОМ проекта: у проекта с признаками
+        // РФ и ПДн в набор входит комплаенс без каких-либо настроек. Это НЕ
+        // keyword-роутинг — фиксированное безопасное умолчание, чтобы инструмент не
+        // «молчал» при сбое модели.
         if plan.steps.is_empty() {
-            let mut ledger = Orchestrator::deterministic_gate(
-                reg,
-                ctx,
-                input,
-                intent,
-                &[Family::Security, Family::Quality, Family::Spec],
-                plan.strict,
-            );
-            ledger.rounds.push(
-                "⚠ LLM не дал план — детерминированный безопасный набор (security+quality+доки)"
-                    .into(),
-            );
+            let mut fams = vec![Family::Security, Family::Quality, Family::Spec];
+            let prof = crate::profile::detect(&ctx.root);
+            for f in prof.extra_families() {
+                if !fams.contains(&f) {
+                    fams.push(f);
+                }
+            }
+            let mut ledger =
+                Orchestrator::deterministic_gate(reg, ctx, input, intent, &fams, plan.strict);
+            ledger.rounds.push(format!(
+                "⚠ LLM не дал план — детерминированный безопасный набор по паспорту ({})",
+                prof.summary()
+            ));
             return ledger;
         }
 
@@ -81,6 +84,40 @@ impl AgentOrchestrator {
         }
 
         let mut rounds: Vec<String> = Vec::new();
+        let mut extra_artifacts: Vec<String> = Vec::new();
+
+        // ── ЧЕРТЕЖИ ДО КОДА ── для намерения-фичи сервер сам готовит комплект: спека с
+        // критериями приёмки + ADR (spec/feature), запись в бэклоге, имя ветки. Агент
+        // среды получает задание с чертежами, а не чистый лист. Мелкая доработка
+        // (kind=change) и вопрос бюрократию не запускают.
+        if plan.kind.trim().eq_ignore_ascii_case("feature") {
+            let chain: &[(&str, &str)] = &[
+                ("spec/feature", "спека и ADR"),
+                ("backlog/add", "задача в бэклоге"),
+                ("deliver/branch-name", "имя ветки"),
+            ];
+            let mut made: Vec<String> = Vec::new();
+            for (id, label) in chain {
+                let Some(cap) = reg.get(id) else { continue };
+                let di = RunInput {
+                    target: None,
+                    query: Some(intent.to_string()),
+                };
+                if let Ok(out) = cap.run(ctx, &di) {
+                    extra_artifacts.extend(out.artifacts.iter().cloned());
+                    let detail = out
+                        .artifacts
+                        .first()
+                        .cloned()
+                        .or_else(|| out.records.first().cloned())
+                        .unwrap_or_else(|| out.summary.clone());
+                    made.push(format!("{label}: {detail}"));
+                }
+            }
+            if !made.is_empty() {
+                rounds.push(format!("чертежи до кода — {}", made.join(" · ")));
+            }
+        }
         let mut dry = 0usize;
         // Последний прогон (collected, confirmed, refuted) — из него собираем вердикт.
         let mut last: Option<(CollectedRun, Vec<Finding>, usize)> = None;
@@ -142,6 +179,54 @@ impl AgentOrchestrator {
         }
 
         let (collected, confirmed, refuted) = last.expect("budget>=1 → хотя бы один раунд");
+
+        // ── ФИНАЛЬНЫЙ ПРОХОД СДАЧИ ── на строгом намерении (сдача/релиз) сервер сам
+        // приводит документы в порядок (идемпотентные авто-блоки из кода) и дописывает
+        // ретро-ADR по детерминированному сигналу архитектурного изменения (сломан
+        // публичный контракт). Черновик ADR формулирует нейросеть, если доступна;
+        // иначе детерминированная формулировка. Вердикт гейта это не меняет.
+        if plan.strict {
+            let mut refreshed: Vec<&str> = Vec::new();
+            for id in ["generate/docs", "generate/spec", "generate/c4"] {
+                if let Some(cap) = reg.get(id) {
+                    if cap.run(ctx, input).is_ok() {
+                        refreshed.push(id);
+                    }
+                }
+            }
+            if !refreshed.is_empty() {
+                rounds.push(format!("сдача: документы обновлены из кода ({})", refreshed.join(", ")));
+            }
+            let broke: Vec<&Finding> = confirmed
+                .iter()
+                .filter(|f| f.source == "verify/api-break")
+                .collect();
+            if !broke.is_empty() {
+                let what: Vec<String> = broke.iter().take(5).map(|f| f.message.clone()).collect();
+                let context = format!(
+                    "Изменён публичный контракт: {}. Намерение: «{intent}».",
+                    what.join("; ")
+                );
+                // Черновик решения: нейросеть формулирует, если доступна; иначе шаблон.
+                let text = sampler
+                    .sample(
+                        "Сформулируй краткую запись архитектурного решения (ADR) по-русски: контекст, решение, последствия. Верни обычный текст без markdown-ограждений.",
+                        &context,
+                    )
+                    .unwrap_or(context);
+                if let Some(adr) = reg.get("generate/adr") {
+                    let di = RunInput { target: None, query: Some(text) };
+                    if let Ok(out) = adr.run(ctx, &di) {
+                        extra_artifacts.extend(out.artifacts.iter().cloned());
+                        rounds.push(format!("ретро-ADR: контракт изменился — {}", out.summary));
+                    }
+                }
+            }
+        }
+
+        let mut artifacts = collected.artifacts;
+        artifacts.extend(extra_artifacts);
+
         // ── GATE ── детерминированный вердикт по подтверждённым находкам.
         finalize_ledger(
             ctx,
@@ -153,7 +238,7 @@ impl AgentOrchestrator {
                 confirmed,
                 checks_run: collected.checks_run,
                 checks_skipped: collected.checks_skipped,
-                artifacts: collected.artifacts,
+                artifacts,
                 refuted,
                 strict: plan.strict,
                 rounds,
@@ -194,6 +279,9 @@ fn plan_prompt(reg: &Registry, ctx: &Ctx, intent: &str) -> String {
     p.push_str(
         "»\n\nВерни ТОЛЬКО JSON-объект плана: \
         {\"steps\":[{\"id\":\"<id из списка>\",\"why\":\"<зачем, кратко>\"}],\
+        \"kind\":\"feature|change|question\" (feature — просят НОВУЮ функциональность, \
+        сервер сначала подготовит спеку и ADR; change — доработка/проверка существующего; \
+        question — просто вопрос),\
         \"strict\":<true если это сдача/релиз/выкат/мерж в прод>,\
         \"fix\":<true если можно безопасно чинить формат/линт>,\
         \"stop_when\":\"<критерий, когда проверок достаточно>\"}. \

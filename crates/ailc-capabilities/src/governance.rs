@@ -50,11 +50,53 @@ fn is_source_ext(ext: &str) -> bool {
 /// исходный дефект «одно вхождение по всему дереву закрывает требование».
 enum ConstRule {
     /// Подстрока запрещена: нарушение на каждое исполняемое вхождение.
-    Forbid(String),
+    Forbid(String, RuleAttrs),
     /// Подстрока обязательна хотя бы один раз в исполняемом коде всего проекта.
-    Require(String),
+    Require(String, RuleAttrs),
     /// Подстрока обязательна в КАЖДОМ релевантном (нетестовом) исходном файле.
-    RequireEach(String),
+    RequireEach(String, RuleAttrs),
+}
+
+/// Атрибуты правила из квадратных скобок после ключевого слова.
+/// `[warn]` — предупреждение вместо блокера (понижает серьёзность);
+/// `[block]` — явный блокер (умолчание, скобка для читаемости);
+/// `[in: путь]` — область действия: правило смотрит только файлы под этим префиксом.
+/// Неизвестные теги игнорируются (вперёд-совместимость). Хвост строки после ` #`
+/// считается обоснованием для людей и в подстроку поиска не входит.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct RuleAttrs {
+    warn: bool,
+    scope: Option<String>,
+}
+
+/// Снять с начала строки группы `[...]` и вернуть (атрибуты, остаток-подстрока).
+fn parse_attrs(mut rest: &str) -> (RuleAttrs, &str) {
+    let mut attrs = RuleAttrs::default();
+    loop {
+        rest = rest.trim_start();
+        let Some(r) = rest.strip_prefix('[') else { break };
+        let Some(end) = r.find(']') else { break };
+        let tag = r[..end].trim();
+        if tag.eq_ignore_ascii_case("warn") {
+            attrs.warn = true;
+        } else if tag.eq_ignore_ascii_case("block") {
+            attrs.warn = false;
+        } else if let Some(p) = tag.strip_prefix("in:") {
+            let p = p.trim().trim_end_matches('/');
+            if !p.is_empty() {
+                attrs.scope = Some(p.to_string());
+            }
+        }
+        rest = &r[end + 1..];
+    }
+    // Обоснование для людей: часть после ` #` не участвует в поиске.
+    let needle = rest.split(" #").next().unwrap_or(rest);
+    (attrs, needle)
+}
+
+/// Файл в области действия правила? Без области — любой.
+fn in_scope(attrs: &RuleAttrs, rel: &str) -> bool {
+    attrs.scope.as_deref().is_none_or(|s| rel.starts_with(s))
 }
 
 /// Разобрать текст конституции в список правил. Игнорирует строки, не начинающиеся
@@ -69,19 +111,22 @@ fn parse_constitution(text: &str) -> Vec<ConstRule> {
     for line in text.lines() {
         let t = line.trim();
         if let Some(rest) = t.strip_prefix("REQUIRE_EACH ") {
-            let needle = rest.trim();
+            let (attrs, needle) = parse_attrs(rest);
+            let needle = needle.trim();
             if !needle.is_empty() {
-                rules.push(ConstRule::RequireEach(needle.to_string()));
+                rules.push(ConstRule::RequireEach(needle.to_string(), attrs));
             }
         } else if let Some(rest) = t.strip_prefix("FORBID ") {
-            let needle = rest.trim();
+            let (attrs, needle) = parse_attrs(rest);
+            let needle = needle.trim();
             if !needle.is_empty() {
-                rules.push(ConstRule::Forbid(needle.to_string()));
+                rules.push(ConstRule::Forbid(needle.to_string(), attrs));
             }
         } else if let Some(rest) = t.strip_prefix("REQUIRE ") {
-            let needle = rest.trim();
+            let (attrs, needle) = parse_attrs(rest);
+            let needle = needle.trim();
             if !needle.is_empty() {
-                rules.push(ConstRule::Require(needle.to_string()));
+                rules.push(ConstRule::Require(needle.to_string(), attrs));
             }
         }
     }
@@ -392,7 +437,7 @@ impl Capability for ConstitutionCheck {
         // Есть ли в конституции хотя бы одно правило REQUIRE_EACH.
         let has_require_each = rules
             .iter()
-            .any(|r| matches!(r, ConstRule::RequireEach(_)));
+            .any(|r| matches!(r, ConstRule::RequireEach(_, _)));
 
         walk(&base, &mut |path| {
             let ext = ext_of(path);
@@ -423,10 +468,10 @@ impl Capability for ConstitutionCheck {
 
             for (ri, rule) in rules.iter().enumerate() {
                 match rule {
-                    ConstRule::Forbid(needle) => {
+                    ConstRule::Forbid(needle, attrs) => {
                         // Запреты в тест-файлах не считаем нарушением: тесты легитимно
                         // содержат запрещённые в проде конструкции как фикстуры.
-                        if is_test {
+                        if is_test || !in_scope(attrs, &rel) {
                             continue;
                         }
                         for (i, line) in masked_lines.iter().enumerate() {
@@ -438,10 +483,10 @@ impl Capability for ConstitutionCheck {
                             }
                         }
                     }
-                    ConstRule::Require(needle) => {
+                    ConstRule::Require(needle, attrs) => {
                         // Глобальное требование присутствия: фейк-маркер из тестов не
                         // закрывает его, поэтому тест-файлы в зачёт не идут.
-                        if is_test {
+                        if is_test || !in_scope(attrs, &rel) {
                             continue;
                         }
                         if !require_seen.contains(&ri)
@@ -450,9 +495,10 @@ impl Capability for ConstitutionCheck {
                             require_seen.insert(ri);
                         }
                     }
-                    ConstRule::RequireEach(needle) => {
-                        // Покрытие считаем только по релевантным (нетестовым) файлам.
-                        if is_test {
+                    ConstRule::RequireEach(needle, attrs) => {
+                        // Покрытие считаем только по релевантным (нетестовым) файлам
+                        // внутри области действия правила.
+                        if is_test || !in_scope(attrs, &rel) {
                             continue;
                         }
                         let present = masked_lines.iter().any(|l| l.contains(needle.as_str()));
@@ -474,13 +520,15 @@ impl Capability for ConstitutionCheck {
 
         for (ri, rule) in rules.iter().enumerate() {
             match rule {
-                ConstRule::Forbid(needle) => {
+                ConstRule::Forbid(needle, attrs) => {
                     // Находка на КАЖДОЕ исполняемое вхождение, а не только на первое.
+                    // `[warn]` понижает серьёзность до Medium: видно, но не блокирует.
+                    let sev = if attrs.warn { Severity::Medium } else { Severity::High };
                     if let Some(hits) = forbid_hits.get(&ri) {
                         for (file, line) in hits {
                             out.findings.push(Finding::new(
                                 "constitution-forbid",
-                                Severity::High,
+                                sev,
                                 format!("Запрещённое: {needle} найдено"),
                                 Some(Location {
                                     file: file.clone(),
@@ -493,11 +541,12 @@ impl Capability for ConstitutionCheck {
                         }
                     }
                 }
-                ConstRule::Require(needle) => {
+                ConstRule::Require(needle, attrs) => {
+                    let sev = if attrs.warn { Severity::Low } else { Severity::Medium };
                     if !require_seen.contains(&ri) {
                         out.findings.push(Finding::new(
                             "constitution-require",
-                            Severity::Medium,
+                            sev,
                             format!("Требуемое отсутствует во всём проекте: {needle}"),
                             None,
                             None,
@@ -506,14 +555,15 @@ impl Capability for ConstitutionCheck {
                         ));
                     }
                 }
-                ConstRule::RequireEach(needle) => {
+                ConstRule::RequireEach(needle, attrs) => {
                     // Находка на КАЖДЫЙ релевантный файл, где маркер отсутствует: это и
                     // есть контроль покрытия, которого не давало старое REQUIRE.
+                    let sev = if attrs.warn { Severity::Low } else { Severity::Medium };
                     if let Some(missing) = require_each_missing.get(&ri) {
                         for file in missing {
                             out.findings.push(Finding::new(
                                 "constitution-require",
-                                Severity::Medium,
+                                sev,
                                 format!(
                                     "Требуемое отсутствует в файле (REQUIRE_EACH): {needle}"
                                 ),
@@ -684,9 +734,127 @@ impl Capability for LayersCheck {
 }
 
 /// Регистрирует governance-capability.
+// ───────────────────────── governance/rule-add ─────────────────────────
+
+const RULE_ADD_SCHEMA: &str = r#"{"type":"object","properties":{"query":{"type":"string","description":"Строка правила: FORBID/REQUIRE/REQUIRE_EACH [warn] [in: путь] <подстрока> # обоснование"}},"required":["query"]}"#;
+
+/// `governance/rule-add` — закон одной репликой.
+///
+/// Принимает готовую строку правила (`FORBID …` / `REQUIRE …` / `REQUIRE_EACH …`,
+/// атрибуты `[warn]` и `[in: путь]` опциональны), дописывает её в раздел «Правила
+/// команды» конституции и СРАЗУ прогоняет проверку: в ответе честно видно, скольким
+/// местам кода новое правило противоречит прямо сейчас (и что с этим делать: заморозить
+/// как долг через `ailc baseline` или чинить немедленно). Фразу естественного языка в
+/// строку правила переводит нейросеть агента среды; ailc валидирует и применяет.
+pub struct RuleAdd {
+    manifest: CapabilityManifest,
+}
+
+impl Default for RuleAdd {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RuleAdd {
+    pub fn new() -> Self {
+        Self {
+            manifest: CapabilityManifest {
+                id: "governance/rule-add",
+                family: Family::Quality,
+                engine: EngineKind::Store,
+                when_to_use: "Добавить правило в конституцию проекта одной строкой (FORBID/REQUIRE/REQUIRE_EACH, опционально [warn] и [in: путь]) и сразу узнать, сколько мест ему противоречит.",
+                input_schema: RULE_ADD_SCHEMA,
+                tier: Tier::Core,
+                deterministic: true,
+                mutates: true,
+            },
+        }
+    }
+}
+
+const TEAM_SECTION: &str = "## Правила команды";
+
+impl Capability for RuleAdd {
+    fn manifest(&self) -> &CapabilityManifest {
+        &self.manifest
+    }
+
+    fn run(&self, ctx: &Ctx, input: &RunInput) -> Result<CapabilityOutput> {
+        let mut out = CapabilityOutput::default();
+        let line = input
+            .query
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
+        // Валидация синтаксиса тем же парсером, что и проверка: что не разобралось,
+        // то не станет законом молча.
+        let parsed = parse_constitution(&line);
+        let [rule] = parsed.as_slice() else {
+            out.skipped = Some(
+                "правило не распознано: нужна одна строка вида FORBID/REQUIRE/REQUIRE_EACH \
+                 [warn] [in: путь] <подстрока> # обоснование"
+                    .into(),
+            );
+            out.summary = "governance/rule-add: пропущено (не правило)".into();
+            return Ok(out);
+        };
+        let needle = match rule {
+            ConstRule::Forbid(n, _) | ConstRule::Require(n, _) | ConstRule::RequireEach(n, _) => {
+                n.clone()
+            }
+        };
+
+        let path = ctx.root.join(".ailc/constitution.md");
+        let mut text = fs::read_to_string(&path).unwrap_or_default();
+        if text.contains(&line) {
+            out.summary = format!("governance/rule-add: правило уже есть — {line}");
+            return Ok(out);
+        }
+        // Дописываем в раздел «Правила команды» (создаём раздел при отсутствии).
+        if let Some(si) = text.find(TEAM_SECTION) {
+            let insert_at = text[si..]
+                .find("\n## ")
+                .map(|rel| si + rel)
+                .unwrap_or(text.len());
+            text.insert_str(insert_at, &format!("{line}\n"));
+        } else {
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str(&format!("\n{TEAM_SECTION}\n\n{line}\n"));
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).ok();
+        }
+        fs::write(&path, &text)
+            .map_err(|e| ailc_contracts::CapError(format!("не записать конституцию: {e}")))?;
+        out.artifacts.push(".ailc/constitution.md".into());
+
+        // Немедленная примерка: скольким местам кода правило противоречит уже сейчас.
+        let check = ConstitutionCheck::new().run(ctx, &RunInput::default())?;
+        let needle_hits = check
+            .findings
+            .iter()
+            .filter(|f| f.message.contains(&needle))
+            .count();
+        out.metrics.push(("violations_now".into(), check.findings.len() as f64));
+        out.summary = format!(
+            "governance/rule-add: правило принято → .ailc/constitution.md. Нарушений по \
+             конституции сейчас: {} (по этому правилу: {}). Заморозить существующее как \
+             долг: `ailc baseline <путь>`; иначе гейт будет блокировать.",
+            check.findings.len(),
+            needle_hits
+        );
+        Ok(out)
+    }
+}
+
 pub fn register(reg: &mut Registry) {
     reg.register(Box::new(ConstitutionCheck::new()));
     reg.register(Box::new(LayersCheck::new()));
+    reg.register(Box::new(RuleAdd::new()));
 }
 
 #[cfg(test)]
@@ -741,9 +909,9 @@ REQUIRE_EACH // SPDX
 ";
         let rules = parse_constitution(text);
         assert_eq!(rules.len(), 3, "должно разобраться ровно три правила");
-        assert!(matches!(&rules[0], ConstRule::Forbid(s) if s == "unwrap()"));
-        assert!(matches!(&rules[1], ConstRule::Require(s) if s == "LICENSE"));
-        assert!(matches!(&rules[2], ConstRule::RequireEach(s) if s == "// SPDX"));
+        assert!(matches!(&rules[0], ConstRule::Forbid(s, _) if s == "unwrap()"));
+        assert!(matches!(&rules[1], ConstRule::Require(s, _) if s == "LICENSE"));
+        assert!(matches!(&rules[2], ConstRule::RequireEach(s, _) if s == "// SPDX"));
     }
 
     #[test]
@@ -751,7 +919,47 @@ REQUIRE_EACH // SPDX
         // REQUIRE_EACH не должен попасть в ветку REQUIRE: иначе игла стала бы «_EACH ...».
         let rules = parse_constitution("REQUIRE_EACH marker");
         assert_eq!(rules.len(), 1);
-        assert!(matches!(&rules[0], ConstRule::RequireEach(s) if s == "marker"));
+        assert!(matches!(&rules[0], ConstRule::RequireEach(s, _) if s == "marker"));
+    }
+
+    #[test]
+    fn parse_attrs_warn_scope_and_rationale() {
+        // Полная форма: атрибуты в скобках, обоснование после ` #` не входит в иглу.
+        let rules = parse_constitution(
+            "FORBID [warn] [in: src/ui] fetch( # доступ к сети только через клиент",
+        );
+        assert_eq!(rules.len(), 1);
+        match &rules[0] {
+            ConstRule::Forbid(needle, attrs) => {
+                assert_eq!(needle, "fetch(");
+                assert!(attrs.warn);
+                assert_eq!(attrs.scope.as_deref(), Some("src/ui"));
+            }
+            _ => panic!("ожидался FORBID"),
+        }
+        // Явный [block] и неизвестный тег: warn=false, тег игнорируется.
+        let rules = parse_constitution("REQUIRE [block] [future-tag] тесты");
+        match &rules[0] {
+            ConstRule::Require(needle, attrs) => {
+                assert_eq!(needle, "тесты");
+                assert!(!attrs.warn);
+                assert!(attrs.scope.is_none());
+            }
+            _ => panic!("ожидался REQUIRE"),
+        }
+    }
+
+    #[test]
+    fn scope_limits_forbid_to_prefix() {
+        assert!(in_scope(
+            &RuleAttrs { warn: false, scope: Some("src/ui".into()) },
+            "src/ui/button.tsx"
+        ));
+        assert!(!in_scope(
+            &RuleAttrs { warn: false, scope: Some("src/ui".into()) },
+            "src/api/db.rs"
+        ));
+        assert!(in_scope(&RuleAttrs::default(), "любой/путь.rs"));
     }
 
     #[test]

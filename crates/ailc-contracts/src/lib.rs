@@ -644,6 +644,10 @@ pub struct AgentPlan {
     pub strict: bool,
     pub fix: bool,
     pub stop_when: Option<String>,
+    /// Род намерения: `feature` (новая функциональность — сначала чертежи: спека, ADR,
+    /// бэклог, ветка), `change` (доработка существующего) или `question` (просто вопрос).
+    /// Пустая строка равносильна `change` — режим по умолчанию.
+    pub kind: String,
 }
 
 /// QualityLedger — ЛИЦО продукта для не-эксперта. Итог прогона пайплайна на

@@ -54,8 +54,74 @@ impl Verifier {
                 }
             }
         }
+        // Самообучение на проекте: правила, хронически опровергаемые ИМЕННО ЗДЕСЬ,
+        // теряют голос (понижение до Low с видимой пометкой), security-критичные
+        // исключены. Статистика копится в .ailc/verify-memory и обновляется каждым
+        // прогоном; это храповик видимости, а не выключатель.
+        learn_and_downgrade(ctx, &mut confirmed, &refuted);
         (confirmed, refuted)
     }
+}
+
+/// Порог наблюдений, после которого статистика правила считается представительной.
+const LEARN_MIN_OBSERVATIONS: u64 = 20;
+/// Доля опровергнутых, начиная с которой правило считается шумным на этом проекте.
+const LEARN_REFUTE_RATIO: f64 = 0.8;
+
+/// Применить накопленное знание (понизить хронически шумные правила) и дописать
+/// статистику текущего прогона. Работает только внутри инициализированного проекта
+/// (есть `.ailc/`); ошибки ввода-вывода глотаются: обучение — побочный эффект.
+fn learn_and_downgrade(ctx: &Ctx, confirmed: &mut [Finding], refuted: &[(Finding, String)]) {
+    if (confirmed.is_empty() && refuted.is_empty()) || !ctx.root.join(".ailc").is_dir() {
+        return;
+    }
+    let path = ctx.root.join(".ailc/verify-memory/rules.tsv");
+    // rule -> (опровергнуто, подтверждено)
+    let mut stats: HashMap<String, (u64, u64)> = HashMap::new();
+    if let Ok(text) = fs::read_to_string(&path) {
+        for l in text.lines() {
+            let mut it = l.split('\t');
+            if let (Some(rule), Some(r), Some(c)) = (it.next(), it.next(), it.next()) {
+                if let (Ok(r), Ok(c)) = (r.parse(), c.parse()) {
+                    stats.insert(rule.to_string(), (r, c));
+                }
+            }
+        }
+    }
+
+    // Сначала знание по ПРОШЛЫМ прогонам, затем учёт текущего (текущий прогон не должен
+    // сам себя понижать).
+    for f in confirmed.iter_mut() {
+        if is_security_critical(f) {
+            continue;
+        }
+        if let Some((r, c)) = stats.get(&f.rule) {
+            let total = r + c;
+            if total >= LEARN_MIN_OBSERVATIONS
+                && (*r as f64) / (total as f64) >= LEARN_REFUTE_RATIO
+                && f.severity > ailc_contracts::Severity::Low
+            {
+                f.severity = ailc_contracts::Severity::Low;
+                f.message.push_str(&format!(
+                    " [правило часто шумит на этом проекте: опровергнуто {r} из {total}]"
+                ));
+            }
+        }
+    }
+    for f in confirmed.iter() {
+        stats.entry(f.rule.clone()).or_default().1 += 1;
+    }
+    for (f, _) in refuted {
+        stats.entry(f.rule.clone()).or_default().0 += 1;
+    }
+
+    let mut rows: Vec<(String, (u64, u64))> = stats.into_iter().collect();
+    rows.sort();
+    let mut body = String::from("# правило\tопровергнуто\tподтверждено (самообучение verify)\n");
+    for (rule, (r, c)) in rows {
+        body.push_str(&format!("{rule}\t{r}\t{c}\n"));
+    }
+    let _ = crate::engines::store::Store::write(ctx, "verify-memory", "rules.tsv", &body);
 }
 
 /// Попытка опровергнуть находку. None = опровергнуть не удалось (находка подтверждена).
@@ -896,5 +962,84 @@ mod tests {
         let s = "a\nb\tc\r\nd\x00e";
         let out = sanitize_text(s);
         assert_eq!(out, "a b c d e");
+    }
+
+    #[test]
+    fn самообучение_понижает_хронически_шумное_правило() {
+        let (ctx, _d) = ctx_with("src/main.rs", "fn main() { let x = compute(); }\n");
+        stdfs::create_dir_all(ctx.root.join(".ailc/verify-memory")).unwrap();
+        // Прошлая история проекта: правило опровергалось 24 раза из 25 (шумит).
+        stdfs::write(
+            ctx.root.join(".ailc/verify-memory/rules.tsv"),
+            "smell-noisy\t24\t1\n",
+        )
+        .unwrap();
+        let f = Finding {
+            rule: "smell-noisy".into(),
+            severity: Severity::Medium,
+            message: "запах кода".into(),
+            location: Some(Location {
+                file: "src/main.rs".into(),
+                line: 1,
+            }),
+            evidence: None,
+            verified: true,
+            source: "quality.check/smell".into(),
+        };
+        let (confirmed, _refuted) = Verifier::verify(&ctx, vec![f]);
+        assert_eq!(confirmed.len(), 1, "находка подтверждается, а не скрывается");
+        assert_eq!(confirmed[0].severity, Severity::Low, "но теряет голос до Low");
+        assert!(
+            confirmed[0].message.contains("часто шумит"),
+            "понижение видно в сообщении: {}",
+            confirmed[0].message
+        );
+        // Статистика обновилась текущим прогоном (подтверждено стало 2).
+        let tsv = stdfs::read_to_string(ctx.root.join(".ailc/verify-memory/rules.tsv")).unwrap();
+        assert!(tsv.contains("smell-noisy\t24\t2"), "tsv: {tsv}");
+    }
+
+    #[test]
+    fn самообучение_не_трогает_security_критичное_и_малую_выборку() {
+        let (ctx, _d) = ctx_with("src/agent.py", "eval(response)\n");
+        stdfs::create_dir_all(ctx.root.join(".ailc/verify-memory")).unwrap();
+        // Даже «шумная» история не понижает security.ai (T51-инвариант сохраняется)…
+        stdfs::write(
+            ctx.root.join(".ailc/verify-memory/rules.tsv"),
+            "ai-insecure-output\t24\t1\nsmell-rare\t3\t1\n",
+        )
+        .unwrap();
+        let ai = Finding {
+            rule: "ai-insecure-output".into(),
+            severity: Severity::High,
+            message: "вывод модели исполняется".into(),
+            location: Some(Location {
+                file: "src/agent.py".into(),
+                line: 1,
+            }),
+            evidence: None,
+            verified: true,
+            source: "security.ai/insecure-output".into(),
+        };
+        // …а правило с малой выборкой (4 наблюдения) не считается изученным.
+        let rare = Finding {
+            rule: "smell-rare".into(),
+            severity: Severity::Medium,
+            message: "редкий запах".into(),
+            location: Some(Location {
+                file: "src/agent.py".into(),
+                line: 1,
+            }),
+            evidence: None,
+            verified: true,
+            source: "quality.check/smell".into(),
+        };
+        let (confirmed, _)= Verifier::verify(&ctx, vec![ai, rare]);
+        let sev: std::collections::HashMap<_, _> = confirmed
+            .iter()
+            .map(|f| (f.rule.clone(), f.severity))
+            .collect();
+        assert_eq!(sev.get("ai-insecure-output"), Some(&Severity::High));
+        assert_eq!(sev.get("smell-rare"), Some(&Severity::Medium));
     }
 }
