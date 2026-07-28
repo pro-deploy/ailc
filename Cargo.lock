@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ailc"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "ailc-capabilities",
  "ailc-contracts",
@@ -29,7 +29,7 @@ dependencies = [
 
 [[package]]
 name = "ailc-capabilities"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "ailc-contracts",
  "ailc-core",
@@ -40,14 +40,14 @@ dependencies = [
 
 [[package]]
 name = "ailc-contracts"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ailc-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "ailc-contracts",
  "ailc-testkit",
@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "ailc-testkit"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "ailc-contracts",
 ]

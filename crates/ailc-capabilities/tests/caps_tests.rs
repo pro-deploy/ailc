@@ -2261,7 +2261,10 @@ fn правило_stripe_key_ловит_боевой_ключ_и_молчит_н
         // ровно тот же ключ, и проверка обнаружения не ослабляется.
         (
             "s.py",
-            concat!("stripe.api_key = \"sk_", "live_4eC39HqLyjWDarjtT1zdp7dc\"\n"),
+            concat!(
+                "stripe.api_key = \"sk_",
+                "live_4eC39HqLyjWDarjtT1zdp7dc\"\n"
+            ),
         ),
         ("ss.py", "stripe.api_key = \"sk_live_xxx\"\n"),
     );
