@@ -138,7 +138,9 @@ fn is_doc_worthy(kind: SymbolKind) -> bool {
 
 /// Тест-файл/фикстура — их публичность не значит «внешнее API», описание не требуем.
 fn is_test_file(file: &str) -> bool {
-    let f = file.to_lowercase();
+    // Приведение разделителя: путь может прийти в родном для платформы виде, а проверки
+    // каталожных форм ниже записаны через прямую косую черту.
+    let f = file.to_lowercase().replace('\\', "/");
     f.ends_with("_test.go")
         || f.contains("/test")
         || f.contains("__tests__")

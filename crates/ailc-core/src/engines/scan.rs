@@ -803,11 +803,13 @@ impl ScanEngine {
             mode,
             &mut |path| {
                 let ext = file_ext(path);
+                // Разделитель приводится к прямой косой черте, чтобы поле файла находки
+                // на Windows и на Unix совпадало посимвольно.
                 let rel = path
                     .strip_prefix(&root)
                     .unwrap_or(path)
                     .to_string_lossy()
-                    .to_string();
+                    .replace('\\', "/");
                 // Тест-файлы/фикстуры не сканируем (фейк-секреты, фикстуры-уязвимости).
                 if skip_tests && is_test_path(&rel) {
                     return;

@@ -659,7 +659,7 @@ pub fn extract(ctx: &Ctx, input: &RunInput) -> Result<CliSurface> {
             .strip_prefix(&root)
             .unwrap_or(path)
             .to_string_lossy()
-            .to_string();
+            .replace('\\', "/");
         // Тестовые файлы описывают проверки, а не продукт: команда, придуманная фикстурой,
         // в руководстве пользователя значиться не должна.
         if is_test_path(&rel) {
@@ -751,12 +751,13 @@ pub fn extract(ctx: &Ctx, input: &RunInput) -> Result<CliSurface> {
     Ok(s)
 }
 
-/// Путь файла относительно корня проекта в виде строки.
+/// Путь файла относительно корня проекта в виде строки. Разделитель приводится к прямой
+/// косой черте, чтобы выдача на Windows и на Unix совпадала посимвольно.
 fn rel_path(path: &Path, root: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
-        .to_string()
+        .replace('\\', "/")
 }
 
 fn sort_items(v: &mut [CliItem]) {

@@ -273,7 +273,7 @@ impl CodeIntelEngine {
                 .strip_prefix(&root)
                 .unwrap_or(path)
                 .to_string_lossy()
-                .to_string();
+                .replace('\\', "/");
 
             // Основной слой: точный AST через tree-sitter (если язык поддержан
             // грамматикой). Иначе — regex-фолбэк ниже (kotlin/swift и прочие).
@@ -365,7 +365,7 @@ impl CodeIntelEngine {
                 .strip_prefix(&root)
                 .unwrap_or(path)
                 .to_string_lossy()
-                .to_string();
+                .replace('\\', "/");
             for (i, line) in content.lines().enumerate() {
                 if contains_word(line, name) {
                     total += 1;
@@ -417,7 +417,7 @@ impl CodeIntelEngine {
                 .strip_prefix(&root)
                 .unwrap_or(path)
                 .to_string_lossy()
-                .to_string();
+                .replace('\\', "/");
             modules.insert(module_of(&rel));
         })?;
         // Резолвер сопоставляет импорт с известным путём модуля по окну сегментов.
@@ -438,7 +438,7 @@ impl CodeIntelEngine {
                 .strip_prefix(&root)
                 .unwrap_or(path)
                 .to_string_lossy()
-                .to_string();
+                .replace('\\', "/");
             let from = module_of(&rel);
             for target in import_targets(lang, &content) {
                 if let Some(to) = resolver.resolve(&target) {
@@ -477,7 +477,7 @@ impl CodeIntelEngine {
                 .strip_prefix(&root)
                 .unwrap_or(path)
                 .to_string_lossy()
-                .to_string();
+                .replace('\\', "/");
 
             // Контейнеры определяем по манифестам развёртывания, НЕ по папкам (T67).
             for c in containers_in_file(&rel, &content) {
@@ -560,7 +560,7 @@ impl CodeIntelEngine {
                 .strip_prefix(&root)
                 .unwrap_or(path)
                 .to_string_lossy()
-                .to_string();
+                .replace('\\', "/");
             let lines = content.lines().count() as u32;
             total_files += 1;
             total_lines += lines;

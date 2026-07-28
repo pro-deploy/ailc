@@ -449,7 +449,9 @@ fn walk_fp(dir: &Path, root: &Path, sum: &mut u64) {
                 .unwrap_or(0);
             let rel = path.strip_prefix(root).unwrap_or(&path);
             let mut h = DefaultHasher::new();
-            rel.to_string_lossy().hash(&mut h);
+            // Разделитель приводится к прямой косой черте, чтобы отпечаток одного и того
+            // же дерева совпадал на Windows и на Unix.
+            rel.to_string_lossy().replace('\\', "/").hash(&mut h);
             mtime.hash(&mut h);
             *sum = sum.wrapping_add(h.finish());
         }

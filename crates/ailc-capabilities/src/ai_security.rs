@@ -293,7 +293,7 @@ impl Capability for LlmTaintCapability {
                     .strip_prefix(&root)
                     .unwrap_or(path)
                     .to_string_lossy()
-                    .to_string();
+                    .replace('\\', "/");
                 if is_test_path(&rel) {
                     return;
                 }

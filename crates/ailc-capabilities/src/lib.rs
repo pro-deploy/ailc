@@ -910,7 +910,9 @@ impl Capability for ProjectMapCap {
 /// Символ из тест-файла или фреймворк-точки входа — его «вызывает» раннер/рантайм,
 /// а не прикладной код, поэтому он не может быть «мёртвым» по отсутствию ссылок.
 fn is_test_or_entry(s: &Symbol) -> bool {
-    let f = s.file.to_lowercase();
+    // Приведение разделителя: путь символа может прийти в родном для платформы виде, а
+    // проверки каталожных форм ниже записаны через прямую косую черту.
+    let f = s.file.to_lowercase().replace('\\', "/");
     let is_test = f.ends_with("_test.go")
         || f.contains("/test")
         || f.contains("__tests__")

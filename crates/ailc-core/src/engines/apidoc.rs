@@ -133,7 +133,7 @@ impl ApiDoc {
                 .strip_prefix(&root)
                 .unwrap_or(path)
                 .to_string_lossy()
-                .to_string();
+                .replace('\\', "/");
             if is_test_path(&rel) || is_test_dir_path(&rel) {
                 return;
             }

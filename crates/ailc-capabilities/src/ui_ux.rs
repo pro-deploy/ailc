@@ -271,7 +271,7 @@ impl Capability for UiCapability {
                     .strip_prefix(&root)
                     .unwrap_or(path)
                     .to_string_lossy()
-                    .to_string();
+                    .replace('\\', "/");
                 // Тест-файлы и фикстуры не анализируем (как и сканеры безопасности).
                 if is_test_path(&rel) {
                     return;

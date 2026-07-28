@@ -543,7 +543,7 @@ impl Capability for AntipatternCheck {
                     .strip_prefix(&root)
                     .unwrap_or(path)
                     .to_string_lossy()
-                    .to_string();
+                    .replace('\\', "/");
                 deep_hits.push((rel, max_depth, max_line));
             }
         })?;

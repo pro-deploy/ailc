@@ -1,5 +1,8 @@
 # Сгенерировано ailc. Гейт качества/безопасности в CI.
-# ailc должен быть доступен (соберите из исходников или установите бинарь).
+# Бинарь ailc собирается из исходников этого же репозитория: гейт обязан проверять код тем
+# же инструментом, который в нём лежит, а не посторонней версией. Прежде шаг сборки
+# отсутствовал вовсе, вызов `ailc dod .` завершался кодом 127 «команда не найдена», и гейт
+# не был зелёным ни разу с момента появления.
 name: ailc quality gate
 on: [push, pull_request]
 jobs:
@@ -7,10 +10,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Инструментарий из rust-toolchain.toml
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Сборка ailc
+        run: cargo build --release -p ailc
       - name: Definition of Done
-        run: ailc dod .
-      - name: SARIF → security tab
-        run: ailc sarif . > results.sarif
+        run: ./target/release/ailc dod .
+      - name: SARIF в security tab
+        run: ./target/release/ailc sarif . > results.sarif
       - uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: results.sarif

@@ -340,11 +340,13 @@ fn dedup_deps(deps: &mut Vec<(&'static str, String, String)>) {
 }
 
 /// Отобразить путь относительно корня для сводки (без утечки абсолютного пути машины).
+/// Разделитель приводится к прямой косой черте, чтобы сводка на Windows и на Unix
+/// совпадала посимвольно.
 fn rel_display(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
-        .into_owned()
+        .replace('\\', "/")
 }
 
 /// Максимальная глубина обхода дерева. Защищает от патологически глубоких структур и

@@ -57,9 +57,14 @@ jobs:
           - { os: windows-latest,   target: x86_64-pc-windows-msvc,     ext: zip }
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      # Инструментарий ставится строго по rust-toolchain.toml, и цель компиляции добавляется
+      # именно к нему. Прежний шаг dtolnay/rust-toolchain@stable добавлял цель каналу stable,
+      # но сборка подчинялась закреплённой версии, которая докачивалась уже без rust-std этой
+      # цели; единственная кросс-компилируемая цель матрицы (x86_64-apple-darwin на раннере
+      # Apple Silicon) падала с ошибкой E0463, релиз оставался без бинаря для Intel-маков, а
+      # публикация npm пропускалась.
+      - name: Инструментарий из rust-toolchain.toml с целью матрицы
+        run: rustup show && rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
 
       - name: Сборка release

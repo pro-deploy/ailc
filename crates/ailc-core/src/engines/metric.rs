@@ -76,7 +76,7 @@ impl MetricEngine {
                 .strip_prefix(&root)
                 .unwrap_or(path)
                 .to_string_lossy()
-                .to_string();
+                .replace('\\', "/");
 
             let lines = content.lines().count() as u32;
             let complexity = complexity_of(&content);

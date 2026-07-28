@@ -70,7 +70,7 @@ pub fn scan(ctx: &Ctx, input: &RunInput) -> Result<SastReport> {
             .strip_prefix(&root)
             .unwrap_or(path)
             .to_string_lossy()
-            .to_string();
+            .replace('\\', "/");
         let bytes = content.as_bytes();
 
         // Обход всех узлов; для каждого вызова — структурные правила.
@@ -582,7 +582,7 @@ pub fn scan_pii_logs(ctx: &Ctx, input: &RunInput) -> Result<SastReport> {
             .strip_prefix(&root)
             .unwrap_or(path)
             .to_string_lossy()
-            .to_string();
+            .replace('\\', "/");
         let bytes = content.as_bytes();
 
         let mut stack = vec![tree.root_node()];
@@ -1379,7 +1379,7 @@ pub fn scan_taint(ctx: &Ctx, input: &RunInput) -> Result<SastReport> {
             .strip_prefix(&root)
             .unwrap_or(path)
             .to_string_lossy()
-            .to_string();
+            .replace('\\', "/");
         by_lang
             .entry(lang)
             .or_default()

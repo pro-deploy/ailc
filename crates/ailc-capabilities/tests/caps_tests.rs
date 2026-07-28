@@ -1899,15 +1899,23 @@ fn emitted_rule_ids() -> std::collections::BTreeMap<String, Vec<String>> {
         // блоков), и обрезка по такому упоминанию отбрасывала бы почти весь файл вместе с
         // объявлениями правил. Именно так из выборки выпадало правило, объявленное ниже
         // такого комментария, и тест обратной проверки объявлял его «призраком».
-        let cut = text
-            .lines()
-            .scan(0usize, |off, l| {
-                let at = *off;
-                *off += l.len() + 1;
-                Some((at, l))
-            })
-            .find(|(_, l)| l.trim_start().starts_with("#[cfg(test)]"))
-            .map(|(at, _)| at);
+        // Смещение считается по `split_inclusive`, который отдаёт строку ВМЕСТЕ с её
+        // завершителем: длина слагается точно и для LF, и для CRLF. Прежний подсчёт через
+        // `lines()` прибавлял ровно один байт на перевод строки, на выкладке с CRLF (git с
+        // autocrlf на раннере Windows) смещение отставало на число пройденных строк, и срез
+        // попадал в середину многобайтового символа кириллицы с паникой процесса.
+        let cut = {
+            let mut off = 0usize;
+            let mut at = None;
+            for l in text.split_inclusive('\n') {
+                if l.trim_start().starts_with("#[cfg(test)]") {
+                    at = Some(off);
+                    break;
+                }
+                off += l.len();
+            }
+            at
+        };
         let body = match cut {
             Some(c) => &text[..c],
             None => &text[..],

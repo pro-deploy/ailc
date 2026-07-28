@@ -858,7 +858,7 @@ fn surface_model(ctx: &Ctx, input: &RunInput) -> Result<SurfaceModel> {
             .strip_prefix(&root)
             .unwrap_or(path)
             .to_string_lossy()
-            .to_string();
+            .replace('\\', "/");
         if is_test_path(&rel) {
             return;
         }
@@ -970,7 +970,7 @@ fn deployment(ctx: &Ctx, input: &RunInput) -> Result<Deployment> {
             .strip_prefix(&root)
             .unwrap_or(path)
             .to_string_lossy()
-            .to_string();
+            .replace('\\', "/");
         let Some(text) = std::fs::read_to_string(path).ok() else {
             return;
         };
