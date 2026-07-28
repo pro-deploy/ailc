@@ -190,7 +190,13 @@ struct RepoMeta {
 
 fn git_short(dir: &Path) -> String {
     std::process::Command::new("git")
-        .args(["-C", &dir.display().to_string(), "rev-parse", "--short", "HEAD"])
+        .args([
+            "-C",
+            &dir.display().to_string(),
+            "rev-parse",
+            "--short",
+            "HEAD",
+        ])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
@@ -279,7 +285,10 @@ fn main() {
         });
     }
     if repos.is_empty() {
-        eprintln!("в корпусе {} нет подкаталогов-репозиториев", corpus.display());
+        eprintln!(
+            "в корпусе {} нет подкаталогов-репозиториев",
+            corpus.display()
+        );
         std::process::exit(2);
     }
 
@@ -437,13 +446,15 @@ fn main() {
 
         // Запись агрегатов агента.
         let scan_json = match &scan {
-            Some(((nf, refuted, cr, cs, by_rule, by_sev, signal, sec_signal), ms)) => serde_json::json!({
-                "ran": true, "ms": ms,
-                "findings": nf, "signal": signal, "sec_signal": sec_signal, "refuted": refuted,
-                "checks_run": cr, "checks_skipped": cs,
-                "by_severity": {"info": by_sev[0],"low": by_sev[1],"med": by_sev[2],"high": by_sev[3],"crit": by_sev[4]},
-                "top_rules": top_n(by_rule.clone(), 12),
-            }),
+            Some(((nf, refuted, cr, cs, by_rule, by_sev, signal, sec_signal), ms)) => {
+                serde_json::json!({
+                    "ran": true, "ms": ms,
+                    "findings": nf, "signal": signal, "sec_signal": sec_signal, "refuted": refuted,
+                    "checks_run": cr, "checks_skipped": cs,
+                    "by_severity": {"info": by_sev[0],"low": by_sev[1],"med": by_sev[2],"high": by_sev[3],"crit": by_sev[4]},
+                    "top_rules": top_n(by_rule.clone(), 12),
+                })
+            }
             None => serde_json::json!({"ran": false, "reason": "timeout"}),
         };
         let dod_json = match &dod {
@@ -456,11 +467,13 @@ fn main() {
             None => serde_json::json!({"ran": false, "reason": "timeout"}),
         };
         let run_json = match &run {
-            Some(((cr, ft, bl, refuted, score, rigor, passed, headline), ms)) => serde_json::json!({
-                "ran": true, "ms": ms,
-                "checks_run": cr, "findings_total": ft, "blocking": bl, "refuted": refuted,
-                "score": score, "rigor": rigor, "passed": passed, "headline": headline,
-            }),
+            Some(((cr, ft, bl, refuted, score, rigor, passed, headline), ms)) => {
+                serde_json::json!({
+                    "ran": true, "ms": ms,
+                    "checks_run": cr, "findings_total": ft, "blocking": bl, "refuted": refuted,
+                    "score": score, "rigor": rigor, "passed": passed, "headline": headline,
+                })
+            }
             None => serde_json::json!({"ran": false, "reason": "timeout"}),
         };
 
@@ -524,9 +537,7 @@ fn main() {
         .count();
     let n_skip_only = per_cap
         .values()
-        .filter(|c| {
-            c.active_on.is_empty() && c.clean_on.is_empty() && c.fail_on.is_empty()
-        })
+        .filter(|c| c.active_on.is_empty() && c.clean_on.is_empty() && c.fail_on.is_empty())
         .count();
     let n_fail = per_cap.values().filter(|c| !c.fail_on.is_empty()).count();
 
@@ -584,7 +595,11 @@ fn main() {
     eprintln!(
         "ИТОГО: {n_active}/{total_caps} capability активны, {n_clean_only} чисто, {n_skip_only} только-skip, {n_fail} FAIL"
     );
-    eprintln!("отчёт: {}\njson:  {}", md_path.display(), json_path.display());
+    eprintln!(
+        "отчёт: {}\njson:  {}",
+        md_path.display(),
+        json_path.display()
+    );
 }
 
 struct CapAgg {
@@ -663,7 +678,11 @@ fn render_md(
             r.lang,
             r.commit,
             r.files,
-            if r.vulnerable { "да (ground-truth)" } else { "—" }
+            if r.vulnerable {
+                "да (ground-truth)"
+            } else {
+                "—"
+            }
         ));
     }
     s.push('\n');
@@ -741,7 +760,10 @@ fn render_md(
         };
         let dod_cell = if dod["ran"].as_bool().unwrap_or(false) {
             let axes = dod["axes"].as_array().cloned().unwrap_or_default();
-            let ok = axes.iter().filter(|x| x["ok"].as_bool().unwrap_or(false)).count();
+            let ok = axes
+                .iter()
+                .filter(|x| x["ok"].as_bool().unwrap_or(false))
+                .count();
             let verdict = if dod["passed"].as_bool().unwrap_or(false) {
                 "✓ DoD"
             } else {
@@ -757,12 +779,18 @@ fn render_md(
                 run["score"].as_f64().unwrap_or(0.0),
                 run["rigor"].as_f64().unwrap_or(0.0),
                 run["blocking"],
-                if run["passed"].as_bool().unwrap_or(false) { "✓" } else { "✗" }
+                if run["passed"].as_bool().unwrap_or(false) {
+                    "✓"
+                } else {
+                    "✗"
+                }
             )
         } else {
             "⏱ timeout".into()
         };
-        s.push_str(&format!("| {repo} | {scan_cell} | {dod_cell} | {run_cell} |\n"));
+        s.push_str(&format!(
+            "| {repo} | {scan_cell} | {dod_cell} | {run_cell} |\n"
+        ));
     }
     s.push('\n');
 

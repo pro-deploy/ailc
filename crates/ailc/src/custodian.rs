@@ -20,11 +20,14 @@ use std::process::Command;
 use std::time::{Duration, UNIX_EPOCH};
 
 /// Одноразовый прогон (один цикл) и выход — для периодического запуска launchd/cron.
-pub fn run_once(root: &str, fix: bool) {
+/// Один цикл присмотра. Возвращает вердикт (`true`, если блокеров нет), чтобы вызывающий
+/// код в `main` мог отразить его КОДОМ ВОЗВРАТА процесса: `custodian --once` применяется
+/// как гейт в хуке и в задании сборки, а там читают код, а не текст в выводе.
+pub fn run_once(root: &str, fix: bool) -> bool {
     let mut reg = Registry::new();
     ailc_capabilities::register_core(&mut reg);
     let ctx = Ctx::new(root);
-    run_cycle(&reg, &ctx, 1, fix);
+    run_cycle(&reg, &ctx, 1, fix)
 }
 
 pub fn run(root: &str, interval_secs: u64, fix: bool) {
@@ -53,13 +56,17 @@ pub fn run(root: &str, interval_secs: u64, fix: bool) {
             first = false;
             last_fp = fp;
             cycle += 1;
-            run_cycle(&reg, &ctx, cycle, fix);
+            // Непрерывный режим не завершается, поэтому вердикт цикла кодом возврата не
+            // сообщается: он уже доложен человеку выводом, ALERT.md и нотификацией.
+            let _ = run_cycle(&reg, &ctx, cycle, fix);
         }
         std::thread::sleep(Duration::from_secs(interval_secs.max(1)));
     }
 }
 
-fn run_cycle(reg: &Registry, ctx: &Ctx, cycle: u64, fix: bool) {
+/// Один цикл: починить безопасное, проверить, синхронизировать доки, доложить человеку.
+/// Возвращает вердикт цикла: `true`, если блокеров нет.
+fn run_cycle(reg: &Registry, ctx: &Ctx, cycle: u64, fix: bool) -> bool {
     let input = RunInput::default();
 
     // 0. Безопасная починка (если включена): свои авто-фиксеры формата/линта.
@@ -94,28 +101,48 @@ fn run_cycle(reg: &Registry, ctx: &Ctx, cycle: u64, fix: bool) {
     );
 
     // 2. Починка дрейфа доков — идемпотентная регенерация (меняет файл только при отличии).
-    //    Держим в синхроне обзор, диаграмму, спеку, C4, архитектуру, модель данных, глоссарий —
-    //    «актуализировать всё из кода». При отсутствии — первый прогон их и спроектирует.
+    //    `generate/doc` выпускает ВЕСЬ комплект документов по декларациям стандартов
+    //    (техническое задание, пояснительная записка, описание архитектуры, диаграммы C4,
+    //    руководство пользователя и прочие), остальные держат в синхроне документы,
+    //    у которых декларации пока нет. При отсутствии документов первый прогон их и создаёт.
+    //
+    //    ПЕРЕЧЕНЬ СВЕРЯЕТСЯ С РЕЕСТРОМ. Прежде здесь стояли поимённо `generate/spec`,
+    //    `generate/architecture` и `generate/c4`; после вывода этих возможностей из
+    //    употребления `reg.get` стал возвращать None, и присмотр МОЛЧА перестал обновлять
+    //    документы, продолжая при этом сообщать об успешном цикле. Чтобы такое не
+    //    повторилось, отсутствие ожидаемой возможности теперь не проходит бесследно.
     let mut docs: Vec<String> = Vec::new();
+    let mut missing: Vec<&str> = Vec::new();
     for id in [
+        "generate/doc",
         "generate/docs",
         "generate/diagram",
-        "generate/spec",
-        "generate/c4",
-        "generate/architecture",
         "generate/data-model",
         "generate/glossary",
     ] {
-        if let Some(cap) = reg.get(id) {
-            if let Ok(out) = cap.run(ctx, &input) {
-                docs.extend(out.artifacts);
+        match reg.get(id) {
+            Some(cap) => {
+                if let Ok(out) = cap.run(ctx, &input) {
+                    docs.extend(out.artifacts);
+                }
             }
+            None => missing.push(id),
         }
+    }
+    if !missing.is_empty() {
+        eprintln!(
+            "   ⚠ присмотр не нашёл в реестре возможности: {}. Документы этой группы не обновлялись.",
+            missing.join(", ")
+        );
     }
 
     // 3. Человеку — сжатая сводка + эскалация блокеров.
     println!("\n── цикл {cycle} ─────────────────────────────");
     println!("{}", ledger.headline);
+    // Честная граница охвата: цикл гоняет статический гейт БЕЗ сборки и тестов, поэтому
+    // зелёная строка выше не означает «компилируется и тесты зелёные». Прежде вердикт
+    // «Готово к сдаче 100/100» печатался даже на некомпилирующемся проекте без оговорки.
+    println!("   охват: статический гейт (без сборки и тестов); вердикт сдачи — `ailc dod`");
     println!(
         "   проверок {} · блокеров {} · предупреждений {} · качество {:.0}/100",
         ledger.checks_run, ledger.blocking, ledger.warning, ledger.score
@@ -162,14 +189,15 @@ fn run_cycle(reg: &Registry, ctx: &Ctx, cycle: u64, fix: bool) {
 
     // 5. Уведомления: ALERT.md (флаг для IDE/git/чата) · macOS-нотификация · чат-фид.
     notify(ctx, &ledger);
+
+    ledger.passed
 }
 
 /// Уведомить о состоянии. Есть что эскалировать (блокеры/решения/советы по дрейфу) →
 /// поднимаем ALERT.md + системную нотификацию macOS + строку в чат-фид; чисто → снимаем флаг.
 fn notify(ctx: &Ctx, ledger: &QualityLedger) {
-    let alert = ledger.blocking > 0
-        || !ledger.open_decisions.is_empty()
-        || !ledger.advisories.is_empty();
+    let alert =
+        ledger.blocking > 0 || !ledger.open_decisions.is_empty() || !ledger.advisories.is_empty();
     let alert_path = ctx.root.join(".ailc/custodian/ALERT.md");
 
     if !alert {
@@ -180,7 +208,10 @@ fn notify(ctx: &Ctx, ledger: &QualityLedger) {
     // ALERT.md — машино/человеко-читаемый флаг (его же сёрфит `ailc serve` в чат).
     // Формат эскалации: нашёл · рекомендую · последствие бездействия — человеку
     // остаётся сказать «да», а не разбираться, что с этим делать.
-    let mut body = format!("# 🔔 ailc custodian — нужно внимание\n\n{}\n\n", ledger.headline);
+    let mut body = format!(
+        "# 🔔 ailc custodian — нужно внимание\n\n{}\n\n",
+        ledger.headline
+    );
     if ledger.blocking > 0 {
         body.push_str(&format!(
             "Нашёл: блокеров {}. Рекомендую: открыть отчёт и починить их первыми \
@@ -235,11 +266,20 @@ fn notify_macos(text: &str) {
 fn agent_label(abs_root: &Path) -> String {
     let name: String = abs_root
         .file_name()
-        .map(|n| n.to_string_lossy().chars().filter(|c| c.is_ascii_alphanumeric()).collect())
+        .map(|n| {
+            n.to_string_lossy()
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect()
+        })
         .unwrap_or_default();
     let mut h = DefaultHasher::new();
     abs_root.to_string_lossy().hash(&mut h);
-    let name = if name.is_empty() { "proj".to_string() } else { name };
+    let name = if name.is_empty() {
+        "proj".to_string()
+    } else {
+        name
+    };
     format!("com.ailc.custodian.{name}-{:x}", h.finish() & 0xffffff)
 }
 
@@ -286,14 +326,26 @@ pub fn install(root: &str, interval_secs: u64) {
         root = abs_root.display(),
         log = log.display(),
     );
-    // ailc:ignore — путь plist из $HOME (env оператора), запись своего launchd-плиста
+    // Путь плиста складывается из $HOME оператора и собственной метки агента; запись идёт
+    // в свой каталог LaunchAgents, сторонний ввод в путь не попадает.
+    // ailc:ignore[sast/taint-path,sast/taint-interproc]
     if std::fs::write(&plist_path, &plist).is_err() {
-        println!("custodian install: не удалось записать {}", plist_path.display());
+        println!(
+            "custodian install: не удалось записать {}",
+            plist_path.display()
+        );
         return;
     }
-    // ailc:ignore — launchctl с путём из $HOME (env оператора), управление своим демоном
-    let _ = Command::new("launchctl").arg("unload").arg(&plist_path).status();
-    // ailc:ignore — launchctl с путём из $HOME (env оператора), управление своим демоном
+    // launchctl вызывается с путём собственного плиста, собранного из $HOME оператора;
+    // сторонний ввод в аргументы не попадает.
+    // ailc:ignore[sast/taint-command-exec]
+    let _ = Command::new("launchctl")
+        .arg("unload")
+        .arg(&plist_path)
+        .status();
+    // launchctl вызывается с путём собственного плиста, собранного из $HOME оператора;
+    // сторонний ввод в аргументы не попадает.
+    // ailc:ignore[sast/taint-command-exec]
     let loaded = Command::new("launchctl")
         .arg("load")
         .arg(&plist_path)
@@ -303,15 +355,30 @@ pub fn install(root: &str, interval_secs: u64) {
 
     println!("ailc · custodian установлен как launchd-агент:");
     println!("  plist:   {}", plist_path.display());
-    println!("  запуск:  каждые {interval}с → проверка + актуализация доков (--once), переживает ребут.");
+    println!(
+        "  запуск:  каждые {interval}с → проверка + актуализация доков (--once), переживает ребут."
+    );
     println!(
         "  статус:  {}",
-        if loaded { "✓ загружен (первый прогон — сейчас)" } else { "⚠ launchctl load не прошёл — загрузите вручную" }
+        if loaded {
+            "✓ загружен (первый прогон — сейчас)"
+        } else {
+            "⚠ launchctl load не прошёл — загрузите вручную"
+        }
     );
     println!("\nУправлять самому:");
-    println!("  разовый прогон:   ailc custodian {} --once", abs_root.display());
-    println!("  непрерывно (fg):  ailc custodian {} 900", abs_root.display());
-    println!("  снять автозапуск: ailc custodian uninstall {}", abs_root.display());
+    println!(
+        "  разовый прогон:   ailc custodian {} --once",
+        abs_root.display()
+    );
+    println!(
+        "  непрерывно (fg):  ailc custodian {} 900",
+        abs_root.display()
+    );
+    println!(
+        "  снять автозапуск: ailc custodian uninstall {}",
+        abs_root.display()
+    );
     println!("  лог:    {}", log.display());
     println!("  алерты: {}/.ailc/custodian/ALERT.md", abs_root.display());
 }
@@ -323,13 +390,22 @@ pub fn uninstall(root: &str) {
     let plist_path = home
         .join("Library/LaunchAgents")
         .join(format!("{}.plist", agent_label(&abs_root)));
-    // ailc:ignore — launchctl с путём из $HOME (env оператора), управление своим демоном
-    let _ = Command::new("launchctl").arg("unload").arg(&plist_path).status();
+    // launchctl вызывается с путём собственного плиста, собранного из $HOME оператора;
+    // сторонний ввод в аргументы не попадает.
+    // ailc:ignore[sast/taint-command-exec]
+    let _ = Command::new("launchctl")
+        .arg("unload")
+        .arg(&plist_path)
+        .status();
     let removed = std::fs::remove_file(&plist_path).is_ok();
     println!(
         "custodian uninstall: {} {}",
         plist_path.display(),
-        if removed { "✓ снят" } else { "(агент не найден)" }
+        if removed {
+            "✓ снят"
+        } else {
+            "(агент не найден)"
+        }
     );
 }
 

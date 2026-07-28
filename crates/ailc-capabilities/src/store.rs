@@ -51,7 +51,8 @@ impl MemoryRead {
                 id: "memory/read",
                 family: Family::Memory,
                 engine: EngineKind::Store,
-                when_to_use: "Прочитать рабочую память проекта (контекст, заметки) перед началом работы.",
+                when_to_use:
+                    "Прочитать рабочую память проекта (контекст, заметки) перед началом работы.",
                 input_schema: READ_SCHEMA,
                 tier: Tier::Core,
                 deterministic: false,
@@ -165,7 +166,8 @@ impl DecisionLog {
                 id: "memory/decision-log",
                 family: Family::Memory,
                 engine: EngineKind::Store,
-                when_to_use: "Записать принятое решение строкой в журнал решений проекта (текст — query).",
+                when_to_use:
+                    "Записать принятое решение строкой в журнал решений проекта (текст — query).",
                 input_schema: STORE_SCHEMA,
                 tier: Tier::Core,
                 deterministic: false,

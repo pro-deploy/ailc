@@ -27,6 +27,7 @@ use ailc_contracts::{
 };
 use ailc_core::engines::runner::Runner;
 use ailc_core::engines::scan::{Matcher, Rule, ScanEngine};
+use ailc_core::engines::walk::WalkMode;
 use ailc_core::registry::Registry;
 use ailc_core::Capability;
 use std::path::{Path, PathBuf};
@@ -62,15 +63,11 @@ const SKIP_DIRS: &[&str] = &[
 /// webPreferences и стоки. Помимо классических js/ts/jsx/tsx включены современные
 /// модульные формы cjs/mjs и их типизированные варианты mts/cts (см. задачу T26):
 /// конфигурация главного процесса Electron нередко выносится именно в такой модуль.
-const ELECTRON_CODE_EXTS: &[&str] = &[
-    "js", "ts", "jsx", "tsx", "cjs", "mjs", "mts", "cts",
-];
+const ELECTRON_CODE_EXTS: &[&str] = &["js", "ts", "jsx", "tsx", "cjs", "mjs", "mts", "cts"];
 
 /// Расширения, где встречается конфигурация Electron в декларативном виде: к
 /// исходникам добавлен json (некоторые шаблоны выносят BrowserWindow-опции в JSON).
-const ELECTRON_CONF_EXTS: &[&str] = &[
-    "js", "ts", "jsx", "tsx", "cjs", "mjs", "mts", "cts", "json",
-];
+const ELECTRON_CONF_EXTS: &[&str] = &["js", "ts", "jsx", "tsx", "cjs", "mjs", "mts", "cts", "json"];
 
 /// Расширение конфигурации Tauri. Файл tauri.conf.json это JSON, поэтому правила Tauri
 /// применяются только к json, чтобы не давать ложных совпадений по исходному коду.
@@ -391,7 +388,7 @@ impl DesktopVerify {
     /// конфигурации, это не дефекты прод-кода.
     fn scan_config(&self, ctx: &Ctx, input: &RunInput, out: &mut CapabilityOutput) {
         let rules = config_rules();
-        match ScanEngine::run(ctx, input, &rules, CAP_ID, true) {
+        match ScanEngine::run(ctx, input, &rules, CAP_ID, true, WalkMode::Code) {
             Ok(scan_out) => {
                 out.findings.extend(scan_out.findings);
                 out.metrics.extend(scan_out.metrics);
@@ -399,9 +396,7 @@ impl DesktopVerify {
             // Сбой самого скан-движка (например, путь target вне корня) не глотаем:
             // фиксируем как осознанный пропуск этой оси, чтобы он был виден человеку.
             Err(e) => {
-                out.skipped = Some(format!(
-                    "ось конфигурации Electron/Tauri не выполнена: {e}"
-                ));
+                out.skipped = Some(format!("ось конфигурации Electron/Tauri не выполнена: {e}"));
             }
         }
     }
@@ -540,26 +535,7 @@ pub fn register(reg: &mut Registry) {
 mod tests {
     use super::*;
     use ailc_contracts::Severity;
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    static CNT: AtomicU32 = AtomicU32::new(0);
-
-    /// Уникальная пустая временная папка для файловых фикстур.
-    fn tmp() -> PathBuf {
-        let n = CNT.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("ailc-desktop-{}-{}", std::process::id(), n));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn write(dir: &Path, rel: &str, content: &str) {
-        let p = dir.join(rel);
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(p, content).unwrap();
-    }
+    use ailc_testkit::TempTree;
 
     /// Прогнать только скан-ось конфигурации (без запуска внешних сборщиков) по корню.
     fn scan_only(dir: &Path) -> CapabilityOutput {
@@ -579,13 +555,12 @@ mod tests {
 
     #[test]
     fn electron_node_integration_дает_критичную_находку() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("desktop");
+        t.write(
             "main.js",
             "const w = new BrowserWindow({ webPreferences: { nodeIntegration: true } });",
         );
-        let out = scan_only(&dir);
+        let out = scan_only(t.path());
         assert!(
             has_rule(&out, "desktop/electron-node-integration"),
             "nodeIntegration:true должен дать находку"
@@ -595,29 +570,35 @@ mod tests {
             .iter()
             .find(|f| f.rule == "desktop/electron-node-integration")
             .unwrap();
-        assert_eq!(f.severity, Severity::Critical, "это RCE-класс, severity Critical");
-        assert!(f.verified, "находка заземлена на file:line, значит verified");
+        assert_eq!(
+            f.severity,
+            Severity::Critical,
+            "это RCE-класс, severity Critical"
+        );
+        assert!(
+            f.verified,
+            "находка заземлена на file:line, значит verified"
+        );
         assert!(f.message.contains("CWE-829"), "сообщение несёт ссылку CWE");
         assert!(f.location.is_some(), "находка указывает на строку");
     }
 
     #[test]
     fn electron_context_isolation_off_находится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("desktop");
+        t.write(
             "window.ts",
             "webPreferences: {\n  contextIsolation: false,\n}",
         );
-        let out = scan_only(&dir);
+        let out = scan_only(t.path());
         assert!(has_rule(&out, "desktop/electron-context-isolation-off"));
     }
 
     #[test]
     fn electron_websecurity_off_находится() {
-        let dir = tmp();
-        write(&dir, "app.cjs", "webPreferences: { webSecurity: false }");
-        let out = scan_only(&dir);
+        let t = TempTree::new("desktop");
+        t.write("app.cjs", "webPreferences: { webSecurity: false }");
+        let out = scan_only(t.path());
         assert!(
             has_rule(&out, "desktop/electron-websecurity-off"),
             "правило должно ловить и в .cjs (T26)"
@@ -627,11 +608,14 @@ mod tests {
     #[test]
     fn electron_правила_ловят_в_mts_и_mjs() {
         // T26: современные модульные расширения должны входить в охват.
-        let dir = tmp();
-        write(&dir, "preload.mts", "const o = { sandbox: false };");
-        write(&dir, "main.mjs", "enableRemoteModule: true");
-        let out = scan_only(&dir);
-        assert!(has_rule(&out, "desktop/electron-sandbox-off"), ".mts в охвате");
+        let t = TempTree::new("desktop");
+        t.write("preload.mts", "const o = { sandbox: false };");
+        t.write("main.mjs", "enableRemoteModule: true");
+        let out = scan_only(t.path());
+        assert!(
+            has_rule(&out, "desktop/electron-sandbox-off"),
+            ".mts в охвате"
+        );
         assert!(
             has_rule(&out, "desktop/electron-remote-module"),
             ".mjs в охвате"
@@ -640,32 +624,35 @@ mod tests {
 
     #[test]
     fn electron_loadurl_cleartext_находится() {
-        let dir = tmp();
-        write(&dir, "main.js", "win.loadURL('http://example.com/app')");
-        let out = scan_only(&dir);
+        let t = TempTree::new("desktop");
+        t.write("main.js", "win.loadURL('http://example.com/app')");
+        let out = scan_only(t.path());
         assert!(has_rule(&out, "desktop/electron-loadurl-cleartext"));
     }
 
     #[test]
     fn electron_allow_insecure_content_находится() {
-        let dir = tmp();
-        write(&dir, "main.js", "webPreferences: { allowRunningInsecureContent: true }");
-        let out = scan_only(&dir);
+        let t = TempTree::new("desktop");
+        t.write(
+            "main.js",
+            "webPreferences: { allowRunningInsecureContent: true }",
+        );
+        let out = scan_only(t.path());
         assert!(has_rule(&out, "desktop/electron-insecure-content"));
     }
 
     #[test]
     fn electron_безопасная_конфигурация_не_дает_ложных_находок() {
         // Негатив: значения выставлены безопасно — находок Electron быть не должно.
-        let dir = tmp();
-        write(
-            &dir,
-            "main.js",
+        let t = TempTree::new("desktop");
+        t.write("main.js",
             "webPreferences: {\n  nodeIntegration: false,\n  contextIsolation: true,\n  sandbox: true,\n  webSecurity: true,\n}\nwin.loadURL('https://example.com/app')",
         );
-        let out = scan_only(&dir);
+        let out = scan_only(t.path());
         assert!(
-            !out.findings.iter().any(|f| f.rule.starts_with("desktop/electron-")),
+            !out.findings
+                .iter()
+                .any(|f| f.rule.starts_with("desktop/electron-")),
             "безопасная конфигурация не должна давать находок Electron, получено: {:?}",
             out.findings.iter().map(|f| &f.rule).collect::<Vec<_>>()
         );
@@ -674,9 +661,9 @@ mod tests {
     #[test]
     fn electron_loadurl_https_не_срабатывает() {
         // Негатив на обход: loadURL по защищённому протоколу не находка.
-        let dir = tmp();
-        write(&dir, "main.js", "win.loadURL('https://example.com/app')");
-        let out = scan_only(&dir);
+        let t = TempTree::new("desktop");
+        t.write("main.js", "win.loadURL('https://example.com/app')");
+        let out = scan_only(t.path());
         assert!(!has_rule(&out, "desktop/electron-loadurl-cleartext"));
     }
 
@@ -684,13 +671,12 @@ mod tests {
 
     #[test]
     fn tauri_allowlist_all_дает_критичную_находку() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("desktop");
+        t.write(
             "tauri.conf.json",
             r#"{ "tauri": { "allowlist": { "all": true } } }"#,
         );
-        let out = scan_only(&dir);
+        let out = scan_only(t.path());
         assert!(has_rule(&out, "desktop/tauri-allowlist-all"));
         let f = out
             .findings
@@ -703,61 +689,55 @@ mod tests {
 
     #[test]
     fn tauri_shell_execute_находится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("desktop");
+        t.write(
             "tauri.conf.json",
             r#"{ "allowlist": { "shell": { "execute": true } } }"#,
         );
-        let out = scan_only(&dir);
+        let out = scan_only(t.path());
         assert!(has_rule(&out, "desktop/tauri-shell-execute"));
     }
 
     #[test]
     fn tauri_csp_null_находится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("desktop");
+        t.write(
             "tauri.conf.json",
             r#"{ "tauri": { "security": { "csp": null } } }"#,
         );
-        let out = scan_only(&dir);
+        let out = scan_only(t.path());
         assert!(has_rule(&out, "desktop/tauri-csp-null"));
     }
 
     #[test]
     fn tauri_remote_ipc_находится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("desktop");
+        t.write(
             "tauri.conf.json",
             r#"{ "tauri": { "security": { "dangerousRemoteDomainIpcAccess": [] } } }"#,
         );
-        let out = scan_only(&dir);
+        let out = scan_only(t.path());
         assert!(has_rule(&out, "desktop/tauri-remote-ipc"));
     }
 
     #[test]
     fn tauri_updater_http_находится() {
-        let dir = tmp();
-        write(
-            &dir,
-            "tauri.conf.json",
+        let t = TempTree::new("desktop");
+        t.write("tauri.conf.json",
             r#"{ "updater": { "active": true, "endpoints": ["http://releases.example.com/{{target}}"] } }"#,
         );
-        let out = scan_only(&dir);
+        let out = scan_only(t.path());
         assert!(has_rule(&out, "desktop/tauri-updater-cleartext"));
     }
 
     #[test]
     fn tauri_updater_без_pubkey_находится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("desktop");
+        t.write(
             "tauri.conf.json",
             r#"{ "updater": { "active": true, "endpoints": ["https://r.example.com"] }"#,
         );
-        let out = scan_only(&dir);
+        let out = scan_only(t.path());
         assert!(
             has_rule(&out, "desktop/tauri-updater-no-pubkey"),
             "включённый updater без pubkey должен дать находку"
@@ -767,13 +747,11 @@ mod tests {
     #[test]
     fn tauri_updater_с_pubkey_и_https_не_срабатывает() {
         // Негатив: безопасный updater (https + pubkey) не должен давать находок.
-        let dir = tmp();
-        write(
-            &dir,
-            "tauri.conf.json",
+        let t = TempTree::new("desktop");
+        t.write("tauri.conf.json",
             r#"{ "updater": { "active": true, "pubkey": "dW50cnVzdGVk", "endpoints": ["https://r.example.com"] } }"#,
         );
-        let out = scan_only(&dir);
+        let out = scan_only(t.path());
         assert!(!has_rule(&out, "desktop/tauri-updater-no-pubkey"));
         assert!(!has_rule(&out, "desktop/tauri-updater-cleartext"));
     }
@@ -781,15 +759,15 @@ mod tests {
     #[test]
     fn tauri_безопасный_allowlist_не_дает_находок() {
         // Негатив: точечный allowlist без all:true и без обнуления csp — чисто.
-        let dir = tmp();
-        write(
-            &dir,
-            "tauri.conf.json",
+        let t = TempTree::new("desktop");
+        t.write("tauri.conf.json",
             r#"{ "tauri": { "allowlist": { "fs": { "readFile": true } }, "security": { "csp": "default-src 'self'" } } }"#,
         );
-        let out = scan_only(&dir);
+        let out = scan_only(t.path());
         assert!(
-            !out.findings.iter().any(|f| f.rule.starts_with("desktop/tauri-")),
+            !out.findings
+                .iter()
+                .any(|f| f.rule.starts_with("desktop/tauri-")),
             "безопасный конфиг Tauri не должен давать находок, получено: {:?}",
             out.findings.iter().map(|f| &f.rule).collect::<Vec<_>>()
         );
@@ -800,13 +778,12 @@ mod tests {
     #[test]
     fn detect_находит_вложенный_electron_в_монорепо() {
         // T28: десктоп лежит во вложенном каталоге, нерекурсивный поиск его бы упустил.
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("desktop");
+        t.write(
             "apps/desktop/package.json",
             r#"{ "devDependencies": { "electron": "^30" } }"#,
         );
-        let stacks = detect_all(dir.as_path());
+        let stacks = detect_all(t.path());
         assert!(
             stacks.iter().any(|s| s.label == "Electron"),
             "вложенный Electron должен быть найден рекурсивно"
@@ -816,14 +793,13 @@ mod tests {
     #[test]
     fn detect_собирает_все_стеки_а_не_первый() {
         // T28: .NET и Electron в одном репозитории — должны быть оба, без раннего return.
-        let dir = tmp();
-        write(&dir, "App.csproj", "<Project></Project>");
-        write(
-            &dir,
+        let t = TempTree::new("desktop");
+        t.write("App.csproj", "<Project></Project>");
+        t.write(
             "package.json",
             r#"{ "dependencies": { "electron": "30" } }"#,
         );
-        let stacks = detect_all(dir.as_path());
+        let stacks = detect_all(t.path());
         assert!(stacks.iter().any(|s| s.label == ".NET"), "должен быть .NET");
         assert!(
             stacks.iter().any(|s| s.label == "Electron"),
@@ -834,13 +810,12 @@ mod tests {
     #[test]
     fn detect_не_заходит_в_node_modules() {
         // Маркер внутри node_modules не должен распознаваться как стек проекта.
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("desktop");
+        t.write(
             "node_modules/some-pkg/package.json",
             r#"{ "dependencies": { "electron": "30" } }"#,
         );
-        let stacks = detect_all(dir.as_path());
+        let stacks = detect_all(t.path());
         assert!(
             !stacks.iter().any(|s| s.label == "Electron"),
             "стек из node_modules не должен учитываться"
@@ -850,9 +825,9 @@ mod tests {
     #[test]
     fn detect_не_заходит_глубже_предела() {
         // Маркер глубже MAX_DETECT_DEPTH не должен находиться.
-        let dir = tmp();
-        write(&dir, "a/b/c/d/e/CMakeLists.txt", "project(deep)");
-        let stacks = detect_all(dir.as_path());
+        let t = TempTree::new("desktop");
+        t.write("a/b/c/d/e/CMakeLists.txt", "project(deep)");
+        let stacks = detect_all(t.path());
         assert!(
             !stacks.iter().any(|s| s.label == "C/C++ (CMake)"),
             "слишком глубокий маркер вне охвата детекции"
@@ -861,27 +836,27 @@ mod tests {
 
     #[test]
     fn detect_находит_tauri_по_каталогу_src_tauri() {
-        let dir = tmp();
-        write(&dir, "src-tauri/Cargo.toml", "[package]\nname=\"app\"");
-        let stacks = detect_all(dir.as_path());
+        let t = TempTree::new("desktop");
+        t.write("src-tauri/Cargo.toml", "[package]\nname=\"app\"");
+        let stacks = detect_all(t.path());
         assert!(stacks.iter().any(|s| s.label == "Tauri"));
     }
 
     #[test]
     fn detect_пустой_для_недесктоп_проекта() {
-        let dir = tmp();
-        write(&dir, "src/lib.rs", "fn main() {}");
-        write(&dir, "README.md", "# проект");
-        let stacks = detect_all(dir.as_path());
+        let t = TempTree::new("desktop");
+        t.write("src/lib.rs", "fn main() {}");
+        t.write("README.md", "# проект");
+        let stacks = detect_all(t.path());
         assert!(stacks.is_empty(), "обычный Rust-проект не десктоп-стек");
     }
 
     #[test]
     fn detect_electron_только_при_упоминании_зависимости() {
         // package.json без electron не должен давать Electron-стек.
-        let dir = tmp();
-        write(&dir, "package.json", r#"{ "dependencies": { "react": "18" } }"#);
-        let stacks = detect_all(dir.as_path());
+        let t = TempTree::new("desktop");
+        t.write("package.json", r#"{ "dependencies": { "react": "18" } }"#);
+        let stacks = detect_all(t.path());
         assert!(!stacks.iter().any(|s| s.label == "Electron"));
     }
 
@@ -891,18 +866,17 @@ mod tests {
     fn run_не_пропускает_проект_с_уязвимой_конфигурацией() {
         // Даже если тулчейна для сборки нет, наличие уязвимой конфигурации обязано
         // дать находки и не дать summary «пропущено» (T26: уязвимый desktop не чист).
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("desktop");
+        t.write(
             "tauri.conf.json",
             r#"{ "tauri": { "allowlist": { "all": true } } }"#,
         );
         let cap = DesktopVerify::new();
-        let out = cap
-            .run(&Ctx::new(dir.to_path_buf()), &RunInput::default())
-            .unwrap();
+        let out = cap.run(&t.ctx(), &RunInput::default()).unwrap();
         assert!(
-            out.findings.iter().any(|f| f.rule == "desktop/tauri-allowlist-all"),
+            out.findings
+                .iter()
+                .any(|f| f.rule == "desktop/tauri-allowlist-all"),
             "уязвимая конфигурация обязана попасть в находки"
         );
         assert!(
@@ -913,13 +887,14 @@ mod tests {
 
     #[test]
     fn run_недесктоп_проект_честно_пропускается() {
-        let dir = tmp();
-        write(&dir, "src/lib.rs", "fn main() {}");
+        let t = TempTree::new("desktop");
+        t.write("src/lib.rs", "fn main() {}");
         let cap = DesktopVerify::new();
-        let out = cap
-            .run(&Ctx::new(dir.to_path_buf()), &RunInput::default())
-            .unwrap();
-        assert!(out.skipped.is_some(), "не-десктоп проект честно пропущен с причиной");
+        let out = cap.run(&t.ctx(), &RunInput::default()).unwrap();
+        assert!(
+            out.skipped.is_some(),
+            "не-десктоп проект честно пропущен с причиной"
+        );
         assert!(out.findings.is_empty(), "находок быть не должно");
     }
 
@@ -931,12 +906,10 @@ mod tests {
         // dotnet случайно установлен в окружении теста, шаг отработает и находки сборки
         // не будет, поэтому тест устойчив к обоим исходам и проверяет именно отсутствие
         // молчаливого пропуска при распознанном стеке.
-        let dir = tmp();
-        write(&dir, "App.csproj", "<Project></Project>");
+        let t = TempTree::new("desktop");
+        t.write("App.csproj", "<Project></Project>");
         let cap = DesktopVerify::new();
-        let out = cap
-            .run(&Ctx::new(dir.to_path_buf()), &RunInput::default())
-            .unwrap();
+        let out = cap.run(&t.ctx(), &RunInput::default()).unwrap();
         // Стек распознан, значит summary не «пропущено».
         assert!(
             !out.summary.contains("стек не распознан"),

@@ -1,4 +1,4 @@
-//! Локализация UI (ru/en). Язык — из переменной окружения `CO_MCP_LANG`
+//! Локализация UI (ru/en). Язык — из переменной окружения `AILC_LANG`
 //! (`en`/`english` → English, иначе русский по умолчанию).
 //!
 //! Здесь — ЛИЦО продукта (вердикт, QualityLedger), что видит человек. Технический слой
@@ -12,13 +12,15 @@ pub enum Lang {
     En,
 }
 
-/// Выбранный язык — один раз из `CO_MCP_LANG` (по умолчанию русский).
+/// Выбранный язык — один раз из `AILC_LANG` (по умолчанию русский).
 pub fn lang() -> Lang {
     static L: OnceLock<Lang> = OnceLock::new();
-    *L.get_or_init(|| match std::env::var("CO_MCP_LANG").map(|s| s.to_lowercase()) {
-        Ok(s) if s == "en" || s == "english" => Lang::En,
-        _ => Lang::Ru,
-    })
+    *L.get_or_init(
+        || match crate::env::var("AILC_LANG").map(|s| s.to_lowercase()) {
+            Some(s) if s == "en" || s == "english" => Lang::En,
+            _ => Lang::Ru,
+        },
+    )
 }
 
 /// Строка по выбранному языку: `t("по-русски", "in English")`.

@@ -8,26 +8,22 @@ use ailc_core::engines::gate::GateRunner;
 use ailc_core::engines::generator::{Generator, WriteAction};
 use ailc_core::engines::scan::{Matcher, Rule, ScanEngine};
 use ailc_core::engines::store::Store;
+use ailc_core::engines::walk::WalkMode;
 use ailc_core::verify::Verifier;
+use ailc_testkit::TempTree;
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicU32, Ordering};
 
-static CNT: AtomicU32 = AtomicU32::new(0);
-
-/// Уникальная временная папка-проект с заданными файлами.
-fn tmp(files: &[(&str, &str)]) -> Ctx {
-    let n = CNT.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!("ailc-t-{}-{}", std::process::id(), n));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+/// Временная папка-проект с заданными файлами. Возвращает пару из самого дерева и контекста
+/// проверки с корнем в этом дереве. Дерево возвращается наружу намеренно: оно убирает свой
+/// каталог при разрушении, поэтому обязано быть связано переменной и дожить до конца теста;
+/// если его не связать, каталог исчезнет ещё до запуска проверок.
+fn tree(files: &[(&str, &str)]) -> (TempTree, Ctx) {
+    let t = TempTree::new("core");
     for (rel, content) in files {
-        let p = dir.join(rel);
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(p, content).unwrap();
+        t.write(rel, content);
     }
-    Ctx::new(dir)
+    let ctx = t.ctx();
+    (t, ctx)
 }
 
 fn finding(sev: Severity, verified: bool, file: &str, line: u32, source: &str) -> Finding {
@@ -57,15 +53,19 @@ fn gate_counts_only_verified() {
         finding(Severity::Low, true, "c.rs", 3, "x"),      // verified low → warning
     ];
     let t = ailc_contracts::Thresholds::default();
-    let r = GateRunner::classify(findings, vec!["x".into()], vec![], &policy, &t);
-    assert_eq!(r.blocking.len(), 1, "блокирует только верифицированный critical");
+    let r = GateRunner::classify(findings, vec!["x".into()], vec![], vec![], &policy, &t);
+    assert_eq!(
+        r.blocking.len(),
+        1,
+        "блокирует только верифицированный critical"
+    );
     assert_eq!(r.warning.len(), 1);
     assert!(!r.passed);
 }
 
 #[test]
 fn store_rejects_path_traversal() {
-    let ctx = tmp(&[]);
+    let (_t, ctx) = tree(&[]);
     assert!(Store::write(&ctx, "ns", "../evil", "x").is_err());
     assert!(Store::write(&ctx, "..", "f", "x").is_err());
     assert!(Store::write(&ctx, "ns", "a/b", "x").is_err());
@@ -76,7 +76,7 @@ fn store_rejects_path_traversal() {
 
 #[test]
 fn generator_idempotent_preserves_manual_and_multiblock() {
-    let ctx = tmp(&[]);
+    let (_t, ctx) = tree(&[]);
     let (_, a1) = Generator::write_block(&ctx, "doc.md", "k", "BLOCK").unwrap();
     assert_eq!(a1, WriteAction::Created);
 
@@ -99,7 +99,7 @@ fn generator_idempotent_preserves_manual_and_multiblock() {
 
 #[test]
 fn scan_no_silent_skip_on_empty() {
-    let ctx = tmp(&[]); // нет файлов → нечего сканировать
+    let (_t, ctx) = tree(&[]); // нет файлов → нечего сканировать
     let rules = vec![Rule {
         id: "x",
         severity: Severity::High,
@@ -107,13 +107,24 @@ fn scan_no_silent_skip_on_empty() {
         matcher: Matcher::Predicate(|l| l.contains("TODO")),
         message: "m",
     }];
-    let out = ScanEngine::run(&ctx, &RunInput::default(), &rules, "t", false).unwrap();
-    assert!(out.skipped.is_some(), "0 файлов → ЯВНЫЙ skipped, не тихий ноль");
+    let out = ScanEngine::run(
+        &ctx,
+        &RunInput::default(),
+        &rules,
+        "t",
+        false,
+        WalkMode::Code,
+    )
+    .unwrap();
+    assert!(
+        out.skipped.is_some(),
+        "0 файлов → ЯВНЫЙ skipped, не тихий ноль"
+    );
 }
 
 #[test]
 fn scan_match_is_grounded_and_verified() {
-    let ctx = tmp(&[("a.rs", "fn f(){ /* TODO fix */ }")]);
+    let (_t, ctx) = tree(&[("a.rs", "fn f(){ /* TODO fix */ }")]);
     let rules = vec![Rule {
         id: "todo",
         severity: Severity::Info,
@@ -121,15 +132,29 @@ fn scan_match_is_grounded_and_verified() {
         matcher: Matcher::Predicate(|l| l.contains("TODO")),
         message: "m",
     }];
-    let out = ScanEngine::run(&ctx, &RunInput::default(), &rules, "t", false).unwrap();
+    let out = ScanEngine::run(
+        &ctx,
+        &RunInput::default(),
+        &rules,
+        "t",
+        false,
+        WalkMode::Code,
+    )
+    .unwrap();
     assert_eq!(out.findings.len(), 1);
-    assert!(out.findings[0].location.is_some(), "находка заземлена на file:line");
-    assert!(out.findings[0].verified, "детерминированная находка → verified");
+    assert!(
+        out.findings[0].location.is_some(),
+        "находка заземлена на file:line"
+    );
+    assert!(
+        out.findings[0].verified,
+        "детерминированная находка → verified"
+    );
 }
 
 #[test]
 fn codeintel_symbols_polyglot_and_exported() {
-    let ctx = tmp(&[
+    let (_t, ctx) = tree(&[
         ("g.go", "func Exported(){}\nfunc private(){}\n"),
         ("r.rs", "pub fn pub_fn(){}\nfn priv_fn(){}\n"),
         ("p.py", "def hello():\n    pass\n"),
@@ -146,10 +171,13 @@ fn codeintel_symbols_polyglot_and_exported() {
 #[test]
 fn codeintel_ast_languages_coverage() {
     // Каждый язык должен дать символ через tree-sitter (ловит поломку ABI грамматики).
-    let ctx = tmp(&[
+    let (_t, ctx) = tree(&[
         ("A.java", "public class A {\n  public void run() {}\n}\n"),
         ("c.cs", "public class S {\n  public void Go() {}\n}\n"),
-        ("k.c", "int add(int a){ return a; }\nstatic int hid(){ return 0; }\n"),
+        (
+            "k.c",
+            "int add(int a){ return a; }\nstatic int hid(){ return 0; }\n",
+        ),
         ("w.cpp", "class W {\npublic:\n  void draw() {}\n};\n"),
         ("i.rb", "class Inv\n  def total\n    1\n  end\nend\n"),
         ("u.php", "<?php\nclass U {\n  public function go() {}\n}\n"),
@@ -172,25 +200,35 @@ fn codeintel_ast_languages_coverage() {
 
 #[test]
 fn callgraph_resolves_edges_and_finds_unreachable() {
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "a.py",
         "def helper():\n    return 1\ndef caller():\n    return helper()\ndef orphan():\n    return 9\ndef main():\n    caller()\nmain()\n",
     )]);
     let cg = CodeIntelEngine::call_graph(&ctx, &RunInput::default()).unwrap();
     assert!(
-        cg.edges.contains(&("caller".to_string(), "helper".to_string())),
+        cg.edges
+            .contains(&("caller".to_string(), "helper".to_string())),
         "ребро caller→helper разрешено"
     );
     let unreachable = cg.unreachable();
-    assert!(unreachable.contains(&"orphan".to_string()), "orphan недостижима");
-    assert!(!unreachable.contains(&"helper".to_string()), "helper вызвана — достижима");
-    assert!(!unreachable.contains(&"main".to_string()), "main — точка входа");
+    assert!(
+        unreachable.contains(&"orphan".to_string()),
+        "orphan недостижима"
+    );
+    assert!(
+        !unreachable.contains(&"helper".to_string()),
+        "helper вызвана — достижима"
+    );
+    assert!(
+        !unreachable.contains(&"main".to_string()),
+        "main — точка входа"
+    );
 }
 
 #[test]
 fn osv_matches_vulnerable_versions_offline() {
     // Уязвимая версия ловится, исправленная и неизвестная — нет. Без сети/тулов.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "requirements.txt",
         "requests==2.18.0\nrequests==2.20.0\nflask==2.0.0\n",
     )]);
@@ -203,20 +241,31 @@ fn osv_matches_vulnerable_versions_offline() {
         .collect();
     assert!(
         hits.iter().any(|e| e.contains("requests@2.18.0")),
-        "2.18.0 < 2.20.0 — уязвима"
+        "старая версия обязана быть отмечена уязвимой"
     );
+    // Утверждения об ОТСУТСТВИИ находок по конкретной версии здесь намеренно не делаются:
+    // снимок базы регулярно обновляется настоящими выгрузками OSV, и версия, безопасная
+    // сегодня, завтра оказывается уязвимой по новой записи. Тест обязан проверять логику
+    // сопоставления, а не текущее содержимое базы, иначе он ломается от каждого
+    // обновления снимка. Полуинтервальную границу «introduced ≤ v < fixed» проверяет
+    // модульный тест сравнения версий в самом движке.
+    let fixes: Vec<&str> = rep
+        .findings
+        .iter()
+        .map(|f| f.message.as_str())
+        .filter(|m| m.contains("requests"))
+        .collect();
     assert!(
-        !hits.iter().any(|e| e.contains("requests@2.20.0")),
-        "2.20.0 = фикс — не уязвима"
+        fixes.iter().any(|m| m.contains("обнови до")),
+        "находка обязана называть версию с исправлением: {fixes:?}"
     );
-    assert!(!hits.iter().any(|e| e.contains("flask")), "flask вне базы");
 }
 
 #[test]
 fn sast_structural_precision() {
     // Литеральный аргумент безопасен, переменная — находка (точность поверх regex).
     // eval/exec выведены в потоковый сток; структурную точность показываем на system.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "a.py",
         "def s():\n    system(\"ls\")\ndef v(x):\n    system(x)\ndef j(d):\n    import json\n    json.loads(d)\ndef p(d):\n    import pickle\n    pickle.loads(d)\n",
     )]);
@@ -228,7 +277,11 @@ fn sast_structural_precision() {
         .filter(|f| f.rule == "sast/dynamic-exec")
         .map(|f| f.location.as_ref().unwrap().line)
         .collect();
-    assert_eq!(exec_lines, vec![4], "помечен только eval(x), не eval(\"1+1\")");
+    assert_eq!(
+        exec_lines,
+        vec![4],
+        "помечен только eval(x), не eval(\"1+1\")"
+    );
     assert!(
         rules.contains(&"sast/unsafe-deserialize"),
         "pickle.loads помечен"
@@ -259,7 +312,7 @@ fn depgraph_detects_cycle() {
 
 #[test]
 fn verifier_refutes_comment_and_placeholder_keeps_real() {
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "a.rs",
         "let real = secret;\n// let x = secret;\nlet y = \"changeme\";\n",
     )]);
@@ -277,7 +330,7 @@ fn verifier_refutes_comment_and_placeholder_keeps_real() {
 #[test]
 fn verifier_refutes_rule_definitions_and_comment_smells() {
     // Сканер находит СВОЙ ruleset (анти-само-скан) + смел panic в комментарии.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "rules.rs",
         // 1: определение regex-правила  2: тело предиката (.contains-цепочка)
         // 3: реальный опасный вызов     4: panic в комментарии (не исполняется)
@@ -314,15 +367,23 @@ fn verifier_refutes_rule_definitions_and_comment_smells() {
         .iter()
         .map(|f| f.location.as_ref().unwrap().line)
         .collect();
-    assert_eq!(lines, vec![3, 5], "остаются только живые вызовы (стр. 3 и 5)");
-    assert_eq!(refuted.len(), 3, "2 определения правил + panic в комментарии");
+    assert_eq!(
+        lines,
+        vec![3, 5],
+        "остаются только живые вызовы (стр. 3 и 5)"
+    );
+    assert_eq!(
+        refuted.len(),
+        3,
+        "2 определения правил + panic в комментарии"
+    );
 }
 
 #[test]
 fn scan_rejects_target_traversal() {
     // target приходит от MCP-клиента — `..` и абсолютные пути не должны выводить
     // сканирование за корень проекта (симметрично защите Store).
-    let ctx = tmp(&[("a.rs", "fn f(){}\n")]);
+    let (_t, ctx) = tree(&[("a.rs", "fn f(){}\n")]);
     let rules = vec![Rule {
         id: "todo",
         severity: Severity::Info,
@@ -334,16 +395,19 @@ fn scan_rejects_target_traversal() {
         target: Some("../evil".into()),
         query: None,
     };
-    let err = ScanEngine::run(&ctx, &input, &rules, "t", true);
+    let err = ScanEngine::run(&ctx, &input, &rules, "t", true, WalkMode::Code);
     assert!(err.is_err(), "target с `..` отвергается");
-    assert!(err.unwrap_err().0.contains("корень"), "причина названа явно");
+    assert!(
+        err.unwrap_err().0.contains("корень"),
+        "причина названа явно"
+    );
 
     let abs = RunInput {
         target: Some("/etc".into()),
         query: None,
     };
     assert!(
-        ScanEngine::run(&ctx, &abs, &rules, "t", true).is_err(),
+        ScanEngine::run(&ctx, &abs, &rules, "t", true, WalkMode::Code).is_err(),
         "абсолютный target отвергается"
     );
 }
@@ -353,7 +417,7 @@ fn scan_reports_out_of_scope_files() {
     // Инвариант «нет молчаливых пропусков» для ЧАСТИЧНОГО охвата: скрытые файлы и
     // крупные блобы не сканируются осознанно, но их количество видно в сводке.
     let blob = "x".repeat(1_100_000);
-    let ctx = tmp(&[
+    let (_t, ctx) = tree(&[
         ("a.rs", "// TODO later\n"),
         (".env", "SECRET=1\n"),
         ("bundle.min.js", blob.as_str()),
@@ -365,15 +429,29 @@ fn scan_reports_out_of_scope_files() {
         matcher: Matcher::Predicate(|l| l.contains("TODO")),
         message: "m",
     }];
-    let out = ScanEngine::run(&ctx, &RunInput::default(), &rules, "t", true).unwrap();
+    let out = ScanEngine::run(
+        &ctx,
+        &RunInput::default(),
+        &rules,
+        "t",
+        true,
+        WalkMode::Code,
+    )
+    .unwrap();
     let oos = out
         .metrics
         .iter()
         .find(|(k, _)| k == "files_out_of_scope")
         .map(|(_, v)| *v)
         .unwrap_or(0.0);
-    assert!(oos >= 2.0, "скрытый .env + блоб учтены как вне охвата: {oos}");
-    assert!(out.summary.contains("вне охвата"), "сводка честно называет пропуски");
+    assert!(
+        oos >= 2.0,
+        "скрытый .env + блоб учтены как вне охвата: {oos}"
+    );
+    assert!(
+        out.summary.contains("вне охвата"),
+        "сводка честно называет пропуски"
+    );
 }
 
 #[test]
@@ -382,7 +460,7 @@ fn rigor_zero_and_headline_honest_when_no_checks_ran() {
     // и заголовок не имеет права говорить «готово к сдаче».
     use ailc_core::orchestrator::Orchestrator;
     use ailc_core::registry::Registry;
-    let ctx = tmp(&[]);
+    let (_t, ctx) = tree(&[]);
     let reg = Registry::new(); // пустой реестр → ни одна проверка не выполнится
     let ledger = Orchestrator::deterministic_gate(
         &reg,
@@ -403,7 +481,7 @@ fn rigor_zero_and_headline_honest_when_no_checks_ran() {
 
 #[test]
 fn verifier_refutes_numeric_placeholder() {
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "cfg.py",
         concat!(
             "api_key = \"123456789012\"\n", // восходящий ряд → плейсхолдер
@@ -416,14 +494,18 @@ fn verifier_refutes_numeric_placeholder() {
     ];
     let (confirmed, refuted) = Verifier::verify(&ctx, findings);
     assert_eq!(refuted.len(), 1, "числовой ряд опровергнут");
-    assert!(refuted[0].1.contains("числовой"), "причина названа: {}", refuted[0].1);
+    assert!(
+        refuted[0].1.contains("числовой"),
+        "причина названа: {}",
+        refuted[0].1
+    );
     assert_eq!(confirmed.len(), 1, "реальный токен остаётся");
 }
 
 #[test]
 fn osv_parses_new_ecosystems_offline() {
     use ailc_core::engines::osv;
-    let ctx = tmp(&[
+    let (_t, ctx) = tree(&[
         (
             "go.sum",
             "golang.org/x/text v0.3.7 h1:abc=\ngolang.org/x/text v0.3.7/go.mod h1:def=\n",
@@ -442,30 +524,58 @@ fn osv_parses_new_ecosystems_offline() {
         ),
     ]);
     let rep = osv::scan(&ctx.root);
-    assert_eq!(rep.checked, 4, "x/text + log4j + http + AFNetworking разобраны");
-    let msgs: Vec<&str> = rep.findings.iter().map(|f| f.message.as_str()).collect();
+    assert_eq!(
+        rep.checked, 4,
+        "x/text + log4j + http + AFNetworking разобраны"
+    );
+    // Сверка идёт по ПАКЕТУ и версии, а не по конкретному номеру уязвимости: одна и та же
+    // проблема приходит из разных источников под разными номерами (CVE, GHSA, GO), и
+    // привязка теста к одному номеру ломалась бы при обновлении снимка.
+    let ev: Vec<&str> = rep
+        .findings
+        .iter()
+        .map(|f| f.evidence.as_deref().unwrap_or(""))
+        .collect();
     assert!(
-        msgs.iter().any(|m| m.contains("CVE-2022-32149")),
-        "go.sum: уязвимый x/text@0.3.7 найден: {msgs:?}"
+        ev.iter().any(|e| e.contains("golang.org/x/text@0.3.7")),
+        "go.sum: уязвимый x/text@0.3.7 найден: {ev:?}"
     );
     assert!(
-        msgs.iter().any(|m| m.contains("CVE-2021-44228")),
-        "gradle: Log4Shell в log4j-core@2.14.1 найден"
+        ev.iter()
+            .any(|e| e.contains("org.apache.logging.log4j:log4j-core@2.14.1")),
+        "gradle: уязвимый log4j-core@2.14.1 найден: {ev:?}"
+    );
+    assert!(
+        rep.findings
+            .iter()
+            .any(|f| f.message.contains("Log4j") || f.message.contains("log4j")),
+        "среди находок по log4j есть содержательное описание"
     );
     // Честность покрытия: по Pub/CocoaPods в снимке базы записей нет — это
     // явно сообщается, а не выдаётся как «0 уязвимостей = чисто».
-    assert!(rep.uncovered.contains(&"Pub"), "Pub помечен непокрытым");
-    assert!(rep.uncovered.contains(&"CocoaPods"), "CocoaPods помечен непокрытым");
+    assert!(
+        rep.uncovered.contains(&"CocoaPods"),
+        "CocoaPods помечен непокрытым: записей по нему в снимке нет"
+    );
     assert!(!rep.uncovered.contains(&"Go"), "Go покрыт базой");
 }
 
 #[test]
 fn codeintel_ast_kotlin_swift_dart() {
     // Мобильные языки на полноценном AST (раньше — только regex-фолбэк).
-    let ctx = tmp(&[
-        ("App.kt", "class Session(val id: Int)\nfun connect(s: Session) {}\nprivate fun helper() {}\n"),
-        ("View.swift", "class Profile {}\nfunc render(p: Profile) {}\nprotocol Drawable {}\n"),
-        ("main.dart", "class Cart {}\nmixin Loggable {}\nvoid checkout(Cart c) {}\nvoid _hidden() {}\n"),
+    let (_t, ctx) = tree(&[
+        (
+            "App.kt",
+            "class Session(val id: Int)\nfun connect(s: Session) {}\nprivate fun helper() {}\n",
+        ),
+        (
+            "View.swift",
+            "class Profile {}\nfunc render(p: Profile) {}\nprotocol Drawable {}\n",
+        ),
+        (
+            "main.dart",
+            "class Cart {}\nmixin Loggable {}\nvoid checkout(Cart c) {}\nvoid _hidden() {}\n",
+        ),
     ]);
     let syms = CodeIntelEngine::symbols(&ctx, &RunInput::default()).unwrap();
     let find = |n: &str| syms.iter().find(|s| s.name == n);
@@ -479,12 +589,24 @@ fn codeintel_ast_kotlin_swift_dart() {
         ("Loggable", "dart"),
         ("checkout", "dart"),
     ] {
-        let s = find(name).unwrap_or_else(|| panic!("{name} не найден: {:?}",
-            syms.iter().map(|s| (&s.name, &s.lang)).collect::<Vec<_>>()));
+        let s = find(name).unwrap_or_else(|| {
+            panic!(
+                "{name} не найден: {:?}",
+                syms.iter().map(|s| (&s.name, &s.lang)).collect::<Vec<_>>()
+            )
+        });
         assert_eq!(s.lang, lang, "{name} распознан AST-слоем {lang}");
     }
-    assert_eq!(find("_hidden").map(|s| s.exported), Some(false), "dart _имя приватно");
-    assert_eq!(find("helper").map(|s| s.exported), Some(false), "kotlin private закрыт");
+    assert_eq!(
+        find("_hidden").map(|s| s.exported),
+        Some(false),
+        "dart _имя приватно"
+    );
+    assert_eq!(
+        find("helper").map(|s| s.exported),
+        Some(false),
+        "kotlin private закрыт"
+    );
 }
 
 #[test]
@@ -493,7 +615,7 @@ fn sast_covers_kotlin_and_swift() {
     // Kotlin: десериализация ObjectInputStream и динамический исполнитель команды;
     // литерал не флагуется. eval/exec выведены в потоковый сток, поэтому структурную
     // точность показываем на system (динамический аргумент против литерала).
-    let ctx = tmp(&[
+    let (_t, ctx) = tree(&[
         (
             "Load.kt",
             "fun load(s: java.io.InputStream, x: String) {\n    val o = ObjectInputStream(s)\n    system(x)\n    system(\"1+1\")\n}\n",
@@ -524,15 +646,22 @@ fn sast_covers_kotlin_and_swift() {
             && f.location.as_ref().unwrap().file.ends_with(".swift")),
         "swift system(cmd) — динамический аргумент: {rules:?}"
     );
-    let exec_total = rep.findings.iter().filter(|f| f.rule == "sast/dynamic-exec").count();
-    assert_eq!(exec_total, 2, "литералы (kotlin/swift) не флагуются: {rules:?}");
+    let exec_total = rep
+        .findings
+        .iter()
+        .filter(|f| f.rule == "sast/dynamic-exec")
+        .count();
+    assert_eq!(
+        exec_total, 2,
+        "литералы (kotlin/swift) не флагуются: {rules:?}"
+    );
 }
 
 #[test]
 fn compliance_pdn_logs_ast_multiline_and_masked() {
     use ailc_core::engines::sast;
     // Многострочный вызов (line-regex его не видит) + маскированный (не находка).
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "svc.py",
         concat!(
             "logger.info(\n",
@@ -549,7 +678,11 @@ fn compliance_pdn_logs_ast_multiline_and_masked() {
         "ровно одна находка (маскированное и не-ПДн не флагуются): {:?}",
         rep.findings.iter().map(|f| &f.message).collect::<Vec<_>>()
     );
-    assert_eq!(rep.findings[0].location.as_ref().unwrap().line, 1, "многострочный вызов найден");
+    assert_eq!(
+        rep.findings[0].location.as_ref().unwrap().line,
+        1,
+        "многострочный вызов найден"
+    );
     assert_eq!(rep.findings[0].source, "compliance.ru/pdn-logs-ast");
 }
 
@@ -566,13 +699,26 @@ fn agent_plan_prompt_includes_project_stack() {
             None
         }
     }
-    let ctx = tmp(&[("Cargo.toml", "[package]\nname=\"x\"\n"), ("pubspec.yaml", "name: app\n")]);
+    let (_t, ctx) = tree(&[
+        ("Cargo.toml", "[package]\nname=\"x\"\n"),
+        ("pubspec.yaml", "name: app\n"),
+    ]);
     let reg = Registry::new();
     let mut cap = Capture(String::new());
     let _ = AgentOrchestrator::run(&reg, &ctx, &RunInput::default(), "проверь", &mut cap, 0);
-    assert!(cap.0.contains("Rust"), "промпт содержит стек: {}", &cap.0[..cap.0.len().min(400)]);
-    assert!(cap.0.contains("Flutter"), "pubspec.yaml распознан как Flutter");
-    assert!(cap.0.contains("Контекст проекта"), "секция контекста присутствует");
+    assert!(
+        cap.0.contains("Rust"),
+        "промпт содержит стек: {}",
+        &cap.0[..cap.0.len().min(400)]
+    );
+    assert!(
+        cap.0.contains("Flutter"),
+        "pubspec.yaml распознан как Flutter"
+    );
+    assert!(
+        cap.0.contains("Контекст проекта"),
+        "секция контекста присутствует"
+    );
 }
 
 #[test]
@@ -606,6 +752,7 @@ fn sarif_serializes_findings_2_1_0() {
         &findings,
         "0.2.0",
         2,
+        1,
         &["security.scan/web".into()],
         &[("verify/lint".into(), "нет линтера".into())],
     );
@@ -638,7 +785,10 @@ fn sarif_serializes_findings_2_1_0() {
     );
     // Правила дедуплицированы по id.
     assert_eq!(
-        v["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap().len(),
+        v["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .unwrap()
+            .len(),
         2
     );
 }
@@ -648,7 +798,7 @@ fn taint_tracks_cross_statement_flow_precisely() {
     use ailc_core::engines::sast::scan_taint;
     // vuln: источник→переменная→сток (находка). safe_param: параметризованный запрос
     // (НЕ находка — заражён только 2-й аргумент). safe_const: чистая константа (НЕ находка).
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "app.py",
         concat!(
             "import os\n",
@@ -664,7 +814,11 @@ fn taint_tracks_cross_statement_flow_precisely() {
     )]);
     let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
     let rules: Vec<&str> = rep.findings.iter().map(|f| f.rule.as_str()).collect();
-    assert_eq!(rep.findings.len(), 1, "ровно один реальный поток: {rules:?}");
+    assert_eq!(
+        rep.findings.len(),
+        1,
+        "ровно один реальный поток: {rules:?}"
+    );
     assert_eq!(rep.findings[0].rule, "sast/taint-command-exec");
     assert_eq!(
         rep.findings[0].location.as_ref().unwrap().line,
@@ -677,20 +831,24 @@ fn taint_tracks_cross_statement_flow_precisely() {
 fn taint_direct_source_and_scope_isolation() {
     use ailc_core::engines::sast::scan_taint;
     // Прямой источник в стоке (находка) + изоляция scope: заражение из a() не течёт в b().
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "h.py",
         concat!(
             "import os\n",
             "def a():\n",
             "    t = request.args.get('x')\n",
             "def b():\n",
-            "    os.system(t)\n",            // t здесь чист (другая функция) → НЕ находка
+            "    os.system(t)\n", // t здесь чист (другая функция) → НЕ находка
             "def c():\n",
             "    os.system(request.args.get('z'))\n", // прямой источник → находка
         ),
     )]);
     let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
-    assert_eq!(rep.findings.len(), 1, "только прямой поток в c(), изоляция scope держит");
+    assert_eq!(
+        rep.findings.len(),
+        1,
+        "только прямой поток в c(), изоляция scope держит"
+    );
     assert_eq!(rep.findings[0].rule, "sast/taint-command-exec");
 }
 
@@ -698,7 +856,7 @@ fn taint_direct_source_and_scope_isolation() {
 fn taint_javascript_flow_and_param_safe() {
     use ailc_core::engines::sast::scan_taint;
     // const-декларатор тянет источник в eval (находка); параметризованный db.query — нет.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "h.js",
         concat!(
             "function vuln(req) {\n",
@@ -721,7 +879,7 @@ fn taint_go_command_arg_and_param_safe() {
     use ailc_core::engines::sast::scan_taint;
     // exec.Command("sh","-c",name): опасен НЕ первый аргумент → проверка всех аргументов.
     // db.Query(sql, source): параметризовано → первый аргумент чист → НЕ находка.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "h.go",
         concat!(
             "package main\n",
@@ -736,7 +894,11 @@ fn taint_go_command_arg_and_param_safe() {
     )]);
     let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
     let rules: Vec<&str> = rep.findings.iter().map(|f| f.rule.as_str()).collect();
-    assert_eq!(rep.findings.len(), 1, "только exec.Command с заражённым 3-м арг: {rules:?}");
+    assert_eq!(
+        rep.findings.len(),
+        1,
+        "только exec.Command с заражённым 3-м арг: {rules:?}"
+    );
     assert_eq!(rep.findings[0].rule, "sast/taint-command-exec");
 }
 
@@ -746,7 +908,7 @@ fn taint_interprocedural_source_function() {
     // get_input() возвращает источник → её вызов = источник (inter-procedural).
     // chain() возвращает get_input() → тоже source-функция (фикспойнт по цепочке).
     // clean() возвращает константу → НЕ source-функция (точность: safe() не флагуется).
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "app.py",
         concat!(
             "import os\n",
@@ -778,7 +940,10 @@ fn taint_interprocedural_source_function() {
         2,
         "поток через хелпер и цепочку, но не через константу: строки {lines:?}"
     );
-    assert!(rep.findings.iter().all(|f| f.rule == "sast/taint-command-exec"));
+    assert!(rep
+        .findings
+        .iter()
+        .all(|f| f.rule == "sast/taint-command-exec"));
 }
 
 #[test]
@@ -786,7 +951,7 @@ fn taint_sanitizer_clears_flow() {
     use ailc_core::engines::sast::scan_taint;
     // vuln: заражённый ввод напрямую (находка). safe_var/safe_inline: тот же ввод, но
     // через shlex.quote — санитайзер снимает заражение (НЕ находки).
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "app.py",
         concat!(
             "import os, shlex\n",
@@ -807,7 +972,11 @@ fn taint_sanitizer_clears_flow() {
         .iter()
         .filter_map(|f| f.location.as_ref().map(|l| l.line))
         .collect();
-    assert_eq!(rep.findings.len(), 1, "только несанитизированный поток: строки {lines:?}");
+    assert_eq!(
+        rep.findings.len(),
+        1,
+        "только несанитизированный поток: строки {lines:?}"
+    );
     assert_eq!(rep.findings[0].location.as_ref().unwrap().line, 4);
 }
 
@@ -834,8 +1003,14 @@ fn skills_export_generates_agentskills_pack() {
         .expect("SKILL.md для capability со slug-путём");
     assert!(skill.content.starts_with("---\n"), "есть YAML-frontmatter");
     assert!(skill.content.contains("name: security-scan-secret"));
-    assert!(skill.content.contains("# security.scan/secret"), "id в теле");
-    assert!(skill.content.contains("ailc cap security.scan/secret"), "команда запуска");
+    assert!(
+        skill.content.contains("# security.scan/secret"),
+        "id в теле"
+    );
+    assert!(
+        skill.content.contains("ailc cap security.scan/secret"),
+        "команда запуска"
+    );
     // plugin.json — валидный JSON с правильным именем.
     let pj = &files
         .iter()
@@ -852,7 +1027,7 @@ fn taint_java_request_to_runtime_exec() {
     use ailc_core::engines::sast::scan_taint;
     // req.getParameter → cmd → Runtime.getRuntime().exec(cmd): находка.
     // safe: константа в exec → НЕ находка (точность).
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "C.java",
         concat!(
             "class C {\n",
@@ -877,7 +1052,7 @@ fn taint_java_request_to_runtime_exec() {
 fn taint_ruby_params_to_system() {
     use ailc_core::engines::sast::scan_taint;
     // params[:cmd] → cmd → system(cmd): находка. Константа в system → НЕ находка.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "h.rb",
         concat!(
             "def vuln\n",
@@ -901,7 +1076,7 @@ fn taint_ruby_params_to_system() {
 #[test]
 fn taint_javascript_path_sink() {
     use ailc_core::engines::sast::scan_taint;
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "h.js",
         "function vuln(req) {\n  const p = req.query.file;\n  fs.readFileSync(p);\n}\n",
     )]);
@@ -914,7 +1089,7 @@ fn taint_javascript_path_sink() {
 fn taint_java_path_via_constructor() {
     use ailc_core::engines::sast::scan_taint;
     // new FileInputStream(f) — конструктор как сток открытия файла.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "C.java",
         concat!(
             "class C {\n",
@@ -926,14 +1101,18 @@ fn taint_java_path_via_constructor() {
         ),
     )]);
     let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
-    assert_eq!(rep.findings.len(), 1, "конструктор FileInputStream — path-сток");
+    assert_eq!(
+        rep.findings.len(),
+        1,
+        "конструктор FileInputStream — path-сток"
+    );
     assert_eq!(rep.findings[0].rule, "sast/taint-path");
 }
 
 #[test]
 fn taint_ruby_path_sink() {
     use ailc_core::engines::sast::scan_taint;
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "h.rb",
         "def vuln\n  f = params[:file]\n  File.read(f)\nend\n",
     )]);
@@ -947,7 +1126,7 @@ fn taint_php_superglobal_to_system() {
     use ailc_core::engines::sast::scan_taint;
     // $_GET (суперглобал) → $cmd → system($cmd): находка. Константа → НЕ находка.
     // Проверяет поддержку PHP-переменных (узел variable_name) и суперглобалов.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "app.php",
         concat!(
             "<?php\n",
@@ -963,7 +1142,11 @@ fn taint_php_superglobal_to_system() {
     )]);
     let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
     let rules: Vec<&str> = rep.findings.iter().map(|f| f.rule.as_str()).collect();
-    assert_eq!(rep.findings.len(), 1, "только заражённый system (PHP): {rules:?}");
+    assert_eq!(
+        rep.findings.len(),
+        1,
+        "только заражённый system (PHP): {rules:?}"
+    );
     assert_eq!(rep.findings[0].rule, "sast/taint-command-exec");
 }
 
@@ -974,7 +1157,7 @@ fn taint_enriched_sinks() {
     use ailc_core::engines::sast::scan_taint;
     // Java prepareStatement с конкатенацией → SQL; JS Function(...) → команда;
     // Python os.open(...) → файл. Каждое — новый сток, добавленный при обогащении.
-    let ctx = tmp(&[
+    let (_t, ctx) = tree(&[
         (
             "C.java",
             concat!(
@@ -997,9 +1180,18 @@ fn taint_enriched_sinks() {
     ]);
     let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
     let rules: Vec<&str> = rep.findings.iter().map(|f| f.rule.as_str()).collect();
-    assert!(rules.contains(&"sast/taint-sql"), "Java prepareStatement: {rules:?}");
-    assert!(rules.contains(&"sast/taint-command-exec"), "JS Function(): {rules:?}");
-    assert!(rules.contains(&"sast/taint-path"), "Python os.open(): {rules:?}");
+    assert!(
+        rules.contains(&"sast/taint-sql"),
+        "Java prepareStatement: {rules:?}"
+    );
+    assert!(
+        rules.contains(&"sast/taint-command-exec"),
+        "JS Function(): {rules:?}"
+    );
+    assert!(
+        rules.contains(&"sast/taint-path"),
+        "Python os.open(): {rules:?}"
+    );
     assert_eq!(rep.findings.len(), 3, "ровно три новых стока: {rules:?}");
 }
 
@@ -1007,7 +1199,7 @@ fn taint_enriched_sinks() {
 fn taint_php_sanitizer_clears_flow() {
     use ailc_core::engines::sast::scan_taint;
     // PHP-санитайзер escapeshellarg снимает заражение (равномерно с другими языками).
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "a.php",
         concat!(
             "<?php\n",
@@ -1030,7 +1222,7 @@ fn taint_php_sanitizer_clears_flow() {
 fn taint_csharp_request_to_process_start() {
     use ailc_core::engines::sast::scan_taint;
     // Request.QueryString → cmd → Process.Start(cmd): находка. Константа → НЕ находка.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "C.cs",
         concat!(
             "class C {\n",
@@ -1051,16 +1243,23 @@ fn taint_csharp_request_to_process_start() {
     let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
     let rules: Vec<&str> = rep.findings.iter().map(|f| f.rule.as_str()).collect();
     // Process.Start(cmd) → команда; new SqlCommand(q,…) с конкатенацией → SQL (тип квалифицирован).
-    assert_eq!(rep.findings.len(), 2, "команда + SQL, но не safe: {rules:?}");
+    assert_eq!(
+        rep.findings.len(),
+        2,
+        "команда + SQL, но не safe: {rules:?}"
+    );
     assert!(rules.contains(&"sast/taint-command-exec"), "{rules:?}");
-    assert!(rules.contains(&"sast/taint-sql"), "квалифицированный SqlCommand: {rules:?}");
+    assert!(
+        rules.contains(&"sast/taint-sql"),
+        "квалифицированный SqlCommand: {rules:?}"
+    );
 }
 
 #[test]
 fn taint_rust_env_to_command() {
     use ailc_core::engines::sast::scan_taint;
     // std::env::var → cmd → Command::new(cmd): находка. Константа → НЕ находка.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "m.rs",
         concat!(
             "fn vuln() {\n",
@@ -1075,7 +1274,11 @@ fn taint_rust_env_to_command() {
     )]);
     let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
     let rules: Vec<&str> = rep.findings.iter().map(|f| f.rule.as_str()).collect();
-    assert_eq!(rep.findings.len(), 1, "только заражённый Command::new: {rules:?}");
+    assert_eq!(
+        rep.findings.len(),
+        1,
+        "только заражённый Command::new: {rules:?}"
+    );
     assert_eq!(rep.findings[0].rule, "sast/taint-command-exec");
 }
 
@@ -1083,7 +1286,7 @@ fn taint_rust_env_to_command() {
 fn taint_swift_query_to_system() {
     use ailc_core::engines::sast::scan_taint;
     // Vapor req.query → cmd → system(cmd): находка. Константа → НЕ находка.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "V.swift",
         concat!(
             "func vuln(req: Request) {\n",
@@ -1098,7 +1301,11 @@ fn taint_swift_query_to_system() {
     )]);
     let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
     let rules: Vec<&str> = rep.findings.iter().map(|f| f.rule.as_str()).collect();
-    assert_eq!(rep.findings.len(), 1, "только заражённый system (Swift): {rules:?}");
+    assert_eq!(
+        rep.findings.len(),
+        1,
+        "только заражённый system (Swift): {rules:?}"
+    );
     assert_eq!(rep.findings[0].rule, "sast/taint-command-exec");
 }
 
@@ -1106,7 +1313,7 @@ fn taint_swift_query_to_system() {
 fn taint_dart_query_to_process_run() {
     use ailc_core::engines::sast::scan_taint;
     // shelf request.url.queryParameters → cmd → Process.run(cmd): находка.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "h.dart",
         concat!(
             "void vuln(Request request) {\n",
@@ -1121,7 +1328,11 @@ fn taint_dart_query_to_process_run() {
     )]);
     let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
     let rules: Vec<&str> = rep.findings.iter().map(|f| f.rule.as_str()).collect();
-    assert_eq!(rep.findings.len(), 1, "только заражённый Process.run (Dart): {rules:?}");
+    assert_eq!(
+        rep.findings.len(),
+        1,
+        "только заражённый Process.run (Dart): {rules:?}"
+    );
     assert_eq!(rep.findings[0].rule, "sast/taint-command-exec");
 }
 
@@ -1130,7 +1341,7 @@ fn taint_c_env_and_buffer_input() {
     use ailc_core::engines::sast::scan_taint;
     // getenv → system (команда); fgets(buf) → strcpy(dst, buf) (буфер, output-параметр).
     // safe: константа → НЕ находка.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "v.c",
         concat!(
             "void vuln() {\n",
@@ -1148,15 +1359,22 @@ fn taint_c_env_and_buffer_input() {
     )]);
     let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
     let rules: Vec<&str> = rep.findings.iter().map(|f| f.rule.as_str()).collect();
-    assert_eq!(rep.findings.len(), 2, "команда (getenv) + буфер (fgets): {rules:?}");
+    assert_eq!(
+        rep.findings.len(),
+        2,
+        "команда (getenv) + буфер (fgets): {rules:?}"
+    );
     assert!(rules.contains(&"sast/taint-command-exec"), "{rules:?}");
-    assert!(rules.contains(&"sast/taint-buffer"), "fgets→strcpy: {rules:?}");
+    assert!(
+        rules.contains(&"sast/taint-buffer"),
+        "fgets→strcpy: {rules:?}"
+    );
 }
 
 #[test]
 fn taint_cpp_getenv_to_system() {
     use ailc_core::engines::sast::scan_taint;
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "v.cpp",
         "void vuln() {\n  char* cmd = getenv(\"X\");\n  system(cmd);\n}\n",
     )]);
@@ -1169,7 +1387,7 @@ fn taint_cpp_getenv_to_system() {
 fn taint_scala_request_to_exec() {
     use ailc_core::engines::sast::scan_taint;
     // Play request.getQueryString → cmd → Runtime.exec(cmd): находка. Константа → нет.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "S.scala",
         concat!(
             "def vuln(request: Request) = {\n",
@@ -1184,7 +1402,11 @@ fn taint_scala_request_to_exec() {
     )]);
     let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
     let rules: Vec<&str> = rep.findings.iter().map(|f| f.rule.as_str()).collect();
-    assert_eq!(rep.findings.len(), 1, "только заражённый exec (Scala): {rules:?}");
+    assert_eq!(
+        rep.findings.len(),
+        1,
+        "только заражённый exec (Scala): {rules:?}"
+    );
     assert_eq!(rep.findings[0].rule, "sast/taint-command-exec");
 }
 
@@ -1193,7 +1415,7 @@ fn taint_kotlin_call_params_to_exec() {
     use ailc_core::engines::sast::scan_taint;
     // Ktor call.parameters → cmd → Runtime.getRuntime().exec(cmd): находка.
     // Проверяет Kotlin-специфику: simple_identifier, navigation_expression, property_declaration.
-    let ctx = tmp(&[(
+    let (_t, ctx) = tree(&[(
         "K.kt",
         concat!(
             "fun vuln(call: ApplicationCall) {\n",
@@ -1208,7 +1430,11 @@ fn taint_kotlin_call_params_to_exec() {
     )]);
     let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
     let rules: Vec<&str> = rep.findings.iter().map(|f| f.rule.as_str()).collect();
-    assert_eq!(rep.findings.len(), 1, "только заражённый exec (Kotlin): {rules:?}");
+    assert_eq!(
+        rep.findings.len(),
+        1,
+        "только заражённый exec (Kotlin): {rules:?}"
+    );
     assert_eq!(rep.findings[0].rule, "sast/taint-command-exec");
 }
 
@@ -1249,7 +1475,11 @@ fn _bench_owasp() {
     sorted.sort();
     let _ = std::fs::write(
         "/tmp/flagged.txt",
-        sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n"),
+        sorted
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
     );
     let csv = std::fs::read_to_string(format!("{base}/expectedresults-1.2.csv")).unwrap();
     let mut stats: BTreeMap<&str, [u64; 4]> = BTreeMap::new(); // [TP,FP,FN,TN]
@@ -1321,7 +1551,12 @@ fn confidence_separates_signal_from_noise() {
         Confidence::High
     );
     assert_eq!(
-        mkf("sast/taint-command-exec", Severity::High, "security.scan/taint").confidence(),
+        mkf(
+            "sast/taint-command-exec",
+            Severity::High,
+            "security.scan/taint"
+        )
+        .confidence(),
         Confidence::High
     );
     // LOW — стиль/метрики/инфо-PII/дрейф доков/эвристики комплаенса = шум.
@@ -1356,12 +1591,17 @@ fn gate_routes_low_confidence_to_advisories_not_score() {
         mkf("long-file", Severity::Low, "quality.check/complexity"),   // шум → advisory
         mkf("deep-nesting", Severity::Low, "quality.check/antipattern"), // шум → advisory
     ];
-    let r = GateRunner::classify(findings, vec![], vec![], &policy, &t);
+    let r = GateRunner::classify(findings, vec![], vec![], vec![], &policy, &t);
     assert_eq!(r.warning.len(), 1, "в вердикт идёт только сигнал");
     assert_eq!(r.advisories.len(), 2, "низкоуверенный шум — в советы");
     // Советы НЕ снижают балл: тот же набор без шумовых находок даёт тот же score.
     let r2 = GateRunner::classify(
-        vec![mkf("sql-injection", Severity::Medium, "security.scan/owasp")],
+        vec![mkf(
+            "sql-injection",
+            Severity::Medium,
+            "security.scan/owasp",
+        )],
+        vec![],
         vec![],
         vec![],
         &policy,
@@ -1373,16 +1613,23 @@ fn gate_routes_low_confidence_to_advisories_not_score() {
 #[test]
 fn inline_ignore_is_language_agnostic() {
     // Реальный (не-плейсхолдер) AWS-ключ + маркер подавления в комментарии РАЗНЫХ языков.
+    //
+    // Маркер здесь ИМЕНОВАННЫЙ (`ailc:ignore[aws-access-key]`), потому что находка
+    // относится к семейству безопасности, а такие подавляются только названным правилом:
+    // голый маркер прежде гасил что угодно, и это была основная дыра подавления (см.
+    // `ignore_hit`). Проверяемое свойство от этого не меняется: механизм остаётся
+    // язык-независимым, так как маркер ищется подстрокой в комментарии любого синтаксиса.
     const KEY: &str = "AKIAZ7QH4D2KLMNP9RS3";
+    const MARK: &str = "ailc:ignore[aws-access-key]";
     let cases = [
-        ("c.rs", format!("let s = \"{KEY}\"; // ailc:ignore")),
-        ("c.py", format!("s = \"{KEY}\"  # ailc:ignore")),
-        ("c.lua", format!("s = \"{KEY}\" -- ailc:ignore")),
-        ("c.html", format!("{KEY} <!-- ailc:ignore -->")),
-        ("c.sql", format!("-- {KEY} ailc:ignore")),
+        ("c.rs", format!("let s = \"{KEY}\"; // {MARK}")),
+        ("c.py", format!("s = \"{KEY}\"  # {MARK}")),
+        ("c.lua", format!("s = \"{KEY}\" -- {MARK}")),
+        ("c.html", format!("{KEY} <!-- {MARK} -->")),
+        ("c.sql", format!("-- {KEY} {MARK}")),
     ];
     for (file, line) in &cases {
-        let ctx = tmp(&[(file, line.as_str())]);
+        let (_t, ctx) = tree(&[(file, line.as_str())]);
         let f = Finding {
             rule: "aws-access-key".into(),
             severity: Severity::Critical,
@@ -1396,14 +1643,17 @@ fn inline_ignore_is_language_agnostic() {
             source: "security.scan/secret".into(),
         };
         let (conf, refd) = Verifier::verify(&ctx, vec![f]);
-        assert!(conf.is_empty() && refd.len() == 1, "{file}: должно подавиться");
+        assert!(
+            conf.is_empty() && refd.len() == 1,
+            "{file}: должно подавиться"
+        );
         assert!(
             refd[0].1.contains("ailc:ignore"),
             "{file}: причина именно inline-ignore, а не другое опровержение"
         );
     }
     // Маркер на СТРОКЕ ВЫШЕ тоже подавляет.
-    let ctx = tmp(&[("p.go", &format!("// ailc:ignore\nkey := \"{KEY}\""))]);
+    let (_t, ctx) = tree(&[("p.go", &format!("// {MARK}\nkey := \"{KEY}\""))]);
     let f = Finding {
         rule: "aws-access-key".into(),
         severity: Severity::Critical,
@@ -1416,9 +1666,16 @@ fn inline_ignore_is_language_agnostic() {
         verified: true,
         source: "security.scan/secret".into(),
     };
-    assert_eq!(Verifier::verify(&ctx, vec![f]).1.len(), 1, "ignore на строке выше");
+    assert_eq!(
+        Verifier::verify(&ctx, vec![f]).1.len(),
+        1,
+        "ignore на строке выше"
+    );
     // Скоуп `[rule]` подавляет ТОЛЬКО названное правило — чужое проходит.
-    let ctx = tmp(&[("s.go", &format!("key := \"{KEY}\" // ailc:ignore[some-other-rule]"))]);
+    let (_t2, ctx) = tree(&[(
+        "s.go",
+        &format!("key := \"{KEY}\" // ailc:ignore[some-other-rule]"),
+    )]);
     let f = Finding {
         rule: "aws-access-key".into(),
         severity: Severity::Critical,
@@ -1433,4 +1690,34 @@ fn inline_ignore_is_language_agnostic() {
     };
     let (conf, _refd) = Verifier::verify(&ctx, vec![f]);
     assert_eq!(conf.len(), 1, "scoped ignore не подавляет чужое правило");
+
+    // РЕГРЕССИЯ на основную дыру подавления: ГОЛЫЙ маркер не гасит находку безопасности ни
+    // в одном языке. Прежде гасил любое правило без потолка важности, из-за чего проверяемый
+    // код отменял вердикт о себе одной строкой комментария.
+    for (file, line) in [
+        ("b.rs", format!("let s = \"{KEY}\"; // ailc:ignore")),
+        ("b.py", format!("s = \"{KEY}\"  # ailc:ignore")),
+        ("b.sql", format!("-- {KEY} ailc:ignore")),
+    ] {
+        let (_t, ctx) = tree(&[(file, line.as_str())]);
+        let f = Finding {
+            rule: "aws-access-key".into(),
+            severity: Severity::Critical,
+            message: "m".into(),
+            location: Some(Location {
+                file: file.into(),
+                line: 1,
+            }),
+            evidence: None,
+            verified: true,
+            source: "security.scan/secret".into(),
+        };
+        let (conf, refd) = Verifier::verify(&ctx, vec![f]);
+        assert_eq!(
+            conf.len(),
+            1,
+            "{file}: голый маркер не имеет права гасить ключ доступа (опровержения: {:?})",
+            refd.iter().map(|(_, r)| r.as_str()).collect::<Vec<_>>()
+        );
+    }
 }

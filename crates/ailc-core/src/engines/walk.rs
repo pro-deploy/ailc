@@ -49,6 +49,17 @@ pub struct WalkStats {
     /// перечнем (инвариант «нет молчаливых пропусков», см. T64). Имена берутся как
     /// предоставлены обходом (как правило это абсолютные пути элементов дерева).
     pub oversized_files: Vec<String>,
+    /// ОТКАЗЫ ДОСТУПА при обходе: каталог не удалось прочитать (нет прав, том отсоединён,
+    /// имя в неподдерживаемой кодировке), либо не удалось получить сведения о записи.
+    /// Хранятся поимённо с причиной.
+    ///
+    /// Это поле закрывает дефект молчаливого усечения обхода. Прежде такие отказы приводили
+    /// к возврату УСПЕХА без всякого учёта: поддерево не сканировалось, ни один счётчик не
+    /// увеличивался, обход сообщал «выполнено», кэш считал результат полным и запоминал его,
+    /// а вердикт объявлял «чисто». То есть недоступный каталог был неотличим от чистого.
+    /// Наблюдаемым следствием была неустойчивость теста `env_based_service_dependency`,
+    /// который при параллельном прогоне получал пустой результат вместо ошибки.
+    pub unreadable: Vec<String>,
 }
 
 impl WalkStats {
@@ -67,6 +78,7 @@ impl WalkStats {
             + self.revisited_dirs
             + self.depth_capped
             + self.oversized()
+            + self.unreadable.len() as u64
     }
 
     /// Короткая причина пропусков для сводки (пусто, если пропусков нет).
@@ -96,6 +108,21 @@ impl WalkStats {
         if self.depth_capped > 0 {
             parts.push(format!("{} по пределу глубины", self.depth_capped));
         }
+        // Отказы доступа перечисляются ПЕРВЫМИ и поимённо: в отличие от прочих пунктов это
+        // не осознанный отсев, а непроверенная часть дерева, и человек обязан увидеть, что
+        // именно осталось непроверенным, а не только сколько.
+        if !self.unreadable.is_empty() {
+            let shown: Vec<&str> = self.unreadable.iter().take(3).map(String::as_str).collect();
+            let tail = if self.unreadable.len() > 3 {
+                format!(" и ещё {}", self.unreadable.len() - 3)
+            } else {
+                String::new()
+            };
+            parts.insert(
+                0,
+                format!("НЕ ПРОЧИТАНО (отказ доступа): {}{tail}", shown.join(", ")),
+            );
+        }
         format!("; вне охвата: {}", parts.join(", "))
     }
 }
@@ -119,6 +146,28 @@ pub enum WalkMode {
     /// читаются/раскрываются. Прочие скрытые элементы по-прежнему отбрасываются
     /// (служебный шум вроде .git/objects не нужен и опасен по объёму).
     Secrets,
+    /// Обход для проверок рабочих процессов непрерывной интеграции: раскрываются
+    /// скрытые каталоги, в которых эти процессы и живут, и читается описание процесса
+    /// в скрытом файле.
+    ///
+    /// Без этого режима правила по рабочим процессам не увидели бы НИ ОДНОГО своего
+    /// целевого файла: описания процессов лежат в `.github/workflows`, `.circleci` и
+    /// подобных каталогах, а обычный обход отбрасывает всё, чьё имя начинается с точки.
+    /// Проверка, которая молча не находит ни одного файла, опаснее отсутствующей: она
+    /// создаёт видимость покрытия.
+    Ci,
+}
+
+/// Скрытый каталог, в котором живут описания рабочих процессов непрерывной интеграции.
+pub fn is_ci_dotdir(name: &str) -> bool {
+    let l = name.to_ascii_lowercase();
+    l == ".github" || l == ".circleci" || l == ".buildkite" || l == ".gitea" || l == ".woodpecker"
+}
+
+/// Скрытый файл с описанием рабочего процесса непрерывной интеграции.
+pub fn is_ci_dotfile(name: &str) -> bool {
+    let l = name.to_ascii_lowercase();
+    l == ".gitlab-ci.yml" || l == ".gitlab-ci.yaml" || l == ".travis.yml" || l == ".drone.yml"
 }
 
 /// Рекурсивный обход с отсевом служебных каталогов. Кросс-платформенно (std).
@@ -172,7 +221,14 @@ pub fn walk_mode(
                 return Ok(());
             }
         }
-        Err(_) => return Ok(()),
+        // Сведения о корне недоступны: учитываем отказ поимённо, иначе обход вернул бы
+        // успех по несуществующему или недоступному пути, а вердикт объявил бы «чисто».
+        Err(e) => {
+            stats
+                .unreadable
+                .push(format!("{}: {e}", dir.to_string_lossy()));
+            return Ok(());
+        }
     }
     let mut visited: HashSet<PathBuf> = HashSet::new();
     // Корень тоже фиксируем как посещённый, чтобы симлинк, ведущий обратно в
@@ -193,11 +249,26 @@ fn walk_inner(
     visited: &mut HashSet<PathBuf>,
     depth: usize,
 ) -> Result<()> {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return Ok(()),
+    // Порядок обхода каталога ДЕТЕРМИНИРОВАН. `fs::read_dir` отдаёт записи в порядке
+    // файловой системы, который различается между машинами, файловыми системами и даже
+    // между прогонами после правок. Для инструмента, обещающего детерминированный вердикт,
+    // это недопустимо: от порядка зависят и признаки паспорта проекта (обход ограничен
+    // числом файлов), и порядок находок в отчёте, и всякая логика с ранним выходом.
+    // Сортировка по имени стоит пренебрежимо мало и делает прогон воспроизводимым.
+    let mut entries: Vec<fs::DirEntry> = match fs::read_dir(dir) {
+        Ok(e) => e.flatten().collect(),
+        // Каталог не читается (нет прав, том отсоединён): фиксируем отказ поимённо.
+        // Возврат успеха без учёта означал бы, что непросканированное поддерево
+        // неотличимо от чистого.
+        Err(e) => {
+            stats
+                .unreadable
+                .push(format!("{}: {e}", dir.to_string_lossy()));
+            return Ok(());
+        }
     };
-    for entry in entries.flatten() {
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -235,6 +306,8 @@ fn walk_inner(
                 || match mode {
                     WalkMode::Secrets if is_dir => is_secret_dotdir(name.as_ref()),
                     WalkMode::Secrets => is_secret_dotfile(name.as_ref()),
+                    WalkMode::Ci if is_dir => is_ci_dotdir(name.as_ref()),
+                    WalkMode::Ci => is_ci_dotfile(name.as_ref()),
                     WalkMode::Code => false,
                 };
             if !allow {
@@ -296,7 +369,9 @@ fn walk_inner(
 /// сканировать такие блобы по содержимому бессмысленно и даёт ложные срабатывания.
 /// (Явно указанный одиночный файл не отсеивается — отсев только при обходе дерева.)
 pub fn is_data_blob(path: &Path) -> bool {
-    fs::metadata(path).map(|m| m.len() > MAX_SCAN_BYTES).unwrap_or(false)
+    fs::metadata(path)
+        .map(|m| m.len() > MAX_SCAN_BYTES)
+        .unwrap_or(false)
 }
 
 /// Имя скрытого ФАЙЛА входит в allow-list секрет-сканера: такие dotfiles чаще всего
@@ -406,6 +481,41 @@ pub fn is_test_path(rel: &str) -> bool {
     false
 }
 
+/// Путь лежит в каталоге тестовой раскладки: хотя бы один сегмент пути целиком
+/// совпадает с типовым именем такого каталога.
+///
+/// Применяется НЕ сканерами (там действует строгий [`is_test_path`], намеренно
+/// опирающийся на имя файла, см. T43), а описанием состава системы: каталог тестов
+/// частью продукта не является, и в документе по стандарту он не должен значиться
+/// модулем системы наравне с прикладными модулями. Ошибка в эту сторону безобидна:
+/// документ не досчитает тестовый каталог, но не припишет продукту лишнего.
+pub fn is_test_dir_path(rel: &str) -> bool {
+    rel.split(['/', '\\']).any(|seg| {
+        matches!(
+            seg.to_ascii_lowercase().as_str(),
+            "tests" | "test" | "__tests__" | "__test__" | "spec" | "specs" | "testdata" | "e2e"
+        )
+    })
+}
+
+#[cfg(test)]
+mod test_dir_tests {
+    use super::is_test_dir_path;
+
+    /// Совпадение идёт по ЦЕЛОМУ сегменту пути, а не по подстроке: иначе прикладной
+    /// каталог `contest` или `latest` ложно объявлялся бы тестовым и его модули
+    /// исчезали бы из документа о составе системы.
+    #[test]
+    fn каталог_тестов_опознаётся_по_целому_сегменту() {
+        assert!(is_test_dir_path("crates/ailc-core/tests/core.rs"));
+        assert!(is_test_dir_path("src/__tests__/app.ts"));
+        assert!(is_test_dir_path("app/spec/models.rb"));
+        assert!(!is_test_dir_path("src/contest/rating.rs"));
+        assert!(!is_test_dir_path("src/latest/handler.go"));
+        assert!(!is_test_dir_path("src/testing_utils.py"));
+    }
+}
+
 /// Строже, чем [`is_test_path`], специально для секрет-правил и точных сигнатур:
 /// тест-файлом считается ТОЛЬКО файл со строгим тест-суффиксом исходного кода.
 /// Каталог-сегмент `tests` сам по себе НЕ исключает файл (см. T43): секрет,
@@ -429,29 +539,119 @@ pub fn is_test_path_secrets(rel: &str) -> bool {
         || name.ends_with(".spec.js")
 }
 
+/// Заменить пустой строкой содержимое модулей под `#[cfg(test)]` (Rust).
+///
+/// Нумерация строк сохраняется, поэтому находки в остальном файле по-прежнему указывают
+/// верную строку. Границы модуля определяются балансом фигурных скобок начиная со строки
+/// с `mod`; строки внутри строковых литералов не разбираются, что для тестового модуля
+/// консервативно (лишняя строка будет погашена, но не наоборот).
+pub fn blank_rust_test_modules(lines: &mut [&str]) {
+    let mut i = 0usize;
+    while i < lines.len() {
+        if !lines[i].trim_start().starts_with("#[cfg(test)]") {
+            i += 1;
+            continue;
+        }
+        // Границу модуля определяем балансом фигурных скобок, считая ТОЛЬКО скобки кода.
+        // Скобки внутри строковых литералов и комментариев в подсчёт не идут: фикстуры
+        // тестов сплошь состоят из образцов чужого кода, и одиночная закрывающая скобка
+        // в строке вида "@app.get(\"/users/{id}\")" преждевременно закрывала бы модуль,
+        // оставляя его хвост в поле зрения детекторов.
+        let mut j = i;
+        let mut depth: i32 = 0;
+        let mut opened = false;
+        while j < lines.len() {
+            let (open, close) = count_code_braces(lines[j]);
+            if open > 0 {
+                opened = true;
+            }
+            depth += open as i32 - close as i32;
+            let end = opened && depth <= 0;
+            lines[j] = "";
+            j += 1;
+            if end {
+                break;
+            }
+        }
+        i = j;
+    }
+}
+
+/// Число открывающих и закрывающих фигурных скобок в строке кода Rust БЕЗ учёта скобок
+/// внутри строковых и символьных литералов и внутри однострочного комментария.
+/// Экранированные кавычки распознаются; сырые строки (`r"..."`) трактуются как обычные,
+/// чего достаточно для задачи определения границ модуля.
+fn count_code_braces(line: &str) -> (usize, usize) {
+    let (mut open, mut close) = (0usize, 0usize);
+    let mut in_str = false;
+    let mut in_char = false;
+    // Открытая сырая строка и число решёток в её ограничителе. Сырые строки существенны:
+    // фикстуры тестов сплошь состоят из них (`r#"{ "packages": … }"#`), и без учёта такой
+    // формы кавычка внутри данных сбивала бы разбор, а скобки данных считались бы кодом.
+    let mut raw_hashes: Option<usize> = None;
+    let mut escaped = false;
+    let chars: Vec<char> = line.chars().collect();
+    let mut k = 0usize;
+    while k < chars.len() {
+        let c = chars[k];
+
+        // Внутри сырой строки ищем только её ограничитель: `"` и ровно столько решёток.
+        if let Some(hashes) = raw_hashes {
+            if c == '"' && chars[k + 1..].iter().take(hashes).all(|h| *h == '#') {
+                raw_hashes = None;
+                k += 1 + hashes;
+                continue;
+            }
+            k += 1;
+            continue;
+        }
+
+        if escaped {
+            escaped = false;
+            k += 1;
+            continue;
+        }
+
+        // Начало сырой строки: `r`, затем решётки, затем кавычка.
+        if !in_str && !in_char && c == 'r' {
+            let mut h = 0usize;
+            while chars.get(k + 1 + h) == Some(&'#') {
+                h += 1;
+            }
+            if chars.get(k + 1 + h) == Some(&'"') {
+                raw_hashes = Some(h);
+                k += 2 + h;
+                continue;
+            }
+        }
+
+        match c {
+            '\\' if in_str || in_char => escaped = true,
+            '"' if !in_char => in_str = !in_str,
+            // Апостроф открывает символьный литерал, только если закрывается рядом
+            // (`'x'`, `'\n'`); иначе это метка времени жизни (`&'static str`), и принимать
+            // её за литерал нельзя: тогда остаток строки выпадал бы из подсчёта.
+            '\'' if !in_str && !in_char => {
+                let closes = chars[k + 1..].iter().take(3).any(|x| *x == '\'');
+                if closes {
+                    in_char = true;
+                }
+            }
+            '\'' if in_char => in_char = false,
+            '/' if !in_str && !in_char && chars.get(k + 1) == Some(&'/') => break,
+            '{' if !in_str && !in_char => open += 1,
+            '}' if !in_str && !in_char => close += 1,
+            _ => {}
+        }
+        k += 1;
+    }
+    (open, close)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    static CNT: AtomicU32 = AtomicU32::new(0);
-
-    /// Уникальная пустая временная папка для файловых фикстур обхода.
-    fn tmp() -> PathBuf {
-        let n = CNT.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("ailc-walk-{}-{}", std::process::id(), n));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn write(dir: &Path, rel: &str, content: &str) {
-        let p = dir.join(rel);
-        if let Some(parent) = p.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(p, content).unwrap();
-    }
+    use ailc_testkit::TempTree;
 
     /// Собрать относительные (от корня) пути всех переданных в обработчик файлов.
     fn collect(dir: &Path, mode: WalkMode) -> (Vec<String>, WalkStats) {
@@ -542,23 +742,74 @@ mod tests {
         assert!(!is_secret_dotfile(".eslintrc"));
     }
 
+    /// РЕГРЕССИЯ. Отказ доступа к каталогу обязан учитываться, а не возвращать успех молча.
+    /// Прежде и `read_dir`, и получение сведений о корне при отказе возвращали `Ok(())` без
+    /// увеличения любого счётчика: поддерево не сканировалось, обход сообщал «выполнено»,
+    /// кэш считал результат полным, а вердикт объявлял «чисто». То есть недоступный каталог
+    /// был неотличим от проверенного и чистого.
+    #[test]
+    fn отказ_доступа_к_каталогу_учитывается_а_не_глотается() {
+        // Несуществующий путь: сведения о корне недоступны. Он строится внутри временного
+        // дерева, поэтому заведомо уникален для параллельных прогонов, а само дерево
+        // убирается при разрушении объекта.
+        let t = TempTree::new("walk-нет-такого");
+        let missing = t.path().join("нет-такого-каталога");
+        let mut stats = WalkStats::default();
+        let mut seen = 0usize;
+        let r = walk_stats(&missing, &mut |_p| seen += 1, &mut stats);
+        assert!(r.is_ok(), "обход не роняет процесс на недоступном пути");
+        assert_eq!(seen, 0, "файлов не обработано");
+        assert_eq!(
+            stats.unreadable.len(),
+            1,
+            "отказ учтён поимённо: {:?}",
+            stats.unreadable
+        );
+        assert!(
+            stats.total() > 0,
+            "отказ входит в общий счёт непроверенного, иначе обход выглядит полным"
+        );
+        let note = stats.note();
+        assert!(
+            note.contains("НЕ ПРОЧИТАНО"),
+            "человек видит, что часть дерева не прочитана: {note}"
+        );
+    }
+
+    /// Обратная сторона: у полностью прочитанного дерева отказов нет и сводка о них молчит.
+    #[test]
+    fn при_полном_обходе_отказов_нет() {
+        let t = TempTree::new("walk");
+        t.write("src/main.rs", "fn main() {}");
+        let mut stats = WalkStats::default();
+        let mut seen = 0usize;
+        walk_stats(t.path(), &mut |_p| seen += 1, &mut stats).unwrap();
+        assert_eq!(seen, 1, "файл обработан");
+        assert!(
+            stats.unreadable.is_empty(),
+            "отказов нет: {:?}",
+            stats.unreadable
+        );
+        assert!(!stats.note().contains("НЕ ПРОЧИТАНО"));
+    }
+
     #[test]
     fn code_mode_skips_dotfiles_secrets_mode_reads_them() {
-        let dir = tmp();
-        write(&dir, "src/main.rs", "fn main() {}");
-        write(&dir, ".env", "AWS_SECRET=xxx");
-        write(&dir, ".aws/credentials", "key=zzz");
-        write(&dir, ".docker/config.json", "{}");
-        write(&dir, ".gitignore", "target");
+        let t = TempTree::new("walk");
+        t.write("src/main.rs", "fn main() {}");
+        t.write(".env", "AWS_SECRET=xxx");
+        t.write(".aws/credentials", "key=zzz");
+        t.write(".docker/config.json", "{}");
+        t.write(".gitignore", "target");
 
         // Режим кода: dotfiles целиком вне охвата.
-        let (code_seen, code_stats) = collect(&dir, WalkMode::Code);
+        let (code_seen, code_stats) = collect(t.path(), WalkMode::Code);
         assert!(code_seen.contains(&"src/main.rs".to_string()));
         assert!(!code_seen.iter().any(|p| p.contains(".env")));
         assert!(code_stats.hidden >= 1);
 
         // Режим секретов: .env, .aws/credentials, .docker/config.json попадают в обход.
-        let (sec_seen, _) = collect(&dir, WalkMode::Secrets);
+        let (sec_seen, _) = collect(t.path(), WalkMode::Secrets);
         assert!(sec_seen.contains(&".env".to_string()));
         assert!(sec_seen.contains(&".aws/credentials".to_string()));
         assert!(sec_seen.contains(&".docker/config.json".to_string()));
@@ -570,12 +821,12 @@ mod tests {
 
     #[test]
     fn oversized_file_skipped_and_recorded_by_name() {
-        let dir = tmp();
-        write(&dir, "small.rs", "fn a() {}");
+        let t = TempTree::new("walk");
+        t.write("small.rs", "fn a() {}");
         let big = "x".repeat((MAX_SCAN_BYTES as usize) + 10);
-        write(&dir, "huge.bundle.js", &big);
+        t.write("huge.bundle.js", &big);
 
-        let (seen, stats) = collect(&dir, WalkMode::Code);
+        let (seen, stats) = collect(t.path(), WalkMode::Code);
         assert!(seen.contains(&"small.rs".to_string()));
         assert!(!seen.iter().any(|p| p.contains("huge.bundle.js")));
         assert_eq!(stats.oversized(), 1);
@@ -593,17 +844,14 @@ mod tests {
     #[test]
     fn directory_symlink_is_not_followed() {
         use std::os::unix::fs::symlink;
-        let dir = tmp();
-        write(&dir, "real/secret.rs", "fn s() {}");
+        let t = TempTree::new("walk");
+        t.write("real/secret.rs", "fn s() {}");
         // Симлинк на каталог внутри корня: не должен раскрываться.
-        symlink(dir.join("real"), dir.join("link")).unwrap();
+        symlink(t.path().join("real"), t.path().join("link")).unwrap();
 
-        let (seen, stats) = collect(&dir, WalkMode::Code);
+        let (seen, stats) = collect(t.path(), WalkMode::Code);
         // Файл виден один раз — через реальный путь, не через симлинк.
-        assert_eq!(
-            seen.iter().filter(|p| p.ends_with("secret.rs")).count(),
-            1
-        );
+        assert_eq!(seen.iter().filter(|p| p.ends_with("secret.rs")).count(), 1);
         assert!(!seen.iter().any(|p| p.starts_with("link/")));
         assert!(stats.symlinks >= 1);
     }
@@ -612,13 +860,13 @@ mod tests {
     #[test]
     fn symlink_cycle_does_not_recurse_forever() {
         use std::os::unix::fs::symlink;
-        let dir = tmp();
-        write(&dir, "a/file.rs", "fn a() {}");
+        let t = TempTree::new("walk");
+        t.write("a/file.rs", "fn a() {}");
         // Цикл: a/loop ведёт обратно на каталог a.
-        symlink(dir.join("a"), dir.join("a/loop")).unwrap();
+        symlink(t.path().join("a"), t.path().join("a/loop")).unwrap();
 
         // Главное — обход завершается (нет бесконечной рекурсии). Симлинк не следуем.
-        let (seen, stats) = collect(&dir, WalkMode::Code);
+        let (seen, stats) = collect(t.path(), WalkMode::Code);
         assert!(seen.contains(&"a/file.rs".to_string()));
         assert!(stats.symlinks >= 1);
     }
@@ -627,11 +875,11 @@ mod tests {
     #[test]
     fn file_symlink_is_not_read() {
         use std::os::unix::fs::symlink;
-        let dir = tmp();
-        write(&dir, "real.rs", "fn r() {}");
-        symlink(dir.join("real.rs"), dir.join("alias.rs")).unwrap();
+        let t = TempTree::new("walk");
+        t.write("real.rs", "fn r() {}");
+        symlink(t.path().join("real.rs"), t.path().join("alias.rs")).unwrap();
 
-        let (seen, stats) = collect(&dir, WalkMode::Code);
+        let (seen, stats) = collect(t.path(), WalkMode::Code);
         assert!(seen.contains(&"real.rs".to_string()));
         assert!(!seen.contains(&"alias.rs".to_string()));
         assert!(stats.symlinks >= 1);
@@ -639,13 +887,17 @@ mod tests {
 
     #[test]
     fn single_file_entry_is_emitted() {
-        let dir = tmp();
-        write(&dir, "one.rs", "fn one() {}");
+        let t = TempTree::new("walk");
+        t.write("one.rs", "fn one() {}");
         let mut seen = Vec::new();
         let mut stats = WalkStats::default();
-        walk_stats(&dir.join("one.rs"), &mut |p| {
-            seen.push(p.to_string_lossy().into_owned());
-        }, &mut stats)
+        walk_stats(
+            &t.path().join("one.rs"),
+            &mut |p| {
+                seen.push(p.to_string_lossy().into_owned());
+            },
+            &mut stats,
+        )
         .unwrap();
         assert_eq!(seen.len(), 1);
         assert!(seen[0].ends_with("one.rs"));
@@ -653,14 +905,87 @@ mod tests {
 
     #[test]
     fn service_dirs_skipped() {
-        let dir = tmp();
-        write(&dir, "src/lib.rs", "fn l() {}");
-        write(&dir, "node_modules/pkg/index.js", "x");
-        write(&dir, "target/debug/app", "bin");
-        let (seen, stats) = collect(&dir, WalkMode::Code);
+        let t = TempTree::new("walk");
+        t.write("src/lib.rs", "fn l() {}");
+        t.write("node_modules/pkg/index.js", "x");
+        t.write("target/debug/app", "bin");
+        let (seen, stats) = collect(t.path(), WalkMode::Code);
         assert!(seen.contains(&"src/lib.rs".to_string()));
         assert!(!seen.iter().any(|p| p.starts_with("node_modules/")));
         assert!(!seen.iter().any(|p| p.starts_with("target/")));
         assert!(stats.service_dirs >= 2);
+    }
+    /// T-10: порядок обхода не зависит от порядка файловой системы, поэтому прогон
+    /// воспроизводим, а признаки паспорта не «плавают» от машины к машине.
+    #[test]
+    fn порядок_обхода_детерминирован() {
+        let t = TempTree::new("walk-order");
+        let dir = t.path();
+        for name in ["c.rs", "a.rs", "b.rs"] {
+            t.write(name, "fn main() {}");
+        }
+        t.write("sub/z.rs", "fn z() {}");
+
+        let collect = || {
+            let mut seen: Vec<String> = Vec::new();
+            let _ = walk(dir, &mut |p: &Path| {
+                seen.push(p.strip_prefix(dir).unwrap().to_string_lossy().to_string());
+            });
+            seen
+        };
+        let first = collect();
+        assert_eq!(first, collect(), "повторный обход даёт тот же порядок");
+        let mut sorted = first.clone();
+        sorted.sort();
+        assert_eq!(first, sorted, "обход идёт в лексикографическом порядке");
+    }
+    /// Сырые строки и метки времени жизни не сбивают подсчёт границ тестового модуля.
+    /// Это не теория: фикстуры тестов состоят из сырых строк с JSON, а сигнатуры содержат
+    /// `&'static str`, и без такого учёта хвост тестового модуля считался бы прод-кодом.
+    #[test]
+    fn подсчёт_скобок_учитывает_сырые_строки_и_время_жизни() {
+        assert_eq!(
+            count_code_braces(r##"let s = r#"{ "a": 1 }"#;"##),
+            (0, 0),
+            "скобки внутри сырой строки не считаются кодом"
+        );
+        assert_eq!(
+            count_code_braces("fn f<'a>(x: &'a str) -> Vec<&'static str> {"),
+            (1, 0)
+        );
+        assert_eq!(count_code_braces("let c = '}'; let d = '{';"), (0, 0));
+        assert_eq!(count_code_braces("if x { y() } // } в комментарии"), (1, 1));
+        assert_eq!(count_code_braces(r#"let s = "} { в строке"; {"#), (1, 0));
+    }
+
+    /// T-16: скобки внутри строковых литералов не закрывают тестовый модуль досрочно,
+    /// поэтому фикстуры из него не попадают в поверхность проекта и в схему C4.
+    #[test]
+    fn гашение_тестового_модуля_устойчиво_к_скобкам_в_строках() {
+        let src = concat!(
+            "fn prod() {}\n",
+            "#[cfg(test)]\n",
+            "mod tests {\n",
+            "    #[test]\n",
+            "    fn t() {\n",
+            "        let s = \"@app.get(\\\"/users/{id}\\\")\";\n",
+            "        let u = \"postgres://db.example.com:5432/app\";\n",
+            "    }\n",
+            "}\n",
+            "fn after() { let real = \"amqp://real-broker:5672\"; }\n",
+        );
+        let mut lines: Vec<&str> = src.lines().collect();
+        blank_rust_test_modules(&mut lines);
+        let kept = lines.join("\n");
+        assert!(
+            !kept.contains("db.example.com"),
+            "фикстура погашена: {kept}"
+        );
+        assert!(!kept.contains("/users/"), "фикстура погашена");
+        assert!(kept.contains("fn prod()"), "код до модуля сохранён");
+        assert!(
+            kept.contains("amqp://real-broker"),
+            "код ПОСЛЕ модуля сохранён, модуль не поглотил остаток файла: {kept}"
+        );
     }
 }

@@ -9,3 +9,8 @@ ailc-contracts = { path = "../ailc-contracts" }
 ailc-core = { path = "../ailc-core" }
 serde_json = "1"
 regex = "1"
+
+[dev-dependencies]
+# Оснастка тестов: временное рабочее дерево с гарантированной уборкой. Только для тестов,
+# в поставляемый бинарь не попадает.
+ailc-testkit = { path = "../ailc-testkit" }

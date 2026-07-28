@@ -94,6 +94,79 @@ pub fn prompt_injection_scan() -> ScanCapability {
                 ),
                 message: "Промпт-инъекция, недоверенный ввод накапливается в буфере промпта LLM при многошаговой сборке (OWASP LLM01, CWE-1427). Не склеивайте инструкции с пользовательскими данными: используйте отдельную роль/слот для данных, валидируйте и экранируйте ввод, применяйте guardrails.",
             },
+            // LLM06: чувствительные данные уходят в подсказку модели. Запрос к внешней
+            // модели покидает периметр организации, поэтому секрет или персональные
+            // данные в подсказке это разглашение, а не просто небрежность: они окажутся в
+            // журналах поставщика, а при согласии на обучение и в самой модели.
+            Rule {
+                id: "llm-sensitive-in-prompt",
+                severity: Severity::High,
+                exts: SOURCE_CODE,
+                matcher: Matcher::window_regex(
+                    r#"(?isx)
+                    (?: openai | anthropic | chat \. completions | client \. messages | \.generate \s* \(
+                      | llm \s* \( | completion \s* \( | prompt \s* = | messages \s* = )
+                    # Промежуток допускает фигурные скобки. Прежде они были запрещены, и это
+                    # закрывало ОСНОВНОЙ способ попадания секрета в подсказку на Python:
+                    # подстановку в f-строку (`f"ключ {api_key}"`), а заодно и словарь
+                    # сообщений (`messages=[{"role":…,"content": api_key}]`). Конкатенация и
+                    # форматирование через знак процента находились, интерполяция нет.
+                    # Точка с запятой по-прежнему запрещена: она отделяет соседний оператор,
+                    # и пропуск через неё сшивал бы несвязанные строки.
+                    #
+                    # Перевод строки запрещён ТОЖЕ, и это не осторожность, а измерение.
+                    # Когда промежуток пропускал перевод строки, правило сшивало соседние
+                    # поля структуры внутри окна в четыре строки и находило само себя на
+                    # определении правил секретов (`crates/ailc-capabilities/src/lib.rs`,
+                    # поле `kind` с шаблоном ключа и следующее за ним поле `message` со
+                    # словом «Anthropic»). Контрольный замер на трёх образцах показал, что
+                    # ни одной ВЕРНОЙ находки пропуск перевода строки не давал: подстановка
+                    # в f-строку целиком лежит на одной физической строке, а многострочный
+                    # словарь сообщений это правило не ловит по другой причине, из-за состава
+                    # списка чувствительных имён. Значит, разрешение переводить строку
+                    # приносило только ложные срабатывания.
+                    [^;\n]{0,200}?
+                    (?: api_?key | secret | password | passwd | token \b | private_?key
+                      | снилс | паспорт | passport_?number | ssn \b | credit_?card | card_?number )"#,
+                    4,
+                ),
+                message: "Чувствительные данные попадают в подсказку модели: запрос покидает периметр организации и оседает в журналах поставщика, а при согласии на обучение и в самой модели (OWASP LLM06 Sensitive Information Disclosure, CWE-200). Удаляй секреты и персональные данные из подсказки либо маскируй их до отправки.",
+            },
+            // LLM08: избыточные полномочия агента. Вывод модели напрямую превращается в
+            // действие с побочным эффектом: запись файла, сетевой запрос, изменение базы.
+            // Модель управляема подсказкой, поэтому такой путь означает, что действиями
+            // приложения управляет тот, кто эту подсказку составил.
+            Rule {
+                id: "llm-excessive-agency",
+                severity: Severity::High,
+                exts: SOURCE_CODE,
+                matcher: Matcher::window_regex(
+                    // Порядок «маркер, затем сток» и обратный «сток, затем маркер»
+                    // равноправны: результат модели встречается и слева от действия
+                    // (`out = resp.content; write(out)`), и справа (`write(resp.content)`).
+                    // Пробел между ними допускает перенос строки, иначе оконное правило
+                    // не связывало бы соседние строки, ради чего оно и существует.
+                    r#"(?isx)
+                    (?:
+                      (?: response | completion | answer | reply | result | message | content | output
+                        | model_output | llm_?out )
+                      [^;{}]{0,120}?
+                      (?: \. write_text \s* \( | \. writeFile \s* \( | fs \. write | open \s* \( [^)\n]{0,40} , \s* ["']w
+                        | requests \. (?: post | put | delete ) \s* \( | axios \. (?: post | put | delete ) \s* \(
+                        | \. execute \s* \( | \. query \s* \( | subprocess \. | os \.remove \s* \( | shutil \.rmtree \s* \( )
+                    |
+                      (?: \. write_text \s* \( | \. writeFile \s* \( | fs \. write | open \s* \( [^)\n]{0,40} , \s* ["']w
+                        | requests \. (?: post | put | delete ) \s* \( | axios \. (?: post | put | delete ) \s* \(
+                        | \. execute \s* \( | \. query \s* \( | subprocess \. | os \.remove \s* \( | shutil \.rmtree \s* \( )
+                      [^;{}]{0,120}?
+                      (?: response | completion | answer | reply | result | message | content | output
+                        | model_output | llm_?out )
+                    )"#,
+                    3,
+                )
+                .except(r#"(?i)(?:allow_?list|whitelist|approve|confirm|guardrail|валидац|проверк)"#),
+                message: "Вывод модели напрямую превращается в действие с побочным эффектом (запись файла, сетевой запрос, изменение базы, удаление): моделью управляет подсказка, поэтому действиями приложения управляет тот, кто эту подсказку составил (OWASP LLM08 Excessive Agency, CWE-250). Ограничь набор допустимых действий белым списком и требуй подтверждения для необратимых.",
+            },
         ],
     )
 }
@@ -245,7 +318,8 @@ impl Capability for LlmTaintCapability {
                 "{source_id}: не найдено файлов исходного кода для taint-анализа вывода LLM"
             ));
         }
-        out.metrics.push(("files_scanned".into(), files_scanned as f64));
+        out.metrics
+            .push(("files_scanned".into(), files_scanned as f64));
         out.metrics
             .push(("files_out_of_scope".into(), skips.total() as f64));
         out.metrics
@@ -284,7 +358,13 @@ fn analyze_file(content: &str, rel: &str, source_id: &str, out: &mut CapabilityO
     if content.len() as u64 > MAX_SCAN_BYTES {
         return;
     }
-    let lines: Vec<&str> = content.lines().collect();
+    let mut lines: Vec<&str> = content.lines().collect();
+    // Тест-код не является дефектом прод-кода: обход уже отсекает тестовые ПУТИ, но в
+    // Rust тесты живут внутри обычного файла, в модуле под атрибутом `#[cfg(test)]`.
+    // Их фикстуры содержат заведомо уязвимые фрагменты и раньше выдавались за реальные
+    // уязвимости прод-кода, блокируя вердикт (например, строки-образцы в
+    // `ai_security.rs`). Такие области гасятся до разбора.
+    ailc_core::engines::walk::blank_rust_test_modules(&mut lines);
     for region in function_regions(&lines) {
         analyze_region(&lines, region, rel, source_id, out);
     }
@@ -367,8 +447,20 @@ fn is_top_level_decl(raw: &str) -> bool {
     }
     let t = raw.trim_start();
     const DECL_PREFIXES: &[&str] = &[
-        "def ", "class ", "function ", "async def ", "fn ", "pub fn ", "func ", "public ",
-        "private ", "protected ", "module ", "defmodule ", "defp ", "defmacro ",
+        "def ",
+        "class ",
+        "function ",
+        "async def ",
+        "fn ",
+        "pub fn ",
+        "func ",
+        "public ",
+        "private ",
+        "protected ",
+        "module ",
+        "defmodule ",
+        "defp ",
+        "defmacro ",
     ];
     DECL_PREFIXES.iter().any(|p| t.starts_with(p))
 }
@@ -436,8 +528,8 @@ fn analyze_region(
     let mut seen_exec: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut seen_html: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
-    for idx in start..end {
-        let line = lines[idx];
+    for (idx, line) in lines.iter().enumerate().take(end).skip(start) {
+        let line = *line;
         if line.len() > MAX_TAINT_LINE_LEN {
             continue; // минифицированная строка вне охвата
         }
@@ -618,7 +710,10 @@ fn first_assign_eq(line: &str) -> Option<usize> {
             // именно объявление/чистое присваивание простой переменной). Двоеточие НЕ
             // исключаем: `:=` (Go) есть объявление с присваиванием, его двоеточие
             // снимается уже в assigned_var (срез завершающего `:` левой части).
-            let composite_prev = matches!(prev, b'=' | b'!' | b'<' | b'>' | b'+' | b'-' | b'*' | b'/' | b'%');
+            let composite_prev = matches!(
+                prev,
+                b'=' | b'!' | b'<' | b'>' | b'+' | b'-' | b'*' | b'/' | b'%'
+            );
             // next == b'>' это `=>` (стрелка лямбды/ветки), не присваивание.
             if next != b'=' && next != b'>' && prev != b'=' && !composite_prev {
                 return Some(i);
@@ -644,7 +739,10 @@ fn is_ident(s: &str) -> bool {
 /// переменной, доказательство-фрагмент). Стоки: eval, exec, Function-конструктор,
 /// vm.runInNewContext/runInContext/compileFunction, os.system, subprocess.run/call/Popen,
 /// child_process.exec/execSync.
-fn exec_sink_hit(line: &str, tainted: &std::collections::HashSet<String>) -> Option<(String, String)> {
+fn exec_sink_hit(
+    line: &str,
+    tainted: &std::collections::HashSet<String>,
+) -> Option<(String, String)> {
     if tainted.is_empty() {
         return None;
     }
@@ -675,7 +773,10 @@ fn exec_sink_hit(line: &str, tainted: &std::collections::HashSet<String>) -> Opt
 /// Сток рендера содержит заражённую переменную. Возвращает (имя переменной, фрагмент).
 /// Стоки: innerHTML=, outerHTML=, insertAdjacentHTML(, document.write/writeln(,
 /// dangerouslySetInnerHTML, v-html=, render_template_string(.
-fn html_sink_hit(line: &str, tainted: &std::collections::HashSet<String>) -> Option<(String, String)> {
+fn html_sink_hit(
+    line: &str,
+    tainted: &std::collections::HashSet<String>,
+) -> Option<(String, String)> {
     if tainted.is_empty() {
         return None;
     }
@@ -710,7 +811,10 @@ fn var_in_call_args(line: &str, tainted: &std::collections::HashSet<String>) -> 
 
 /// Найти заражённую переменную в произвольном фрагменте по границам слова (чтобы `out`
 /// не матчился внутри `layout`). Возвращает имя первой найденной заражённой переменной.
-fn tainted_var_present(fragment: &str, tainted: &std::collections::HashSet<String>) -> Option<String> {
+fn tainted_var_present(
+    fragment: &str,
+    tainted: &std::collections::HashSet<String>,
+) -> Option<String> {
     for var in tainted {
         if word_present(fragment, var) {
             return Some(var.clone());
@@ -786,22 +890,35 @@ mod tests {
         // правило слепо, taint обязан сработать.
         let src = "function handle() {\n  const code = await openai.chat.completions.create({});\n  eval(code);\n}\n";
         let out = run_taint(src, "h.js");
-        assert!(has_rule(&out, "taint-llm-output-exec"), "ожидалась находка exec-taint");
-        assert_eq!(line_of(&out, "taint-llm-output-exec"), Some(3), "строка стока eval");
+        assert!(
+            has_rule(&out, "taint-llm-output-exec"),
+            "ожидалась находка exec-taint"
+        );
+        assert_eq!(
+            line_of(&out, "taint-llm-output-exec"),
+            Some(3),
+            "строка стока eval"
+        );
     }
 
     #[test]
     fn taint_ловит_function_конструктор_над_выводом_llm() {
         let src = "function r() {\n  let out = anthropic.messages.create();\n  const f = new Function(out);\n}\n";
         let out = run_taint(src, "r.js");
-        assert!(has_rule(&out, "taint-llm-output-exec"), "Function-конструктор есть сток");
+        assert!(
+            has_rule(&out, "taint-llm-output-exec"),
+            "Function-конструктор есть сток"
+        );
     }
 
     #[test]
     fn taint_ловит_vm_runinnewcontext() {
         let src = "function r() {\n  let answer = llm(prompt);\n  vm.runInNewContext(answer);\n}\n";
         let out = run_taint(src, "r.js");
-        assert!(has_rule(&out, "taint-llm-output-exec"), "vm.runInNewContext есть сток");
+        assert!(
+            has_rule(&out, "taint-llm-output-exec"),
+            "vm.runInNewContext есть сток"
+        );
     }
 
     #[test]
@@ -809,16 +926,40 @@ mod tests {
         // Python: результат модели и subprocess строкой ниже, имя переменной произвольное.
         let src = "def run():\n    plan = client.messages.create(model='x')\n    subprocess.run(plan, shell=True)\n";
         let out = run_taint(src, "r.py");
-        assert!(has_rule(&out, "taint-llm-output-exec"), "subprocess.run есть сток");
+        assert!(
+            has_rule(&out, "taint-llm-output-exec"),
+            "subprocess.run есть сток"
+        );
     }
 
     // ── taint: рендер вывода LLM через переменную (LLM02 / CWE-79) ─────────
+
+    /// T-27: фикстуры внутри `#[cfg(test)]` не выдаются за уязвимости прод-кода.
+    #[test]
+    fn тестовый_модуль_rust_не_даёт_находок() {
+        let src = "fn prod() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {\n        let md = openai.chat.completions.create();\n        el.innerHTML = md;\n    }\n}\n";
+        let mut out = ailc_contracts::CapabilityOutput::default();
+        analyze_file(
+            src,
+            "src/x.rs",
+            "security.ai/insecure-output-taint",
+            &mut out,
+        );
+        assert!(
+            out.findings.is_empty(),
+            "фикстура тестового модуля не является дефектом прод-кода: {:?}",
+            out.findings
+        );
+    }
 
     #[test]
     fn taint_ловит_innerhtml_присваивание_переменной_с_выводом_llm() {
         let src = "function show() {\n  const md = await openai.chat.completions.create({});\n  el.innerHTML = md;\n}\n";
         let out = run_taint(src, "show.js");
-        assert!(has_rule(&out, "taint-llm-output-raw-html"), "innerHTML есть сток рендера");
+        assert!(
+            has_rule(&out, "taint-llm-output-raw-html"),
+            "innerHTML есть сток рендера"
+        );
         assert_eq!(line_of(&out, "taint-llm-output-raw-html"), Some(3));
     }
 
@@ -826,17 +967,26 @@ mod tests {
     fn taint_ловит_insertadjacenthtml_и_outerhtml() {
         let src = "function show() {\n  let txt = anthropic.messages.create();\n  node.insertAdjacentHTML('beforeend', txt);\n}\n";
         let out = run_taint(src, "show.js");
-        assert!(has_rule(&out, "taint-llm-output-raw-html"), "insertAdjacentHTML есть сток");
+        assert!(
+            has_rule(&out, "taint-llm-output-raw-html"),
+            "insertAdjacentHTML есть сток"
+        );
         let src2 = "function show() {\n  let txt = anthropic.messages.create();\n  node.outerHTML = txt;\n}\n";
         let out2 = run_taint(src2, "show2.js");
-        assert!(has_rule(&out2, "taint-llm-output-raw-html"), "outerHTML есть сток");
+        assert!(
+            has_rule(&out2, "taint-llm-output-raw-html"),
+            "outerHTML есть сток"
+        );
     }
 
     #[test]
     fn taint_ловит_document_write() {
         let src = "function show() {\n  const r = model.generate(p);\n  document.write(r);\n}\n";
         let out = run_taint(src, "show.js");
-        assert!(has_rule(&out, "taint-llm-output-raw-html"), "document.write есть сток");
+        assert!(
+            has_rule(&out, "taint-llm-output-raw-html"),
+            "document.write есть сток"
+        );
     }
 
     // ── распространение taint по алиасу ───────────────────────────────────
@@ -845,7 +995,10 @@ mod tests {
     fn taint_распространяется_по_простому_алиасу() {
         let src = "function r() {\n  const a = openai.chat.completions.create({});\n  const b = a;\n  eval(b);\n}\n";
         let out = run_taint(src, "r.js");
-        assert!(has_rule(&out, "taint-llm-output-exec"), "алиас должен переносить taint");
+        assert!(
+            has_rule(&out, "taint-llm-output-exec"),
+            "алиас должен переносить taint"
+        );
     }
 
     // ── изоляция областей функций ─────────────────────────────────────────
@@ -856,14 +1009,20 @@ mod tests {
         // не должен срабатывать (taint не пересекает границу области).
         let src = "function a() {\n  const out = openai.chat.completions.create({});\n}\nfunction b() {\n  eval(out);\n}\n";
         let out = run_taint(src, "x.js");
-        assert!(!has_rule(&out, "taint-llm-output-exec"), "taint не должен пересекать функции");
+        assert!(
+            !has_rule(&out, "taint-llm-output-exec"),
+            "taint не должен пересекать функции"
+        );
     }
 
     #[test]
     fn taint_не_перетекает_между_функциями_python() {
         let src = "def a():\n    out = openai.ChatCompletion.create()\n\ndef b():\n    eval(out)\n";
         let out = run_taint(src, "x.py");
-        assert!(!has_rule(&out, "taint-llm-output-exec"), "Python: разные def, разные области");
+        assert!(
+            !has_rule(&out, "taint-llm-output-exec"),
+            "Python: разные def, разные области"
+        );
     }
 
     // ── негатив: ложные срабатывания ──────────────────────────────────────
@@ -873,7 +1032,10 @@ mod tests {
         // Переменная не из LLM: eval над ней не должен помечаться taint-правилом LLM02.
         let src = "function r() {\n  const code = readFile('x.js');\n  eval(code);\n}\n";
         let out = run_taint(src, "r.js");
-        assert!(!has_rule(&out, "taint-llm-output-exec"), "источник не LLM, нет находки");
+        assert!(
+            !has_rule(&out, "taint-llm-output-exec"),
+            "источник не LLM, нет находки"
+        );
     }
 
     #[test]
@@ -881,7 +1043,10 @@ mod tests {
         // Заражена `out`; в стоке встречается `layout`, но не сама `out`, совпадения нет.
         let src = "function r() {\n  const out = openai.chat.completions.create({});\n  applyLayout(layout);\n}\n";
         let out = run_taint(src, "r.js");
-        assert!(!has_rule(&out, "taint-llm-output-exec"), "границы слова: layout не равно out");
+        assert!(
+            !has_rule(&out, "taint-llm-output-exec"),
+            "границы слова: layout не равно out"
+        );
     }
 
     #[test]
@@ -891,7 +1056,10 @@ mod tests {
         // консервативно по безопасности и согласуется с принципом «полнота охвата».
         let src = "function r() {\n  const md = openai.chat.completions.create({});\n  el.innerHTML = sanitize(md);\n}\n";
         let out = run_taint(src, "r.js");
-        assert!(has_rule(&out, "taint-llm-output-raw-html"), "вывод в innerHTML остаётся находкой");
+        assert!(
+            has_rule(&out, "taint-llm-output-raw-html"),
+            "вывод в innerHTML остаётся находкой"
+        );
     }
 
     #[test]
@@ -906,23 +1074,50 @@ mod tests {
     fn построчный_exec_ловит_function_и_vm() {
         // Проверяем матчер построчного exec-правила напрямую.
         let exec = exec_rule_matcher();
-        assert!(exec.is_match("new Function(response)"), "Function-конструктор с маркером");
-        assert!(exec.is_match("vm.runInNewContext(completion)"), "vm.runInNewContext с маркером");
-        assert!(exec.is_match("child_process.execSync(model_output)"), "execSync с маркером");
+        assert!(
+            exec.is_match("new Function(response)"),
+            "Function-конструктор с маркером"
+        );
+        assert!(
+            exec.is_match("vm.runInNewContext(completion)"),
+            "vm.runInNewContext с маркером"
+        );
+        assert!(
+            exec.is_match("child_process.execSync(model_output)"),
+            "execSync с маркером"
+        );
         // Негатив: нет маркера вывода, построчное правило молчит (это покрывает taint).
-        assert!(!exec.is_match("new Function(userCode)"), "без маркера вывода построчно не ловим");
+        assert!(
+            !exec.is_match("new Function(userCode)"),
+            "без маркера вывода построчно не ловим"
+        );
         // Негатив: обычное объявление функции с параметром response не есть исполнение
         // вывода (регистрозависимый токен Function защищает от этого).
-        assert!(!exec.is_match("function render(response) {"), "объявление функции не есть сток");
+        assert!(
+            !exec.is_match("function render(response) {"),
+            "объявление функции не есть сток"
+        );
     }
 
     #[test]
     fn построчный_html_ловит_outerhtml_insertadjacent_documentwrite() {
         let html = html_rule_matcher();
-        assert!(html.is_match("el.outerHTML = response"), "outerHTML с маркером");
-        assert!(html.is_match("node.insertAdjacentHTML('beforeend', completion)"), "insertAdjacentHTML");
-        assert!(html.is_match("document.write(message)"), "document.write с маркером");
-        assert!(!html.is_match("el.outerHTML = staticTemplate"), "без маркера вывода построчно не ловим");
+        assert!(
+            html.is_match("el.outerHTML = response"),
+            "outerHTML с маркером"
+        );
+        assert!(
+            html.is_match("node.insertAdjacentHTML('beforeend', completion)"),
+            "insertAdjacentHTML"
+        );
+        assert!(
+            html.is_match("document.write(message)"),
+            "document.write с маркером"
+        );
+        assert!(
+            !html.is_match("el.outerHTML = staticTemplate"),
+            "без маркера вывода построчно не ловим"
+        );
     }
 
     /// Достать матчер построчного exec-правила для прямой проверки.
@@ -954,7 +1149,10 @@ mod tests {
         let m = prompt_build_matcher();
         // Буфер на одной строке, недоверенное значение перенесено на следующую.
         let src = "system_prompt.push_str(\n    &user_message\n);\n";
-        assert!(m.is_match(src), "перенос аргумента не должен прятать инъекцию");
+        assert!(
+            m.is_match(src),
+            "перенос аргумента не должен прятать инъекцию"
+        );
     }
 
     #[test]
@@ -987,16 +1185,24 @@ mod tests {
         assert_eq!(assigned_var("const x = foo()").as_deref(), Some("x"));
         assert_eq!(assigned_var("let y: String = bar()").as_deref(), Some("y"));
         assert_eq!(assigned_var("z := baz()").as_deref(), Some("z"));
-        assert_eq!(assigned_var("plan = model.generate(p)").as_deref(), Some("plan"));
+        assert_eq!(
+            assigned_var("plan = model.generate(p)").as_deref(),
+            Some("plan")
+        );
         assert_eq!(assigned_var("self.out = llm(p)").as_deref(), Some("out"));
-        assert_eq!(assigned_var("p: str = openai.create()").as_deref(), Some("p"));
+        assert_eq!(
+            assigned_var("p: str = openai.create()").as_deref(),
+            Some("p")
+        );
         // Сравнение, а не присваивание: переменной нет.
         assert_eq!(assigned_var("if a == b {").as_deref(), None);
     }
 
     #[test]
     fn llm_call_marker_требует_присваивание_и_вызов() {
-        assert!(llm_call_marker("const x = openai.chat.completions.create({})"));
+        assert!(llm_call_marker(
+            "const x = openai.chat.completions.create({})"
+        ));
         assert!(llm_call_marker("y = client.messages.create()"));
         // Вызов есть, присваивания нет: переменную помечать не из чего.
         assert!(!llm_call_marker("openai.chat.completions.create({})"));
@@ -1023,7 +1229,14 @@ mod tests {
 
     #[test]
     fn function_regions_режет_по_фигурным_скобкам() {
-        let lines = vec!["function a() {", "  x();", "}", "function b() {", "  y();", "}"];
+        let lines = vec![
+            "function a() {",
+            "  x();",
+            "}",
+            "function b() {",
+            "  y();",
+            "}",
+        ];
         let regions = function_regions(&lines);
         assert_eq!(regions.len(), 2, "две функции, две области");
         assert_eq!(regions[0], (0, 3));
@@ -1041,7 +1254,10 @@ mod tests {
     fn strip_strings_не_считает_скобки_в_литералах() {
         // Фигурная скобка внутри строкового литерала не должна влиять на баланс.
         let s = strip_strings_and_comments("let s = \"text { with brace\";");
-        assert!(!s.contains('{'), "скобка из литерала должна быть вычищена: {s}");
+        assert!(
+            !s.contains('{'),
+            "скобка из литерала должна быть вычищена: {s}"
+        );
     }
 
     // ── T88: полнота классификации достоверности новых правил ──────────────

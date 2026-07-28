@@ -1,0 +1,69 @@
+name: Обновление базы уязвимостей
+
+# Встроенный снимок базы OSV обязан быть свежим, иначе результат проверки зависимостей
+# «уязвимых 0» ничего не значит. Рабочий процесс еженедельно пересобирает снимок из
+# официальных выгрузок OSV.dev и коммитит его в репозиторий, поэтому пользователю
+# достаточно обновить репозиторий и пересобрать бинарь.
+#
+# Запускается также вручную, кнопкой «Run workflow».
+
+on:
+  schedule:
+    # Каждый понедельник в 04:20 UTC: до начала рабочего дня и вне пикового времени
+    # выгрузок. Минуты намеренно не круглые, чтобы не совпадать с массовым расписанием.
+    - cron: '20 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: osv-update
+  cancel-in-progress: true
+
+jobs:
+  update:
+    name: Пересобрать снимок и закоммитить
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Пересборка снимка из выгрузок OSV.dev
+        run: python3 tools/update-osv.py
+
+      # Снимок обязан не только скачаться, но и быть пригодным: собираем и прогоняем
+      # тесты движка, среди которых проверка объёма и покрытия экосистем. Битый или
+      # усечённый снимок до репозитория не доедет.
+      - name: Инструментарий из rust-toolchain.toml
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Проверка снимка тестами движка
+        run: cargo test -p ailc-core --lib osv
+
+      - name: Сводка изменения
+        id: diff
+        run: |
+          if git diff --quiet -- crates/ailc-core/assets/osv/snapshot.tsv; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Снимок не изменился."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            was=$(git show HEAD:crates/ailc-core/assets/osv/snapshot.tsv | grep -c $'\t' || true)
+            now=$(grep -c $'\t' crates/ailc-core/assets/osv/snapshot.tsv || true)
+            echo "records_before=$was" >> "$GITHUB_OUTPUT"
+            echo "records_after=$now" >> "$GITHUB_OUTPUT"
+            echo "Записей было $was, стало $now."
+          fi
+
+      - name: Коммит обновлённого снимка
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name "Max Birkin"
+          git config user.email "maxbirkin@gmail.com"
+          git add crates/ailc-core/assets/osv/snapshot.tsv
+          git commit -m "chore(osv): обновление снимка базы уязвимостей (записей: ${{ steps.diff.outputs.records_after }}, было ${{ steps.diff.outputs.records_before }})"
+          git push

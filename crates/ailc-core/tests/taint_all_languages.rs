@@ -4,28 +4,20 @@
 //! обход пути. Цель: доказать, что глубокий потоковый анализ срабатывает одинаково на всех
 //! заявленных языках. Язык, который здесь падает, это реальный пробел покрытия.
 
-use ailc_contracts::{Ctx, RunInput};
+use ailc_contracts::RunInput;
 use ailc_core::engines::sast::scan_taint;
-use std::sync::atomic::{AtomicU32, Ordering};
-
-static CNT: AtomicU32 = AtomicU32::new(0);
-
-fn tmp(files: &[(&str, &str)]) -> Ctx {
-    let n = CNT.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!("ailc-taint-langs-{}-{}", std::process::id(), n));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    for (rel, content) in files {
-        std::fs::write(dir.join(rel), content).unwrap();
-    }
-    Ctx::new(dir)
-}
+use ailc_testkit::TempTree;
 
 /// Прогнать матрицу: каждый кейс (язык, файл, код) обязан дать taint-находку с правилом,
 /// содержащим `want`. Возвращает список языков-пропусков и печатает матрицу.
 fn run_matrix(klass: &str, want: &str, cases: &[(&str, &str, &str)]) {
-    let files: Vec<(&str, &str)> = cases.iter().map(|(_, f, code)| (*f, *code)).collect();
-    let ctx = tmp(&files);
+    // Дерево связывается переменной и живёт до конца проверки: свой каталог оно убирает при
+    // разрушении, поэтому во временном значении оно исчезло бы раньше запуска анализа.
+    let t = TempTree::new("taint-langs");
+    for (_, file, code) in cases {
+        t.write(file, code);
+    }
+    let ctx = t.ctx();
     let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
 
     eprintln!("\n=== {klass} ===");
@@ -39,7 +31,12 @@ fn run_matrix(klass: &str, want: &str, cases: &[(&str, &str, &str)]) {
             missing.push(*lang);
         }
     }
-    eprintln!("Покрытие {}: {}/{} языков", klass, cases.len() - missing.len(), cases.len());
+    eprintln!(
+        "Покрытие {}: {}/{} языков",
+        klass,
+        cases.len() - missing.len(),
+        cases.len()
+    );
     assert!(
         missing.is_empty(),
         "{klass}: taint не сработал для языков {missing:?} (пробел покрытия, требует доработки движка)"

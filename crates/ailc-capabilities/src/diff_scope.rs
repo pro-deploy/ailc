@@ -52,7 +52,10 @@ impl Capability for DiffScope {
         // Изменённые файлы — git diff vs HEAD (staged + unstaged).
         let res = Runner::run(ctx, "git", &["diff", "--name-only", "HEAD"]);
         if !res.ran {
-            out.skipped = Some(res.skipped_reason.unwrap_or_else(|| "git недоступен".into()));
+            out.skipped = Some(
+                res.skipped_reason
+                    .unwrap_or_else(|| "git недоступен".into()),
+            );
             out.summary = "code.intel/diff-scope: пропущено (нет git)".into();
             return Ok(out);
         }
@@ -69,7 +72,8 @@ impl Capability for DiffScope {
             .collect();
         if changed.is_empty() {
             out.summary = "code.intel/diff-scope: изменений относительно HEAD нет".into();
-            out.records.push("рабочее дерево чисто — радиус влияния пуст".into());
+            out.records
+                .push("рабочее дерево чисто — радиус влияния пуст".into());
             return Ok(out);
         }
 
@@ -85,7 +89,10 @@ impl Capability for DiffScope {
         let cg = CodeIntelEngine::call_graph(ctx, input)?;
         let mut callers: HashMap<&str, Vec<&str>> = HashMap::new();
         for (caller, callee) in &cg.edges {
-            callers.entry(callee.as_str()).or_default().push(caller.as_str());
+            callers
+                .entry(callee.as_str())
+                .or_default()
+                .push(caller.as_str());
         }
 
         // Транзитивно: кого затрагивает изменение эпицентра.
@@ -105,23 +112,34 @@ impl Capability for DiffScope {
             affected.remove(e);
         }
 
-        out.metrics.push(("changed_files".into(), changed.len() as f64));
-        out.metrics.push(("epicenter".into(), epicenter.len() as f64));
+        out.metrics
+            .push(("changed_files".into(), changed.len() as f64));
+        out.metrics
+            .push(("epicenter".into(), epicenter.len() as f64));
         out.metrics.push(("affected".into(), affected.len() as f64));
 
         let mut files: Vec<&String> = changed.iter().collect();
         files.sort();
-        out.records.push(format!("изменено файлов: {}", changed.len()));
+        out.records
+            .push(format!("изменено файлов: {}", changed.len()));
         for f in files.iter().take(20) {
             out.records.push(format!("  ~ {f}"));
         }
         if !epicenter.is_empty() {
             out.records.push(format!(
                 "правленые функции: {}",
-                epicenter.iter().take(15).cloned().collect::<Vec<_>>().join(", ")
+                epicenter
+                    .iter()
+                    .take(15)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
-        out.records.push(format!("затронуто (зовут изменённое) функций: {}", affected.len()));
+        out.records.push(format!(
+            "затронуто (зовут изменённое) функций: {}",
+            affected.len()
+        ));
         for a in affected.iter().take(25) {
             out.records.push(format!("  → {a}()"));
         }

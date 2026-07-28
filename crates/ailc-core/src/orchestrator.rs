@@ -11,7 +11,7 @@
 //! Маршрутизация по ключевым словам УДАЛЕНА: ЧТО запускать под намерение решает
 //! нейросеть IDE (`crate::agent`), а не хардкод. Гарантию по-прежнему даёт гейт.
 
-use crate::engines::gate::GateRunner;
+use crate::engines::gate::{GateRunner, SECURITY_FLOOR_IDS, SECURITY_FLOOR_TIMEOUT};
 use crate::pipeline::{Pipeline, PipelineEngine, Step, StepResult};
 use crate::policy;
 use crate::registry::Registry;
@@ -19,23 +19,14 @@ use ailc_contracts::{
     CapabilityOutput, CheckOutcome, Ctx, Family, Finding, GateReport, PolicyPack, QualityLedger,
     RunInput, Severity, Tier,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
 
-/// Бюджет времени на один тяжёлый шаг детерминированного пола безопасности (глубокий
-/// SAST/taint). Эти проверки помечены `Tier::Enterprise` и в обычный авто-гейт не
-/// попадают (см. `GateRunner::run`), но DoD обязан включать их в детерминированный пол
-/// (см. T36), поэтому исполняем их здесь с защитой по таймауту, согласованно с
-/// пайплайном (`pipeline::STEP_TIMEOUT`), чтобы зависший разбор не блокировал вердикт.
-const SECURITY_FLOOR_TIMEOUT: Duration = Duration::from_secs(180);
-
-/// Идентификаторы capability глубокого анализа безопасности (`Tier::Enterprise`),
-/// которые обычный авто-гейт отсекает по тиру, а DoD обязан включать в
-/// детерминированный пол безопасности (см. T36). Карта достоверности
-/// (`ailc_contracts::rule_confidence`) относит их находки к `Precise` (высокая
-/// уверенность), поэтому пропуск именно этих проверок особенно опасен для вердикта.
-const SECURITY_FLOOR_CAPS: &[&str] = &["security.scan/sast", "security.scan/taint"];
+// Бюджет времени и состав детерминированного пола безопасности (глубокий SAST/taint)
+// определены в ОДНОМ месте, в `engines::gate` (`SECURITY_FLOOR_IDS` и
+// `SECURITY_FLOOR_TIMEOUT`), и импортируются сюда. Прежде здесь жили копии с другим
+// таймаутом (180 против 120 секунд в гейте), и один и тот же анализатор получал разный
+// бюджет в зависимости от пути вызова.
 
 /// Доступ к LLM (модель клиента через MCP sampling). Реализуется транспортом
 /// (бинарём), ядро от транспорта не зависит. Используется агентом и автофиксом.
@@ -48,10 +39,14 @@ pub trait Sampler {
 
 /// Свёртка результатов шагов пайплайна: находки (до verify), что выполнено, что
 /// пропущено (с причиной), артефакты генераторов и сводка-карта кода.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CollectedRun {
     pub findings: Vec<Finding>,
     pub checks_run: Vec<String>,
     pub checks_skipped: Vec<(String, String)>,
+    /// Сбои инструмента (шаг не смог выполниться: ошибка, паника, таймаут). Отдельно от
+    /// осознанных пропусков, потому что различие меняет вердикт (см. `GateReport`).
+    pub tools_failed: Vec<(String, String)>,
     pub artifacts: Vec<String>,
     pub map_summary: String,
 }
@@ -59,13 +54,7 @@ pub(crate) struct CollectedRun {
 /// Свернуть результаты шагов в `CollectedRun`. Инвариант «нет молчаливых пропусков»:
 /// ошибка/skip → причина; генератор-артефакт без находок проверкой НЕ считается.
 pub(crate) fn collect_results(results: Vec<StepResult>) -> CollectedRun {
-    let mut c = CollectedRun {
-        findings: Vec::new(),
-        checks_run: Vec::new(),
-        checks_skipped: Vec::new(),
-        artifacts: Vec::new(),
-        map_summary: String::new(),
-    };
+    let mut c = CollectedRun::default();
     for r in results {
         let cap = r.capability;
         let out = r.output;
@@ -80,7 +69,12 @@ pub(crate) fn collect_results(results: Vec<StepResult>) -> CollectedRun {
         c.artifacts.extend(out.artifacts);
 
         if let Some(e) = r.error {
-            c.checks_skipped.push((cap, format!("ошибка: {e}")));
+            // Шаг не выполнился (ошибка capability, паника, превышение лимита времени). Это
+            // СБОЙ ИНСТРУМЕНТА, а не осознанный пропуск: результата нет, и вердикт «чисто»
+            // на таком шаге неправомерен. Пишем в оба списка: в первый для перечня
+            // непройденного человеку, во второй для вычисления вердикта.
+            c.checks_skipped.push((cap.clone(), format!("ошибка: {e}")));
+            c.tools_failed.push((cap, e));
         } else if let Some(reason) = out.skipped {
             c.checks_skipped.push((cap, reason));
         } else if produced_artifact && out.findings.is_empty() {
@@ -99,6 +93,8 @@ pub(crate) struct LedgerInput {
     pub confirmed: Vec<Finding>,
     pub checks_run: Vec<String>,
     pub checks_skipped: Vec<(String, String)>,
+    /// Сбои инструмента: снимают вердикт, в отличие от осознанных пропусков.
+    pub tools_failed: Vec<(String, String)>,
     pub artifacts: Vec<String>,
     pub refuted: usize,
     /// «Сдача» (строгий режим): недоделанное/дрейф доков БЛОКИРУЮТ, а не предупреждают.
@@ -136,11 +132,22 @@ pub(crate) fn finalize_ledger(
         100.0 * inp.checks_run.len() as f64 / attempted as f64
     };
 
+    // Базовая линия долга применяется ЗДЕСЬ, то есть в единственном месте сборки вердикта,
+    // а не только в пути Definition of Done. Прежде адаптивный прогон `plan` её не учитывал,
+    // и один и тот же набор находок давал два разных ответа: `dod` сообщал, что сдавать
+    // можно, а `plan` в тот же момент насчитывал блокеры. Для продукта, ценность которого
+    // состоит в детерминированном вердикте, такое расхождение подрывает доверие сильнее
+    // любого отдельного правила. Уязвимости в долг не уходят никогда (см. `baseline`).
+    let base = crate::baseline::load(ctx);
+    let (confirmed, debt) = crate::baseline::split(&base, inp.confirmed);
+    ledger.debt = debt.len();
+
     // Гейт: классификация подтверждённых находок по политике (порог из governance).
     let mut report = GateRunner::classify(
-        inp.confirmed,
+        confirmed,
         inp.checks_run,
         inp.checks_skipped,
+        inp.tools_failed,
         &pack.gate,
         &pack.thresholds,
     );
@@ -244,14 +251,23 @@ pub(crate) fn headline(l: &QualityLedger) -> String {
             };
         }
         if ru {
-            format!("✅ Готово к сдаче. Качество {:.0}/100, прошло {} проверок, блокеров нет.{tests}", l.score, l.checks_run)
+            format!(
+                "✅ Готово к сдаче. Качество {:.0}/100, прошло {} проверок, блокеров нет.{tests}",
+                l.score, l.checks_run
+            )
         } else {
-            format!("✅ Ready to ship. Quality {:.0}/100, {} checks passed, no blockers.{tests}", l.score, l.checks_run)
+            format!(
+                "✅ Ready to ship. Quality {:.0}/100, {} checks passed, no blockers.{tests}",
+                l.score, l.checks_run
+            )
         }
     } else if ru {
         format!("❌ Пока отдавать нельзя. Качество {:.0}/100, {} блокер(ов) требуют твоего решения.{tests}", l.score, l.blocking)
     } else {
-        format!("❌ Not ready to ship. Quality {:.0}/100, {} blocker(s) need your decision.{tests}", l.score, l.blocking)
+        format!(
+            "❌ Not ready to ship. Quality {:.0}/100, {} blocker(s) need your decision.{tests}",
+            l.score, l.blocking
+        )
     }
 }
 
@@ -283,8 +299,9 @@ impl Orchestrator {
             name: "deterministic".into(),
             steps: ids.iter().map(|id| Step::of(id)).collect(),
         };
-        let results = PipelineEngine::execute(reg, ctx, input, &pipeline);
-        let collected = collect_results(results);
+        let collected = Self::cached_run(ctx, input, &ids, || {
+            collect_results(PipelineEngine::execute(reg, ctx, input, &pipeline))
+        });
         let (confirmed, refuted) = crate::verify::Verifier::verify(ctx, collected.findings);
         finalize_ledger(
             ctx,
@@ -296,12 +313,43 @@ impl Orchestrator {
                 confirmed,
                 checks_run: collected.checks_run,
                 checks_skipped: collected.checks_skipped,
+                tools_failed: collected.tools_failed,
                 artifacts: collected.artifacts,
                 refuted: refuted.len(),
                 strict,
                 rounds: Vec::new(),
             },
         )
+    }
+
+    /// Прогон набора проверок с кэшем по отпечатку дерева.
+    ///
+    /// Кэшируется только СТАТИЧЕСКАЯ часть: набор идентификаторов входит в ключ, а
+    /// проверки семейства verify (тесты, линт, покрытие) в гейтовый прогон не попадают и
+    /// выполняются отдельно, поэтому закэшировать «зелёные тесты» невозможно по устройству.
+    /// При любом расхождении отпечатка выполняется полный прогон.
+    fn cached_run(
+        ctx: &Ctx,
+        input: &RunInput,
+        ids: &[String],
+        run: impl FnOnce() -> CollectedRun,
+    ) -> CollectedRun {
+        let key = input
+            .target
+            .is_none()
+            .then(|| crate::cache::fingerprint(ctx))
+            .flatten()
+            .map(|f| format!("{f}|{}", ids.join(",")));
+        if let Some(k) = &key {
+            if let Some(hit) = crate::cache::load_run(ctx, k) {
+                return hit;
+            }
+        }
+        let fresh = run();
+        if let Some(k) = &key {
+            let _ = crate::cache::save_run(ctx, k, &fresh);
+        }
+        fresh
     }
 
     /// Прогон ЗАЯВЛЕННОГО плана (инверсия адаптивной петли для клиентов без sampling):
@@ -349,6 +397,7 @@ impl Orchestrator {
                 confirmed,
                 checks_run: collected.checks_run,
                 checks_skipped: collected.checks_skipped,
+                tools_failed: collected.tools_failed,
                 artifacts: collected.artifacts,
                 refuted: refuted.len(),
                 strict,
@@ -365,11 +414,25 @@ impl Orchestrator {
 
 /// Результат сплошного статического скана: подтверждённые находки (ложные отсеяны),
 /// сколько опровергнуто Verifier'ом, и какие проверки выполнены/пропущены.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct ScanReport {
     pub findings: Vec<Finding>,
+    /// Сколько находок ОПРОВЕРГНУТО как ложные (комментарий, плейсхолдер, определение
+    /// шаблона поиска). Это вывод инструмента о ложности находки.
     pub refuted: usize,
+    /// Сколько находок ПОДАВЛЕНО решением человека (маркер `ailc:ignore`). Считается
+    /// отдельно от `refuted` намеренно: подавление это сокрытие НАСТОЯЩЕЙ находки, и
+    /// складывать его в счётчик «ложные срабатывания, опровергнутые верификатором» значит
+    /// выдавать одно за другое. Читатель отчёта обязан видеть, что часть находок не
+    /// исчезла, а была скрыта, и в каком объёме.
+    pub suppressed: usize,
     pub checks_run: Vec<String>,
     pub checks_skipped: Vec<(String, String)>,
+    /// Служебные заметки о прогоне (например, «результат взят из кэша»). Отдельное поле,
+    /// а не элемент `checks_run`: тот является чистым списком идентификаторов capability,
+    /// и потребители (SARIF, счётчики) не обязаны фильтровать из него прозу.
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 impl Orchestrator {
@@ -378,11 +441,47 @@ impl Orchestrator {
     /// Verifier'ом и возвращает только подтверждённые. Без intent-роутинга —
     /// исчерпывающее покрытие для отчётов (SARIF) и CI.
     pub fn scan_all(reg: &Registry, ctx: &Ctx, input: &RunInput) -> ScanReport {
+        // Инкрементальность: если дерево, политика и версия бинаря не изменились с
+        // прошлого прогона, результат берётся из кэша. Кэш применяется только при
+        // ПОЛНОМ совпадении отпечатка, поэтому ускоряет повторный вызов и не способен
+        // подменить вердикт (см. модуль `cache`). Прогон по подпути не кэшируется:
+        // отпечаток снимается со всего дерева и для частичного скана несопоставим.
+        let cache_key = input
+            .target
+            .is_none()
+            .then(|| crate::cache::fingerprint(ctx))
+            .flatten();
+        if let Some(key) = &cache_key {
+            // Восстанавливается ОТЧЁТ ЦЕЛИКОМ, включая реальный состав выполненных проверок,
+            // пропуски, число опровергнутых и подавленных. Прежде здесь достраивались
+            // константы («выполнена одна проверка кэш прогона», «пропусков нет»), из-за чего
+            // отчёт SARIF в системе сборки утверждал отсутствие пропусков, стирая пропуски
+            // того прогона, результат которого и переиспользуется.
+            if let Some(mut report) = crate::cache::load::<ScanReport>(ctx, key) {
+                // Пометка о переиспользовании идёт в СЛУЖЕБНЫЕ ЗАМЕТКИ, а не в `checks_run`:
+                // тот остаётся чистым списком идентификаторов выполненных проверок, и
+                // счётчики/SARIF не получают в нём элемент-прозу. Человек при этом видит и
+                // то, что прогон взят из кэша, и его реальный состав.
+                report
+                    .notes
+                    .push("результат взят из кэша: дерево не изменилось".to_string());
+                return report;
+            }
+        }
+
+        // СЕМЕЙСТВО `Verify` ВКЛЮЧЕНО В ОХВАТ. Его отсутствие было дырой в отчёте: проверки
+        // `verify/desktop` и `verify/mobile` эмитят находки важности Critical (оболочка
+        // Electron с включённой интеграцией Node, разрешённый незашифрованный трафик), а
+        // `verify/api-break` сообщает о сломанном публичном контракте, и ничего из этого не
+        // попадало в отчёт SARIF для системы сборки. Мутирующие capability по-прежнему
+        // исключены проверкой `m.mutates` ниже, поэтому сплошной скан остаётся безопасным
+        // для рабочего дерева и ничего в нём не меняет.
         let families = [
             Family::Security,
             Family::Quality,
             Family::Compliance,
             Family::Spec,
+            Family::Verify,
         ];
         let mut findings = Vec::new();
         let mut checks_run = Vec::new();
@@ -391,18 +490,27 @@ impl Orchestrator {
             let m = cap.manifest();
             // Защитный минимум (sast/taint) включается ПО ИДЕНТИФИКАТОРУ, даже будучи
             // Tier::Enterprise: иначе полный скан и SARIF недосчитывают потоковые
-            // уязвимости, которые гейт и dod уже учитывают (см. SECURITY_FLOOR_CAPS).
-            let is_floor = SECURITY_FLOOR_CAPS.contains(&m.id);
+            // уязвимости, которые гейт и dod уже учитывают (см. SECURITY_FLOOR_IDS).
+            let is_floor = SECURITY_FLOOR_IDS.contains(&m.id);
             if m.mutates || (m.tier != Tier::Core && !is_floor) || !families.contains(&m.family) {
                 continue;
             }
             match cap.run(ctx, input) {
                 Ok(out) => {
-                    if let Some(reason) = out.skipped {
-                        checks_skipped.push((m.id.to_string(), reason));
-                    } else {
-                        checks_run.push(m.id.to_string());
+                    // НАХОДКИ ЗАБИРАЮТСЯ ВСЕГДА, даже когда capability одновременно сообщила
+                    // о пропуске. Прежде ветки были взаимоисключающими, и признак пропуска
+                    // отбрасывал ВСЕ находки этой capability. Так теряются реальные данные:
+                    // проверка настольных оболочек и мобильной конфигурации выставляют
+                    // признак пропуска при отказе движка на ОДНОЙ из своих осей, уже собрав
+                    // находки по остальным. Пропуск и находки не исключают друг друга:
+                    // первое говорит о неполноте охвата, второе о том, что успели найти.
+                    let skipped = out.skipped;
+                    if !out.findings.is_empty() {
                         findings.extend(out.findings);
+                    }
+                    match skipped {
+                        Some(reason) => checks_skipped.push((m.id.to_string(), reason)),
+                        None => checks_run.push(m.id.to_string()),
                     }
                 }
                 Err(e) => checks_skipped.push((m.id.to_string(), format!("ошибка: {e}"))),
@@ -414,12 +522,26 @@ impl Orchestrator {
         // разных capability (ssrf-internal-host/ssti/cors-* определены и в owasp, и в
         // web_security), это ОДНА находка. Системно убирает двойной счёт без потери данных.
         let confirmed = Self::dedup_findings(confirmed);
-        ScanReport {
+        // Подавленное решением человека отделяем от опровергнутого как ложного: см.
+        // документацию полей `refuted` и `suppressed` у `ScanReport`.
+        let suppressed = refuted
+            .iter()
+            .filter(|(_, r)| crate::verify::is_inline_suppression(r))
+            .count();
+        let report = ScanReport {
             findings: confirmed,
-            refuted: refuted.len(),
+            refuted: refuted.len() - suppressed,
+            suppressed,
             checks_run,
             checks_skipped,
+            notes: Vec::new(),
+        };
+        // Запись кэша: сбой (нет прав, том только для чтения) намеренно игнорируется —
+        // кэш является ускорением, и его недоступность не должна мешать проверке.
+        if let Some(key) = &cache_key {
+            let _ = crate::cache::save(ctx, key, &report);
         }
+        report
     }
 
     /// Дедупликация находок по (правило, файл, строка). Находки без локации сохраняются все
@@ -491,6 +613,15 @@ pub struct DodReport {
     pub debt: usize,
     /// Базовая линия зафиксирована (перемирие с легаси действует).
     pub baseline_frozen: bool,
+    /// Заметка о загруженной политике: какая политика применена и, что важнее, чем она
+    /// подозрительна (не разобралась, не прошла проверку контрольной суммы, ослаблена
+    /// относительно организационного дефолта).
+    ///
+    /// Поле существует потому, что прежде заметка выбрасывалась ИМЕННО на путях вердикта
+    /// (`let (pack, _note) = ...` в `dod` и в гейте), то есть ровно там, где её обязан
+    /// увидеть человек и система сборки. В результате подменённая или ослабленная политика
+    /// применялась молча, и вердикт выглядел обычным.
+    pub policy_note: Option<String>,
 }
 
 impl Orchestrator {
@@ -504,7 +635,7 @@ impl Orchestrator {
     /// нулевой). Третье состояние не даёт пустому/несорсовому репозиторию или
     /// прогону без тулчейна выдать ложно-зелёный вердикт.
     pub fn dod(reg: &Registry, ctx: &Ctx, input: &RunInput) -> DodReport {
-        let (pack, _note) = policy::load(&ctx.root);
+        let (pack, policy_note) = policy::load(&ctx.root);
         // Паспорт проекта: от него зависит, какие профильные оси считать жёсткими
         // (доступность у UI-проекта, комплаенс у проекта с признаками РФ и ПДн,
         // безопасность ИИ у проекта с LLM). Дёшев, вычисляется на каждый прогон.
@@ -539,7 +670,19 @@ impl Orchestrator {
         // обычный GateRunner::run эскалацию не вызывает. Без этого hard-ось доков
         // никогда не валит вердикт (см. T86). Поэтому переносим такие находки в
         // блокеры до агрегации осей.
-        let mut report = GateRunner::run(reg, ctx, input, &policy);
+        //
+        // Оси пола безопасности (secret/sast/taint) из гейтового прогона ИСКЛЮЧЕНЫ явно:
+        // ниже они исполняются напрямую (`run_axis_direct`), и без исключения тот же
+        // тяжёлый анализ гонялся бы дважды за один вердикт. Verify-оси исключать не нужно:
+        // семейство Verify уже убрано из families выше. Дедупликация не страдает: находки
+        // исключённых источников подмешивает прямой прогон, а фильтр по `direct_caps` в
+        // цикле агрегации остаётся страховкой.
+        const DIRECT_SECURITY_CAPS: &[&str] = &[
+            "security.scan/secret",
+            "security.scan/sast",
+            "security.scan/taint",
+        ];
+        let mut report = GateRunner::run_excluding(reg, ctx, input, &policy, DIRECT_SECURITY_CAPS);
         GateRunner::escalate_unfinished(&mut report);
 
         // Оси, исход которых считаем НАПРЯМУЮ из выхода capability, а не из агрегата
@@ -564,20 +707,39 @@ impl Orchestrator {
         // `Finding::is_signal`/`Finding::confidence`; локальных списков правил здесь
         // НЕТ (см. T88). После эскалации в blocking/warning попадают и доковые правила.
         let mut by_src: HashMap<&str, (usize, usize)> = HashMap::new();
-        for f in report.blocking.iter().chain(report.warning.iter()) {
+        // Отдельно учитываем ТОЛЬКО блокирующие находки. Это нужно оси-страховке ниже:
+        // она обязана поймать блокеры, не покрытые ни одной именованной осью, и при этом
+        // не имеет права валить вердикт из-за предупреждений, которые по определению не
+        // блокируют. Именованные оси продолжают считать по `by_src` (всего и HIGH+), их
+        // поведение не меняется.
+        let mut blocking_by_src: HashMap<&str, (usize, usize)> = HashMap::new();
+        for (f, blocks) in report
+            .blocking
+            .iter()
+            .map(|f| (f, true))
+            .chain(report.warning.iter().map(|f| (f, false)))
+        {
             if direct_caps.contains(&f.source.as_str()) {
                 continue; // прямой прогон считает их сам
             }
             // Замороженный долг не блокирует: находка из базовой линии уходит в метрику
             // долга (verify-источники сюда не попадают: семейство исключено из гейта).
-            if base.contains(&crate::baseline::fingerprint(f)) {
+            if crate::baseline::is_debt(&base, f) {
                 debt += 1;
                 continue;
             }
+            let high = f.severity >= Severity::High;
             let e = by_src.entry(f.source.as_str()).or_default();
             e.0 += 1;
-            if f.severity >= Severity::High {
+            if high {
                 e.1 += 1;
+            }
+            if blocks {
+                let b = blocking_by_src.entry(f.source.as_str()).or_default();
+                b.0 += 1;
+                if high {
+                    b.1 += 1;
+                }
             }
         }
 
@@ -597,7 +759,7 @@ impl Orchestrator {
             "verify/coverage",
             "verify/api-break",
         ] {
-            let heavy = SECURITY_FLOOR_CAPS.contains(&id);
+            let heavy = SECURITY_FLOOR_IDS.contains(&id);
             // Долг применим только к статическим сканерам; verify-оси (тесты, линт,
             // покрытие, контракт API) обязаны проходить всегда, их долг не спасает.
             let base_for_axis = if id.starts_with("verify/") {
@@ -741,10 +903,27 @@ impl Orchestrator {
         });
 
         // Профильная ось «Доступность UI» — сумма по quality.ui/*; появляется только у
-        // проекта с интерфейсом и сразу жёсткая. Блокируют находки уровня HIGH и выше
-        // (как у OWASP-оси): советы по улучшению видны, но сдачу не валят.
+        // проекта с интерфейсом.
+        //
+        // ОСЬ МЯГКАЯ, И ЭТО ИСПРАВЛЕНИЕ ПРЕЖНЕГО ПРОТИВОРЕЧИЯ. Она была объявлена жёсткой,
+        // печаталась в вердикте с пометкой «hard», но провалиться не могла НИ ПРИ КАКОМ
+        // наборе находок: условие провала требует важности High и выше, а среди тринадцати
+        // правил `quality.ui/*` нет ни одного такого (девять Medium и четыре Low), и поднять
+        // важность нечему, поскольку эскалация недоделанного работает только по трём
+        // источникам, куда `quality.ui/*` не входит. Итог был хуже безвредного мёртвого кода:
+        // человек видел строку с отметкой «✓ [hard]» и ненулевым числом замечаний рядом, то
+        // есть создавалась видимость работающей защиты.
+        //
+        // Из двух способов устранить противоречие (сделать ось мягкой либо опустить порог до
+        // Medium) выбран первый, потому что он соответствует уже написанному замыслу «советы
+        // по улучшению видны, но сдачу не валят» и не ломает сборку ни одному действующему
+        // пользователю с интерфейсом. Порог High сохранён: если когда-нибудь появится правило
+        // доступности такой важности, решение о жёсткости нужно принять заново и осознанно.
         if prof.has_ui {
-            let ui_ran = report.checks_run.iter().any(|x| x.starts_with("quality.ui/"));
+            let ui_ran = report
+                .checks_run
+                .iter()
+                .any(|x| x.starts_with("quality.ui/"));
             let (mut u_cnt, mut u_high) = (0usize, 0usize);
             for (src, (cnt, high)) in &by_src {
                 if src.starts_with("quality.ui/") {
@@ -752,15 +931,12 @@ impl Orchestrator {
                     u_high += high;
                 }
             }
-            if ui_ran && u_high > 0 {
-                hard_failed = true;
-            }
-            if !ui_ran {
-                hard_not_run.push("Доступность UI");
-            }
+            // Мягкая ось вердикт не валит и в перечень невыполненных жёстких осей не идёт:
+            // иначе проект с интерфейсом получал бы «НЕ подтверждено» из-за отсутствия
+            // разметки, что не является ни дефектом, ни поводом задержать сдачу.
             axes.push(DodAxis {
                 name: "Доступность UI",
-                hard: true,
+                hard: false,
                 ran: ui_ran,
                 findings: u_cnt,
                 high: u_high,
@@ -779,7 +955,10 @@ impl Orchestrator {
         // появляется только у проекта с обращениями к нейросетям и сразу жёсткая: любая
         // подтверждённая находка (инъекция в подсказку, исполнение вывода модели) блокирует.
         if prof.has_llm {
-            let ai_ran = report.checks_run.iter().any(|x| x.starts_with("security.ai/"));
+            let ai_ran = report
+                .checks_run
+                .iter()
+                .any(|x| x.starts_with("security.ai/"));
             let (mut a_cnt, mut a_high) = (0usize, 0usize);
             for (src, (cnt, high)) in &by_src {
                 if src.starts_with("security.ai/") {
@@ -810,6 +989,96 @@ impl Orchestrator {
             });
         }
 
+        // ── ОСЬ-СТРАХОВКА: ни один блокер не имеет права остаться вне вердикта ──────
+        //
+        // Гейт (`GateRunner`) классифицирует находки ВСЕХ зарегистрированных capability и
+        // складывает блокеры в `report.blocking`. Вердикт же до этого считался
+        // исключительно по таблице `defs` плюс три профильные агрегатные оси, то есть по
+        // РУЧНОМУ перечню источников. Любая capability, не попавшая в этот перечень,
+        // молча выпадала из вердикта: её находки ложились в `by_src` под ключ, который ни
+        // одна ось не читает. Практический масштаб разрыва: в реестре пятнадцать
+        // capability семейства безопасности, а осей на них четыре, поэтому известные
+        // уязвимости в зависимостях (`security.scan/deps`), инъекции, SSRF, небезопасная
+        // инфраструктура как код и критичные находки Electron/Tauri (`verify/desktop`)
+        // видны в отчёте SARIF и НЕ влияли на ответ «можно ли сдавать».
+        //
+        // Дописать в `defs` ещё десять строк было бы починкой симптома: перечень снова
+        // разойдётся с реестром при следующей новой capability, причём молча. Поэтому
+        // разрыв закрывается ПО ОСТАТКУ: всё, что не покрыто явными осями, попадает в
+        // агрегатную ось, а жёсткость определяется СЕМЕЙСТВОМ capability из реестра, а не
+        // строковым префиксом идентификатора. Инвариант «нет молчаливых пропусков»
+        // становится структурным: чтобы находка не влияла на вердикт, её capability надо
+        // удалить из реестра, а не забыть дописать в список.
+        let mut covered: HashSet<&str> = defs.iter().map(|(_, src, _)| *src).collect();
+        covered.extend(direct_caps.iter().copied());
+        // Агрегатные оси покрывают источники по префиксу, но только если сама ось была
+        // добавлена: профильные оси появляются лишь у подходящего проекта.
+        let mut covered_prefixes: Vec<&str> = vec!["compliance.ru/"];
+        if prof.has_ui {
+            covered_prefixes.push("quality.ui/");
+        }
+        if prof.has_llm {
+            covered_prefixes.push("security.ai/");
+        }
+
+        let (mut sec_cnt, mut sec_high) = (0usize, 0usize);
+        let (mut oth_cnt, mut oth_high) = (0usize, 0usize);
+        let mut sec_srcs: Vec<&str> = Vec::new();
+        let mut oth_srcs: Vec<&str> = Vec::new();
+        for (src, (cnt, high)) in &blocking_by_src {
+            if covered.contains(src) || covered_prefixes.iter().any(|p| src.starts_with(p)) {
+                continue;
+            }
+            // Жёсткость по семейству из реестра. Если capability в реестре почему-то нет,
+            // консервативно считаем источник безопасностью по префиксу идентификатора:
+            // ошибиться в сторону лишней строгости здесь безопаснее, чем пропустить блокер.
+            let is_security = reg.get(src).map_or_else(
+                || src.starts_with("security."),
+                |c| c.manifest().family == Family::Security,
+            );
+            if is_security {
+                sec_cnt += cnt;
+                sec_high += high;
+                sec_srcs.push(src);
+            } else {
+                oth_cnt += cnt;
+                oth_high += high;
+                oth_srcs.push(src);
+            }
+        }
+        // Порядок источников в имени оси стабилен: карта источников это HashMap, а вердикт
+        // и его печать обязаны быть воспроизводимыми от прогона к прогону.
+        sec_srcs.sort_unstable();
+        oth_srcs.sort_unstable();
+
+        if sec_cnt > 0 {
+            hard_failed = true;
+            axes.push(DodAxis {
+                name: "Безопасность (прочее)",
+                hard: true,
+                ran: true,
+                findings: sec_cnt,
+                high: sec_high,
+                ok: false,
+                refuted: 0,
+                out_of_scope: 0,
+                not_run_reason: None,
+            });
+        }
+        if oth_cnt > 0 {
+            axes.push(DodAxis {
+                name: "Качество (прочее)",
+                hard: false,
+                ran: true,
+                findings: oth_cnt,
+                high: oth_high,
+                ok: false,
+                refuted: 0,
+                out_of_scope: 0,
+                not_run_reason: None,
+            });
+        }
+
         // Третье состояние вердикта (см. T85/T03): «можно сдавать» только когда ни одна
         // выполненная hard-ось не провалена, все hard-оси РЕАЛЬНО выполнились и охват
         // ненулевой. Иначе это либо «провалено» (hard_failed), либо «НЕ подтверждено»
@@ -826,6 +1095,7 @@ impl Orchestrator {
             zero_coverage,
             debt,
             baseline_frozen: crate::baseline::exists(ctx),
+            policy_note,
         }
     }
 
@@ -857,9 +1127,7 @@ impl Orchestrator {
             // Capability не зарегистрирована: это осознанный пропуск с явной причиной,
             // а не молчаливое «чисто» (инвариант «нет молчаливых пропусков»).
             return (
-                CheckOutcome::Skipped(format!(
-                    "{id}: capability не зарегистрирована в реестре"
-                )),
+                CheckOutcome::Skipped(format!("{id}: capability не зарегистрирована в реестре")),
                 0,
             );
         };
@@ -874,9 +1142,7 @@ impl Orchestrator {
                 // Получатель мог уйти по таймауту — ошибку отправки игнорируем.
                 let _ = tx.send(res);
             });
-            let left = (Instant::now() + SECURITY_FLOOR_TIMEOUT)
-                .saturating_duration_since(Instant::now());
-            match rx.recv_timeout(left) {
+            match rx.recv_timeout(SECURITY_FLOOR_TIMEOUT) {
                 Ok(r) => r,
                 // Зависание сверх бюджета: фиксируем как сбой инструмента, не выполнение.
                 Err(_) => {
@@ -897,7 +1163,10 @@ impl Orchestrator {
             Ok(out) => out,
             // Capability вернула ошибку: сбой инструмента (разбор/IO), не находка.
             Err(e) => {
-                return (CheckOutcome::Failed(format!("{id}: ошибка анализа: {e}")), 0);
+                return (
+                    CheckOutcome::Failed(format!("{id}: ошибка анализа: {e}")),
+                    0,
+                );
             }
         };
 
@@ -925,7 +1194,7 @@ impl Orchestrator {
                 }
                 // Замороженный долг не блокирует ось (см. baseline): в метрику долга.
                 if let Some(b) = base {
-                    if b.contains(&crate::baseline::fingerprint(&f)) {
+                    if crate::baseline::is_debt(b, &f) {
                         *debt += 1;
                         continue;
                     }
@@ -985,9 +1254,33 @@ fn positive_test_proof(summary: &str) -> bool {
     if s.contains("не подтвержд") {
         return false;
     }
+    // Отрицание рядом с маркером прохождения ОПРОВЕРГАЕТ доказательство: прежде проверка
+    // подстроки «tests passed» принимала за успех сводки вида «not all tests passed» и
+    // «no tests passed», то есть провал прогона читался как доказательство прохождения.
+    for neg in [
+        "not all tests passed",
+        "no tests passed",
+        "tests not passed",
+        "тесты не прошли",
+    ] {
+        if s.contains(neg) {
+            return false;
+        }
+    }
     // Утвердительный маркер прохождения от capability.
-    if s.contains("тесты прошли") || s.contains("tests passed") {
+    if s.contains("тесты прошли") {
         return true;
+    }
+    // Маркер «tests passed»: если непосредственно перед ним стоит счётчик, он обязан быть
+    // ненулевым; для формы «K of N tests passed» решает именно K («0 of 5 tests passed»
+    // это провал, а не доказательство). Маркер без счётчика («jest: tests passed»)
+    // остаётся утвердительным.
+    if let Some(i) = s.find("tests passed") {
+        match tests_passed_count(&s[..i]) {
+            None => return true, // счётчика нет: утвердительный маркер
+            Some(n) if n > 0 => return true,
+            Some(_) => {} // нулевой счётчик: не доказательство, ищем «N passed» ниже
+        }
     }
     // Численное доказательство: ненулевое «N passed».
     let mut rest = s.as_str();
@@ -1008,6 +1301,38 @@ fn positive_test_proof(summary: &str) -> bool {
         rest = &rest[i + " passed".len()..];
     }
     false
+}
+
+/// Число пройденных тестов из текста, стоящего ПЕРЕД маркером «tests passed».
+/// Понимает формы «… N tests passed» (возвращает N) и «… K of N tests passed»
+/// (возвращает K: сколько реально прошло). `None`, если счётчика перед маркером нет.
+fn tests_passed_count(before: &str) -> Option<u64> {
+    let trailing_digits = |s: &str| -> Option<(u64, usize)> {
+        let d: String = s
+            .chars()
+            .rev()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        if d.is_empty() {
+            None
+        } else {
+            Some((d.parse().unwrap_or(0), d.len()))
+        }
+    };
+    let b = before.trim_end();
+    let (n, len) = trailing_digits(b)?;
+    let rest = b[..b.len() - len].trim_end();
+    if rest.ends_with(" of") || rest == "of" {
+        // Форма «K of N tests passed»: решает K. Если K не удалось прочитать,
+        // консервативно считаем счётчик нулевым (доказательства нет).
+        let rest2 = rest[..rest.len() - 2].trim_end();
+        Some(trailing_digits(rest2).map_or(0, |(k, _)| k))
+    } else {
+        Some(n)
+    }
 }
 
 #[cfg(test)]
@@ -1050,15 +1375,14 @@ mod tests {
     }
 
     fn family_of(id: &str) -> Family {
-        match id {
-            "security.scan/secret"
-            | "security.scan/owasp"
-            | "security.scan/sast"
-            | "security.scan/taint" => Family::Security,
-            "verify/test" | "verify/lint" | "verify/coverage" | "verify/api-break" => {
-                Family::Verify
-            }
-            "spec.check/drift" => Family::Spec,
+        // Семейство выводим по префиксу идентификатора, как в реальных манифестах, а не
+        // перечислением: иначе новая мок-ось `security.scan/*` в тесте молча получила бы
+        // семейство Quality и проверяла бы не тот путь, что в продукте.
+        match id.split('/').next().unwrap_or("") {
+            "security.scan" | "security.ai" => Family::Security,
+            "verify" => Family::Verify,
+            "spec.check" => Family::Spec,
+            "compliance.ru" => Family::Compliance,
             _ => Family::Quality,
         }
     }
@@ -1158,6 +1482,163 @@ mod tests {
             .unwrap_or_else(|| panic!("ось «{name}» отсутствует в отчёте"))
     }
 
+    // ────────── Сплошной скан: охват и сохранность находок ──────────
+
+    /// РЕГРЕССИЯ. Признак пропуска и находки НЕ исключают друг друга: первый говорит о
+    /// неполноте охвата, вторые о том, что успели найти. Прежде ветки были
+    /// взаимоисключающими, и выставленный признак пропуска отбрасывал все находки
+    /// capability. Так теряются реальные данные: проверки настольных оболочек и мобильной
+    /// конфигурации выставляют пропуск при отказе движка на ОДНОЙ из своих осей, уже собрав
+    /// находки по остальным.
+    #[test]
+    fn частичный_пропуск_не_отбрасывает_уже_найденное() {
+        let mut reg = Registry::new();
+        let mut out = ran_with_finding(
+            "verify/desktop",
+            Severity::Critical,
+            "desktop/electron-node-integration",
+        );
+        out.skipped = Some("сборка не проверена: нет тулчейна".into());
+        reg_axis(&mut reg, "verify/desktop", out);
+        let ctx = tmp_ctx();
+        let report = Orchestrator::scan_all(&reg, &ctx, &RunInput::default());
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "находка сохранена несмотря на пропуск: {:?}",
+            report.findings.iter().map(|f| &f.rule).collect::<Vec<_>>()
+        );
+        assert!(
+            report
+                .checks_skipped
+                .iter()
+                .any(|(id, _)| id == "verify/desktop"),
+            "неполнота охвата при этом остаётся видимой"
+        );
+    }
+
+    /// Семейство `Verify` обязано попадать в сплошной скан: иначе критичные находки о
+    /// настольных оболочках и мобильной конфигурации, а также сломанный публичный контракт
+    /// не доходят до отчёта SARIF для системы сборки.
+    #[test]
+    fn семейство_verify_попадает_в_сплошной_скан() {
+        let mut reg = Registry::new();
+        reg_axis(
+            &mut reg,
+            "verify/desktop",
+            ran_with_finding(
+                "verify/desktop",
+                Severity::Critical,
+                "desktop/electron-websecurity-off",
+            ),
+        );
+        let ctx = tmp_ctx();
+        let report = Orchestrator::scan_all(&reg, &ctx, &RunInput::default());
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.rule == "desktop/electron-websecurity-off"),
+            "находка семейства Verify дошла до отчёта: {:?}",
+            report.findings.iter().map(|f| &f.rule).collect::<Vec<_>>()
+        );
+    }
+
+    // ────────── Ось-страховка: блокер вне таблицы осей обязан валить вердикт ──────────
+
+    /// Регрессия на разрыв между гейтом и вердиктом. `security.scan/deps` не входит в
+    /// таблицу `defs`, поэтому раньше его находки ложились в карту по источнику, которую
+    /// ни одна ось не читала: известная уязвимость в зависимостях была видна в SARIF и не
+    /// влияла на ответ «можно ли сдавать». Теперь её обязана поймать ось по остатку.
+    #[test]
+    fn блокер_capability_вне_таблицы_осей_валит_вердикт() {
+        let mut reg = Registry::new();
+        register_all_clean(&mut reg);
+        reg_axis(
+            &mut reg,
+            "security.scan/deps",
+            ran_with_finding(
+                "security.scan/deps",
+                Severity::Critical,
+                "vulnerable-dependency",
+            ),
+        );
+        let ctx = tmp_ctx();
+        let report = Orchestrator::dod(&reg, &ctx, &RunInput::default());
+        assert!(
+            !report.confirmed && !report.passed,
+            "критичная уязвимость в зависимостях обязана валить вердикт; оси: {:?}",
+            report
+                .axes
+                .iter()
+                .map(|a| (a.name, a.ran, a.ok))
+                .collect::<Vec<_>>()
+        );
+        let a = axis(&report, "Безопасность (прочее)");
+        assert!(a.hard && !a.ok, "ось-страховка жёсткая и провалена");
+        assert_eq!(a.findings, 1, "находка учтена ровно один раз");
+    }
+
+    /// Жёсткость оси-страховки берётся из СЕМЕЙСТВА capability в реестре, а не из
+    /// префикса идентификатора: критичные находки `verify/desktop` (Electron с включённой
+    /// интеграцией Node) не начинаются с «security.» и раньше проходили мимо вердикта.
+    /// Семейство Verify не является Security, поэтому такой источник попадает в мягкую
+    /// ось-страховку и вердикт не валит; проверяем, что он хотя бы ВИДЕН, а не потерян.
+    #[test]
+    fn блокер_немощного_семейства_попадает_в_мягкую_ось_а_не_теряется() {
+        let mut reg = Registry::new();
+        register_all_clean(&mut reg);
+        reg_axis(
+            &mut reg,
+            "quality.check/layers",
+            ran_with_finding("quality.check/layers", Severity::High, "layering-violation"),
+        );
+        let ctx = tmp_ctx();
+        let report = Orchestrator::dod(&reg, &ctx, &RunInput::default());
+        let a = axis(&report, "Качество (прочее)");
+        assert!(!a.hard, "ось качества по остатку мягкая");
+        assert_eq!(a.findings, 1, "находка видна в вердикте, а не потеряна");
+    }
+
+    /// Ось-страховка не имеет права появляться на пустом месте: у чистого проекта её нет,
+    /// иначе вывод вердикта засоряется, а «прочее: 0» читается как отдельная проверка.
+    #[test]
+    fn ось_страховка_отсутствует_при_чистом_прогоне() {
+        let mut reg = Registry::new();
+        register_all_clean(&mut reg);
+        let ctx = tmp_ctx();
+        let report = Orchestrator::dod(&reg, &ctx, &RunInput::default());
+        assert!(report.confirmed, "чистый прогон подтверждён");
+        assert!(
+            !report.axes.iter().any(|a| a.name.contains("(прочее)")),
+            "осей по остатку при отсутствии остатка быть не должно"
+        );
+    }
+
+    /// Предупреждение (severity ниже порога блокировки) не имеет права валить вердикт
+    /// через ось-страховку: иначе любое замечание становится блокером и гейт выключат.
+    #[test]
+    fn предупреждение_вне_таблицы_осей_не_валит_вердикт() {
+        let mut reg = Registry::new();
+        register_all_clean(&mut reg);
+        reg_axis(
+            &mut reg,
+            "security.scan/iac",
+            ran_with_finding("security.scan/iac", Severity::Low, "iac-permissive"),
+        );
+        let ctx = tmp_ctx();
+        let report = Orchestrator::dod(&reg, &ctx, &RunInput::default());
+        assert!(
+            report.confirmed,
+            "находка ниже порога блокировки вердикт не валит; оси: {:?}",
+            report
+                .axes
+                .iter()
+                .map(|a| (a.name, a.ok))
+                .collect::<Vec<_>>()
+        );
+    }
+
     // ───────────────────────────── T85/T03: третье состояние ─────────────────────────────
 
     #[test]
@@ -1170,7 +1651,10 @@ mod tests {
         let report = Orchestrator::dod(&reg, &ctx, &RunInput::default());
         assert!(report.zero_coverage, "нулевой охват зафиксирован");
         assert!(!report.confirmed, "пустой репозиторий не подтверждён");
-        assert!(!report.passed, "passed следует confirmed, ложно-зелёного нет");
+        assert!(
+            !report.passed,
+            "passed следует confirmed, ложно-зелёного нет"
+        );
         assert!(
             !report.hard_not_run.is_empty(),
             "перечислены незапущенные hard-оси: {:?}",
@@ -1213,7 +1697,10 @@ mod tests {
             !report.confirmed,
             "незапущенная hard-ось снимает подтверждение"
         );
-        assert!(!report.passed, "passed не зелёный при незапущенной hard-оси");
+        assert!(
+            !report.passed,
+            "passed не зелёный при незапущенной hard-оси"
+        );
         assert!(
             report.hard_not_run.contains(&"Тесты"),
             "ось «Тесты» перечислена как незапущенная: {:?}",
@@ -1239,7 +1726,10 @@ mod tests {
         );
         let ctx = tmp_ctx();
         let report = Orchestrator::dod(&reg, &ctx, &RunInput::default());
-        assert!(!report.confirmed, "ось «Секреты» провалена → не подтверждено");
+        assert!(
+            !report.confirmed,
+            "ось «Секреты» провалена → не подтверждено"
+        );
         assert!(!report.passed);
         let secret = axis(&report, "Секреты");
         assert!(secret.ran, "ось выполнилась");
@@ -1297,7 +1787,7 @@ mod tests {
         reg_axis(
             &mut reg,
             "security.scan/owasp",
-            ran_with_finding("security.scan/owasp", Severity::Medium, "weak-crypto"),
+            ran_with_finding("security.scan/owasp", Severity::Medium, "weak-hash"),
         );
         let ctx = tmp_ctx();
         let report = Orchestrator::dod(&reg, &ctx, &RunInput::default());
@@ -1337,7 +1827,10 @@ mod tests {
         let tests = axis(&report, "Тесты");
         assert!(!tests.ran, "сбой инструмента не считается выполнением");
         assert_eq!(tests.findings, 0, "сбой инструмента не стал находкой");
-        assert!(!report.confirmed, "незапущенная hard-ось снимает подтверждение");
+        assert!(
+            !report.confirmed,
+            "незапущенная hard-ось снимает подтверждение"
+        );
         assert!(
             report.hard_not_run.contains(&"Тесты"),
             "ось перечислена как незапущенная"
@@ -1386,7 +1879,10 @@ mod tests {
         let ctx = tmp_ctx();
         let report = Orchestrator::dod(&reg, &ctx, &RunInput::default());
         let tests = axis(&report, "Тесты");
-        assert!(tests.ran, "падение тестов доказывает прогон → ось выполнена");
+        assert!(
+            tests.ran,
+            "падение тестов доказывает прогон → ось выполнена"
+        );
         assert!(!tests.ok, "ось провалена");
         assert_eq!(tests.findings, 1);
         assert!(!report.passed);
@@ -1438,7 +1934,10 @@ mod tests {
         let ctx = tmp_ctx();
         let report = Orchestrator::dod(&reg, &ctx, &RunInput::default());
         let taint = axis(&report, "Taint-поток");
-        assert!(taint.ran, "Enterprise-taint выполнен в полу безопасности DoD");
+        assert!(
+            taint.ran,
+            "Enterprise-taint выполнен в полу безопасности DoD"
+        );
         assert_eq!(taint.findings, 1, "находка taint дошла до оси");
         assert!(!taint.ok, "ось taint провалена находкой");
         assert!(!report.confirmed, "taint-находка валит подтверждение");
@@ -1539,7 +2038,10 @@ mod tests {
         let report = Orchestrator::dod(&reg, &ctx, &RunInput::default());
         let docs = axis(&report, "Доки/Спека актуальны");
         assert!(docs.ran, "ось доков выполнена");
-        assert!(docs.findings >= 1, "доковая находка дошла до оси после эскалации");
+        assert!(
+            docs.findings >= 1,
+            "доковая находка дошла до оси после эскалации"
+        );
         assert!(!docs.ok, "ось доков провалена");
         assert!(!report.confirmed, "дрейф доков валит подтверждение в DoD");
     }
@@ -1563,6 +2065,21 @@ mod tests {
             !positive_test_proof("verify/test: ⚠ тестов нет — работоспособность НЕ подтверждена"),
             "явный маркер «не подтверждена» не считается доказательством"
         );
+    }
+
+    /// РЕГРЕССИЯ. Подстрока «tests passed» не должна засчитывать отрицания и нулевые
+    /// счётчики: «not all tests passed» и «0 of 5 tests passed» это провал/пустой прогон,
+    /// а не доказательство прохождения.
+    #[test]
+    fn positive_test_proof_rejects_negations_and_zero_counters() {
+        assert!(!positive_test_proof("not all tests passed"));
+        assert!(!positive_test_proof("no tests passed"));
+        assert!(!positive_test_proof("0 of 5 tests passed"));
+        assert!(!positive_test_proof("0 tests passed"));
+        assert!(!positive_test_proof("verify/test: тесты не прошли"));
+        // Позитивные формы со счётчиком остаются доказательством.
+        assert!(positive_test_proof("5 of 5 tests passed"));
+        assert!(positive_test_proof("13 tests passed"));
     }
 
     #[test]
@@ -1594,7 +2111,10 @@ mod tests {
         let report = Orchestrator::dod(&reg, &ctx, &RunInput::default());
         let sast = axis(&report, "SAST (AST)");
         assert!(sast.ran);
-        assert_eq!(sast.findings, 1, "заземлённая taint-находка дошла до оси SAST");
+        assert_eq!(
+            sast.findings, 1,
+            "заземлённая taint-находка дошла до оси SAST"
+        );
         assert!(!report.confirmed);
     }
 }

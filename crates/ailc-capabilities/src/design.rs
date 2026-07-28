@@ -82,7 +82,12 @@ impl Capability for FeatureSpec {
     fn run(&self, ctx: &Ctx, input: &RunInput) -> Result<CapabilityOutput> {
         let mut out = CapabilityOutput::default();
 
-        let feature = match input.query.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+        let feature = match input
+            .query
+            .as_deref()
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+        {
             Some(q) => q,
             None => {
                 out.skipped = Some("нужно описание фичи в query".into());

@@ -1,0 +1,10 @@
+[package]
+name = "ailc-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Общая оснастка тестов: временное рабочее дерево с гарантированной уборкой"
+
+[dependencies]
+ailc-contracts = { path = "../ailc-contracts" }

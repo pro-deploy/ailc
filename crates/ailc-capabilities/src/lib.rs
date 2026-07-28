@@ -12,7 +12,8 @@ use ailc_contracts::{
 use ailc_core::engines::codeintel::CodeIntelEngine;
 use ailc_core::engines::generator::Generator;
 use ailc_core::engines::runner::Runner;
-use ailc_core::engines::scan::{Matcher, Rule, ScanEngine, SOURCE_CODE};
+use ailc_core::engines::scan::{Matcher, Rule, ScanEngine};
+use ailc_core::engines::walk::WalkMode;
 use ailc_core::registry::Registry;
 use ailc_core::Capability;
 use std::collections::BTreeMap;
@@ -30,15 +31,23 @@ mod compliance;
 mod design;
 mod desktop;
 mod diff_scope;
+mod docs_std;
 mod governance;
+mod iac_tf;
+mod injection_extra;
+mod interview;
 mod mobile;
-mod owasp;
+pub mod owasp;
 mod release;
+mod search;
 mod security_extra;
+mod shell_ci;
 mod spec_check;
 mod spec_gen;
 mod supply;
 mod surface;
+mod tasks;
+mod toolchain;
 mod ui_ux;
 mod verify_extra;
 mod web_security;
@@ -47,6 +56,12 @@ mod workflow_extra;
 // Развёртывание скелета состояния `.ailc/` доступно бинарю: MCP-сервер ставит среду
 // (конституцию и заготовки) сам при первом подключении, а не только правило в CLAUDE.md.
 pub use workflow_extra::scaffold_state;
+
+// Конструкторы сканеров открыты для теста полноты: он проверяет, что ни одно встроенное
+// правило не выключено из-за несобравшегося паттерна (см. `ни_одно_встроенное_правило_не_выключено`).
+pub use ai_security::{insecure_output_scan, prompt_injection_scan};
+pub use security_extra::{iac_scan, injection_scan};
+pub use web_security::{api_scan, web_scan};
 
 /// Единая JSON-схема входа для проверок «по проекту».
 const TARGET_SCHEMA: &str = r#"{"type":"object","properties":{"target":{"type":"string"}}}"#;
@@ -75,11 +90,37 @@ fn scan_manifest(
 pub struct ScanCapability {
     manifest: CapabilityManifest,
     rules: Vec<Rule>,
+    /// Режим обхода дерева. По умолчанию [`WalkMode::Code`]: скрытые файлы и служебные
+    /// каталоги не нужны сканерам кода. Сканер секретов создаётся через [`Self::with_mode`]
+    /// с [`WalkMode::Secrets`], иначе его allow-list dotfiles (`.env`, `.npmrc`,
+    /// `.aws/credentials`) не применяется и учётные данные в этих файлах не находятся.
+    mode: WalkMode,
 }
 
 impl ScanCapability {
     pub fn new(manifest: CapabilityManifest, rules: Vec<Rule>) -> Self {
-        Self { manifest, rules }
+        Self {
+            manifest,
+            rules,
+            mode: WalkMode::Code,
+        }
+    }
+
+    /// Сканер с явным режимом обхода (см. поле `mode`).
+    pub fn with_mode(manifest: CapabilityManifest, rules: Vec<Rule>, mode: WalkMode) -> Self {
+        Self {
+            manifest,
+            rules,
+            mode,
+        }
+    }
+}
+
+impl ScanCapability {
+    /// Правила сканера. Открыто для теста полноты: он проверяет, что ни одно встроенное
+    /// правило не выключено из-за несобравшегося паттерна.
+    pub fn rules(&self) -> &[Rule] {
+        &self.rules
     }
 }
 
@@ -89,7 +130,7 @@ impl Capability for ScanCapability {
     }
     fn run(&self, ctx: &Ctx, input: &RunInput) -> Result<CapabilityOutput> {
         // Сканеры безопасности/качества пропускают тест-файлы (фикстуры ≠ находки).
-        ScanEngine::run(ctx, input, &self.rules, self.manifest.id, true)
+        ScanEngine::run(ctx, input, &self.rules, self.manifest.id, true, self.mode)
     }
 }
 
@@ -244,11 +285,24 @@ fn secret_rule_table() -> Vec<SecretRule> {
             message: "Ключ доступа Azure Storage (connection string), учётные данные (CWE-798)",
         },
         // AWS Secret Access Key формы не имеет (40 случайных base64-символов), ловим по
-        // контексту: «aws» рядом + строковый литерал ровно из 40 символов. CWE-798.
+        // контексту: «aws» рядом плюс строковый литерал ровно из 40 символов. CWE-798.
+        //
+        // Промежуток между «aws» и литералом расширен и ОГРАНИЧЕН ПО СОСТАВУ. Прежде он
+        // допускал любые двадцать символов, и этого не хватало ровно на каноническое
+        // написание, которое использует официальный клиент AWS и типовой файл окружения:
+        // в строке `aws_secret_access_key = "…"` до кавычки двадцать один символ, поэтому
+        // правило её пропускало, тогда как сокращённое `aws_secret_key = "…"` находило.
+        // Иначе говоря, пропускалась именно наиболее распространённая форма, и результат
+        // ещё и зависел от наличия пробелов вокруг знака равенства.
+        //
+        // Расширяя промежуток, состав его сужен до символов имени и присваивания
+        // (буквы, цифры, подчёркивание, дефис, точка, пробелы, двоеточие, знак равенства).
+        // Так правило перестаёт зависеть от длины имени поля, но и не сшивает случайное
+        // слово «aws» в одной части строки с посторонним сорокасимвольным литералом в другой.
         SecretRule {
             id: "aws-secret-key",
             severity: High,
-            kind: SecretKind::Token(r#"(?i)\baws.{0,20}["'][0-9A-Za-z/+]{40}["']"#),
+            kind: SecretKind::Token(r#"(?i)\baws[A-Za-z0-9_.\- ]{0,40}[:=]\s*["'][0-9A-Za-z/+]{40}["']"#),
             message: "Похоже на AWS Secret Access Key, захардкоженные учётные данные (CWE-798)",
         },
         // Ключи LLM-провайдеров (OpenAI sk-/sk-proj-, Anthropic sk-ant-, HuggingFace
@@ -429,8 +483,22 @@ fn secret_rule_table() -> Vec<SecretRule> {
     ]
 }
 
+/// Число правил поиска секретов. Опубликовано, чтобы документация сверялась с кодом
+/// автоматически, а не поддерживалась вручную (см. тест `readme_matches_registry`).
+pub fn secret_rule_count() -> usize {
+    secret_rule_table().len()
+}
+
 pub fn secret_scan() -> ScanCapability {
-    ScanCapability::new(
+    // РЕЖИМ ОБХОДА `Secrets` ЗДЕСЬ ОБЯЗАТЕЛЕН. Учётные данные чаще всего лежат именно в
+    // скрытых файлах: `.env`, `.env.production`, `.npmrc`, `.pypirc`, `.netrc`,
+    // `.git-credentials`, `.aws/credentials`, `.docker/config.json`. Обход в режиме `Code`
+    // отбрасывает все скрытые файлы, поэтому со ним сканер секретов не видел ни одного из
+    // них: проверялось запуском, ключ доступа в `.env` давал «0 находок, вне охвата 1
+    // скрытых», тогда как тот же ключ в обычном файле давал две находки. Allow-list
+    // (`is_secret_dotfile`) и режим `Secrets` существовали, но не были подключены ни к
+    // одному сканеру.
+    ScanCapability::with_mode(
         scan_manifest(
             "security.scan/secret",
             Family::Security,
@@ -440,6 +508,7 @@ pub fn secret_scan() -> ScanCapability {
             .into_iter()
             .map(SecretRule::into_rule)
             .collect(),
+        WalkMode::Secrets,
     )
 }
 
@@ -484,68 +553,6 @@ pub fn smell_scan() -> ScanCapability {
 }
 
 // ───────────────────────── security.scan/owasp ─────────────────────────
-
-pub fn owasp_scan() -> ScanCapability {
-    ScanCapability::new(
-        scan_manifest(
-            "security.scan/owasp",
-            Family::Security,
-            "Типовые уязвимости OWASP: инъекции, опасный eval/exec, слабая криптография, debug в проде.",
-        ),
-        vec![
-            // A03 Injection: SQL-ключевое слово + конкатенация строки (не параметризация).
-            Rule {
-                id: "sql-injection",
-                severity: Severity::High,
-                exts: SOURCE_CODE,
-                matcher: Matcher::Predicate(|l| {
-                    let s = l.to_lowercase();
-                    (s.contains("select ")
-                        || s.contains("insert ")
-                        || s.contains("update ")
-                        || s.contains("delete "))
-                        && (l.contains("\" +")
-                            || l.contains("' +")
-                            || l.contains("+ \"")
-                            || s.contains(".format(")
-                            || s.contains("f\""))
-                }),
-                message: "Возможная SQL-инъекция (конкатенация в запрос)",
-            },
-            // Требуем форму вызова `(` — литерал паттерна себя не ловит. Голые eval/exec
-            // убраны: построчный паттерн флагует eval(bar) и там, где ввод не доходит до
-            // стока; поток к ним строит `sast/taint-dynamic-exec`. Остаётся os.system.
-            Rule {
-                id: "dangerous-exec",
-                severity: Severity::High,
-                exts: SOURCE_CODE,
-                matcher: Matcher::regex(r"(?i)\bos\.system\s*\("),
-                message: "Опасное исполнение команды ОС (os.system)",
-            },
-            Rule {
-                id: "shell-injection",
-                severity: Severity::High,
-                exts: SOURCE_CODE,
-                matcher: Matcher::regex(r"(?i)shell\s*=\s*true"),
-                message: "subprocess с shell=True — риск инъекции команд",
-            },
-            Rule {
-                id: "weak-crypto",
-                severity: Severity::Medium,
-                exts: SOURCE_CODE,
-                matcher: Matcher::regex(r"(?i)\b(?:md5|sha1)\s*\("),
-                message: "Слабый хеш (MD5/SHA1)",
-            },
-            Rule {
-                id: "debug-enabled",
-                severity: Severity::Medium,
-                exts: SOURCE_CODE,
-                matcher: Matcher::regex(r"(?i)\bdebug\s*=\s*true"),
-                message: "Debug-режим включён (риск утечки в проде)",
-            },
-        ],
-    )
-}
 
 // ───────────────────────── security.scan/pii ─────────────────────────
 
@@ -643,8 +650,7 @@ impl Capability for ListSymbols {
 
         // Нет распознанных символов → честно сообщаем, а не выдаём пустоту как успех.
         if syms.is_empty() {
-            out.skipped =
-                Some("не найдено исходников на поддерживаемых языках".to_string());
+            out.skipped = Some("не найдено исходников на поддерживаемых языках".to_string());
             out.summary = "code.intel/symbols: нет поддерживаемых исходников".to_string();
             return Ok(out);
         }
@@ -716,8 +722,7 @@ impl Capability for ModuleCard {
         let mut out = CapabilityOutput::default();
 
         if stats.is_empty() {
-            out.skipped =
-                Some("не найдено исходников на поддерживаемых языках".to_string());
+            out.skipped = Some("не найдено исходников на поддерживаемых языках".to_string());
             out.summary = "code.intel/module_card: нет поддерживаемых исходников".to_string();
             return Ok(out);
         }
@@ -779,16 +784,17 @@ impl Capability for CallGraphCap {
         let mut out = CapabilityOutput::default();
 
         if cg.files_parsed == 0 {
-            out.skipped =
-                Some("не найдено исходников на языках с AST-грамматикой".to_string());
+            out.skipped = Some("не найдено исходников на языках с AST-грамматикой".to_string());
             out.summary = "code.intel/call_graph: нет разбираемых исходников".to_string();
             return Ok(out);
         }
 
         let unreachable = cg.unreachable();
-        out.metrics.push(("functions".into(), cg.funcs.len() as f64));
+        out.metrics
+            .push(("functions".into(), cg.funcs.len() as f64));
         out.metrics.push(("edges".into(), cg.edges.len() as f64));
-        out.metrics.push(("calls_total".into(), cg.total_calls as f64));
+        out.metrics
+            .push(("calls_total".into(), cg.total_calls as f64));
         out.metrics
             .push(("calls_unresolved".into(), cg.unresolved as f64));
         out.metrics
@@ -801,8 +807,7 @@ impl Capability for CallGraphCap {
             cg.total_calls, cg.unresolved
         ));
         for f in unreachable.iter().take(15) {
-            out.records
-                .push(format!("потенциально недостижима: {f}()"));
+            out.records.push(format!("потенциально недостижима: {f}()"));
         }
         if unreachable.len() > 15 {
             out.records
@@ -890,11 +895,7 @@ impl Capability for ProjectMapCap {
             }
         ));
 
-        let langs: Vec<String> = map
-            .langs
-            .iter()
-            .map(|(l, n)| format!("{l}:{n}"))
-            .collect();
+        let langs: Vec<String> = map.langs.iter().map(|(l, n)| format!("{l}:{n}")).collect();
         out.summary = format!(
             "code.intel/map: {} файлов, ~{} строк, языки [{}], точек входа {}",
             map.total_files,
@@ -916,7 +917,9 @@ fn is_test_or_entry(s: &Symbol) -> bool {
         || f.contains("/tests/")
         || f.contains(".test.")
         || f.contains(".spec.")
-        || f.rsplit(['/', '\\']).next().is_some_and(|n| n.starts_with("test_"));
+        || f.rsplit(['/', '\\'])
+            .next()
+            .is_some_and(|n| n.starts_with("test_"));
     let base = f.rsplit(['/', '\\']).next().unwrap_or(f.as_str());
     // Файлы-точки входа веб-фреймворков: их экспорты вызывает фреймворк/сборщик, а не
     // прикладной код, поэтому отсутствие ссылок не делает их мёртвыми. Только однозначные
@@ -924,9 +927,18 @@ fn is_test_or_entry(s: &Symbol) -> bool {
     // /app/ или /pages/, чтобы не зацепить обычные каталоги с такими именами.
     let is_framework_file = matches!(
         base,
-        "page.tsx" | "page.jsx" | "page.ts" | "page.js" | "route.ts" | "route.js"
-            | "layout.tsx" | "layout.jsx" | "middleware.ts" | "middleware.js"
-            | "+page.svelte" | "+server.ts"
+        "page.tsx"
+            | "page.jsx"
+            | "page.ts"
+            | "page.js"
+            | "route.ts"
+            | "route.js"
+            | "layout.tsx"
+            | "layout.jsx"
+            | "middleware.ts"
+            | "middleware.js"
+            | "+page.svelte"
+            | "+server.ts"
     ) || base.ends_with(".config.ts")
         || base.ends_with(".config.js")
         || base.ends_with(".config.mjs");
@@ -967,7 +979,8 @@ impl DeadCode {
                 id: "quality.check/dead-code",
                 family: Family::Quality,
                 engine: EngineKind::CodeIntel,
-                when_to_use: "Найти экспортируемые символы без использований — кандидаты в мёртвый код.",
+                when_to_use:
+                    "Найти экспортируемые символы без использований — кандидаты в мёртвый код.",
                 input_schema: TARGET_SCHEMA,
                 tier: Tier::Core,
                 deterministic: true,
@@ -1045,7 +1058,8 @@ impl FindUsages {
                 id: "code.intel/find_usages",
                 family: Family::CodeIntel,
                 engine: EngineKind::CodeIntel,
-                when_to_use: "Найти все использования символа по имени — оценить влияние ПЕРЕД изменением.",
+                when_to_use:
+                    "Найти все использования символа по имени — оценить влияние ПЕРЕД изменением.",
                 input_schema: r#"{"type":"object","properties":{"query":{"type":"string"},"target":{"type":"string"}},"required":["query"]}"#,
                 tier: Tier::Core,
                 deterministic: true,
@@ -1136,7 +1150,8 @@ impl Capability for CyclesCheck {
                 source: "quality.check/cycles".into(),
             });
         }
-        out.metrics.push(("modules".into(), graph.modules.len() as f64));
+        out.metrics
+            .push(("modules".into(), graph.modules.len() as f64));
         out.metrics.push(("edges".into(), graph.edges.len() as f64));
         out.metrics.push(("cycles".into(), cycles.len() as f64));
         out.summary = format!(
@@ -1208,7 +1223,12 @@ fn stack_table() -> Vec<Stack> {
         },
         Stack {
             label: "python",
-            markers: &["pyproject.toml", "pytest.ini", "setup.py", "requirements.txt"],
+            markers: &[
+                "pyproject.toml",
+                "pytest.ini",
+                "setup.py",
+                "requirements.txt",
+            ],
             marker_exts: &[],
             test: ("pytest", vec!["-q"]),
             lint: ("ruff", vec!["check", "."]),
@@ -1360,15 +1380,17 @@ impl Capability for TestRun {
         let stack = match detect_stack(&ctx.root) {
             Some(s) => s,
             None => {
-                out.skipped =
-                    Some("тип проекта не распознан (нет Cargo.toml/go.mod/package.json/pyproject)".into());
+                out.skipped = Some(
+                    "тип проекта не распознан (нет Cargo.toml/go.mod/package.json/pyproject)"
+                        .into(),
+                );
                 out.summary = "verify/test: пропущено (проект не распознан)".into();
                 return Ok(out);
             }
         };
         let label = stack.label;
         let (bin, args) = &stack.test;
-        let res = Runner::run(ctx, bin, args);
+        let res = Runner::run_build(ctx, bin, args);
         if !res.ran {
             out.summary = format!(
                 "verify/test ({label}): пропущено — {}",
@@ -1413,16 +1435,18 @@ impl Capability for TestRun {
             || blob_lc.contains("no tests ran")            // pytest
             || blob_lc.contains("missing script")          // npm: нет скрипта test
             || blob_lc.contains("collected 0 items"); // pytest
-        // Маркер пустой СЕКЦИИ не значит «тестов нет вообще»: cargo печатает
-        // «running 0 tests» для пустых doc-test секций даже когда юнит-тесты прошли.
-        // Если где-то есть ненулевое «N passed» — тесты были.
+                                                      // Маркер пустой СЕКЦИИ не значит «тестов нет вообще»: cargo печатает
+                                                      // «running 0 tests» для пустых doc-test секций даже когда юнит-тесты прошли.
+                                                      // Если где-то есть ненулевое «N passed» — тесты были.
         let positive_proof = some_tests_passed(&blob_lc);
         let no_tests = empty_markers && !positive_proof;
 
         if no_tests {
-            out.skipped =
-                Some(format!("verify/test ({label}): тесты не найдены/не настроены"));
-            out.summary = format!("verify/test ({label}): ⚠ тестов нет — работоспособность НЕ подтверждена");
+            out.skipped = Some(format!(
+                "verify/test ({label}): тесты не найдены/не настроены"
+            ));
+            out.summary =
+                format!("verify/test ({label}): ⚠ тестов нет — работоспособность НЕ подтверждена");
         } else if res.exit_ok && positive_proof {
             // T86: «тесты прошли» печатаем ТОЛЬКО при ПОЗИТИВНОМ доказательстве реально
             // выполненных тестов (ненулевое «N passed»). Без него зелёный код выхода мог
@@ -1454,7 +1478,10 @@ impl Capability for TestRun {
             for l in res.tail(15) {
                 out.records.push(l);
             }
-            out.summary = format!("verify/test ({label}): ❌ тесты падают (код {:?})", res.code);
+            out.summary = format!(
+                "verify/test ({label}): ❌ тесты падают (код {:?})",
+                res.code
+            );
         }
         out.metrics
             .push(("exit_ok".into(), if res.exit_ok { 1.0 } else { 0.0 }));
@@ -1481,7 +1508,8 @@ impl LintRun {
                 id: "verify/lint",
                 family: Family::Verify,
                 engine: EngineKind::Runner,
-                when_to_use: "Запустить линтер проекта (clippy/golangci-lint/eslint/ruff) с фолбэком.",
+                when_to_use:
+                    "Запустить линтер проекта (clippy/golangci-lint/eslint/ruff) с фолбэком.",
                 input_schema: TARGET_SCHEMA,
                 tier: Tier::Core,
                 deterministic: false,
@@ -1509,11 +1537,11 @@ impl Capability for LintRun {
         let (bin, args) = &stack.lint;
         let fallback = &stack.lint_fallback;
 
-        let mut res = Runner::run(ctx, bin, args);
+        let mut res = Runner::run_build(ctx, bin, args);
         let mut used = *bin;
         if !res.ran {
             if let Some((fb_bin, fb_args)) = fallback {
-                res = Runner::run(ctx, fb_bin, fb_args);
+                res = Runner::run_build(ctx, fb_bin, fb_args);
                 if res.ran {
                     used = fb_bin;
                 }
@@ -1667,7 +1695,7 @@ pub fn register_core(reg: &mut Registry) {
     reg.register(Box::new(smell_scan()));
     reg.register(Box::new(DeadCode::new())); // Quality, но на движке CodeIntel
     reg.register(Box::new(CyclesCheck::new())); // Quality, граф зависимостей
-    // E3 CodeIntel (информационные).
+                                                // E3 CodeIntel (информационные).
     reg.register(Box::new(ListSymbols::new()));
     reg.register(Box::new(ModuleCard::new()));
     reg.register(Box::new(ProjectMapCap::new()));
@@ -1697,6 +1725,14 @@ pub fn register_core(reg: &mut Registry) {
     spec_gen::register(reg); // генераторы доков: спека (ГОСТ), архитектура (arc42), C4, модель данных, глоссарий
     spec_check::register(reg); // spec.check/drift — дрейф доков относительно кода (Family::Spec, в гейт)
     design::register(reg); // spec/feature — проектирование новой фичи (заготовка спеки + ADR)
+    interview::register(reg); // spec/questions + spec/answer — опрос по разделам стандартов
+    docs_std::register(reg); // generate/doc — выпуск документов комплекта по стандартам
+    toolchain::register(reg); // verify/toolchain — паспорт средств разработки с версиями
+    search::register(reg); // code.intel/search — поиск лексическим индексом (движок E0)
+    iac_tf::register(reg); // security.scan/terraform — инфраструктура как код на языке HCL
+    shell_ci::register(reg); // security.scan/shell + security.scan/ci — сценарии и рабочие процессы
+    injection_extra::register(reg); // security.scan/injection-extra — ReDoS, XPath, LDAP, отражение, хранение маркеров
+    tasks::register(reg); // task/plan + task/update + task/list — журнал работ, переживающий обрыв сеанса
     api_contract::register(reg); // generate/api-baseline + verify/api-break — слом публичного API
     diff_scope::register(reg); // code.intel/diff-scope — радиус влияния правки (git+граф вызовов)
     supply::register(reg); // generate/sbom + security.scan/licenses — supply-chain из lock-файлов
@@ -1707,31 +1743,24 @@ pub fn register_core(reg: &mut Registry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use ailc_testkit::TempTree;
 
-    static CNT: AtomicU32 = AtomicU32::new(0);
-
-    /// Временный проект из пар (относительный путь, содержимое). Уникальная директория на
-    /// каждый вызов, чтобы тесты не мешали друг другу при параллельном прогоне.
-    fn tmp(files: &[(&str, &str)]) -> Ctx {
-        let n = CNT.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("ailc-lib-{}-{}", std::process::id(), n));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+    /// Временный проект из пар (относительный путь, содержимое). Возвращается само дерево,
+    /// а не контекст: уборка привязана к времени жизни объекта, поэтому тест обязан
+    /// удерживать его до последнего утверждения, а контекст берётся из дерева методом
+    /// `ctx()`. Помощник оставлен ради удобной записи набора файлов одним выражением.
+    fn проект(files: &[(&str, &str)]) -> TempTree {
+        let t = TempTree::new("lib");
         for (rel, content) in files {
-            let p = dir.join(rel);
-            if let Some(parent) = p.parent() {
-                std::fs::create_dir_all(parent).unwrap();
-            }
-            std::fs::write(p, content).unwrap();
+            t.write(rel, content);
         }
-        Ctx::new(dir)
+        t
     }
 
     /// Идентификаторы правил, сработавших на одном файле сканера секретов.
     fn secret_hits(file: &str, content: &str) -> Vec<String> {
-        let ctx = tmp(&[(file, content)]);
-        let out = secret_scan().run(&ctx, &RunInput::default()).unwrap();
+        let t = проект(&[(file, content)]);
+        let out = secret_scan().run(&t.ctx(), &RunInput::default()).unwrap();
         out.findings.into_iter().map(|f| f.rule).collect()
     }
 
@@ -1888,17 +1917,27 @@ mod tests {
         );
         // НЕ секреты, дававшие массовый шум в исходниках (см. бенчмарк gooseek/tron):
         // ссылка на переменную окружения, вызов функции, поле структуры из конфига.
-        assert!(!unq("POSTGRES_PASSWORD=${POSTGRES_PASSWORD}\n"), "ссылка ${{VAR}}");
+        assert!(
+            !unq("POSTGRES_PASSWORD=${POSTGRES_PASSWORD}\n"),
+            "ссылка ${{VAR}}"
+        );
         assert!(!unq("MINIO_SECRET_KEY=$MINIO_SECRET_KEY\n"), "ссылка $VAR");
         assert!(!unq("apiKey = strings.TrimSpace(key)\n"), "вызов функции");
-        assert!(!unq("SecretKey: cfg.YooKassaSecretKey,\n"), "поле структуры из конфига");
-        assert!(!unq("max_tokens: env.AI_MAX_OUTPUT_TOKENS,\n"), "чтение из env");
+        assert!(
+            !unq("SecretKey: cfg.YooKassaSecretKey,\n"),
+            "поле структуры из конфига"
+        );
+        assert!(
+            !unq("max_tokens: env.AI_MAX_OUTPUT_TOKENS,\n"),
+            "чтение из env"
+        );
     }
 
     #[test]
     fn t04_секрет_в_strings_xml() {
         // Android strings.xml: <string name="api_key">СЕКРЕТ</string>.
-        let src = "<resources>\n  <string name=\"api_key\">a8Kd9Lm2Qx7Zp1Rv4Tsy</string>\n</resources>\n";
+        let src =
+            "<resources>\n  <string name=\"api_key\">a8Kd9Lm2Qx7Zp1Rv4Tsy</string>\n</resources>\n";
         assert!(secret_hits("strings.xml", src).contains(&"generic-secret-xml".to_string()));
     }
 
@@ -1962,7 +2001,11 @@ mod tests {
         let mut uniq = ids.clone();
         uniq.sort_unstable();
         uniq.dedup();
-        assert_eq!(ids.len(), uniq.len(), "дублирующиеся id в таблице секретов: {ids:?}");
+        assert_eq!(
+            ids.len(),
+            uniq.len(),
+            "дублирующиеся id в таблице секретов: {ids:?}"
+        );
     }
 
     // ── T62: единая таблица стеков для теста и линтера ─────────────────────
@@ -1978,8 +2021,8 @@ mod tests {
             ("Gemfile", "ruby"),
         ];
         for (marker, label) in cases {
-            let ctx = tmp(&[(marker, "x")]);
-            let s = detect_stack(&ctx.root).expect("стек распознан");
+            let t = проект(&[(marker, "x")]);
+            let s = detect_stack(t.path()).expect("стек распознан");
             assert_eq!(s.label, *label, "маркер {marker} даёт стек {label}");
         }
     }
@@ -1987,15 +2030,15 @@ mod tests {
     #[test]
     fn t62_detect_stack_по_расширению_csproj() {
         // dotnet распознаётся не по имени файла, а по расширению .csproj.
-        let ctx = tmp(&[("App.csproj", "<Project/>")]);
-        let s = detect_stack(&ctx.root).expect("dotnet распознан по .csproj");
+        let t = проект(&[("App.csproj", "<Project/>")]);
+        let s = detect_stack(t.path()).expect("dotnet распознан по .csproj");
         assert_eq!(s.label, "dotnet");
     }
 
     #[test]
     fn t62_неизвестный_проект_не_распознаётся() {
-        let ctx = tmp(&[("README.md", "текст")]);
-        assert!(detect_stack(&ctx.root).is_none());
+        let t = проект(&[("README.md", "текст")]);
+        assert!(detect_stack(t.path()).is_none());
     }
 
     #[test]
@@ -2003,10 +2046,22 @@ mod tests {
         // Одна строка таблицы несёт И команду теста, И команду линтера: рассинхрона
         // тестовой и линтерной лестниц больше быть не может по построению.
         let table = stack_table();
-        assert!(table.len() >= 12, "ожидались все основные стеки, найдено {}", table.len());
+        assert!(
+            table.len() >= 12,
+            "ожидались все основные стеки, найдено {}",
+            table.len()
+        );
         for s in &table {
-            assert!(!s.test.0.is_empty(), "у стека {} пустой бинарь теста", s.label);
-            assert!(!s.lint.0.is_empty(), "у стека {} пустой бинарь линтера", s.label);
+            assert!(
+                !s.test.0.is_empty(),
+                "у стека {} пустой бинарь теста",
+                s.label
+            );
+            assert!(
+                !s.lint.0.is_empty(),
+                "у стека {} пустой бинарь линтера",
+                s.label
+            );
             assert!(
                 !s.markers.is_empty() || !s.marker_exts.is_empty(),
                 "у стека {} нет маркеров распознавания",
@@ -2018,18 +2073,25 @@ mod tests {
         let mut uniq = labels.clone();
         uniq.sort_unstable();
         uniq.dedup();
-        assert_eq!(labels.len(), uniq.len(), "дублирующиеся метки стеков: {labels:?}");
+        assert_eq!(
+            labels.len(),
+            uniq.len(),
+            "дублирующиеся метки стеков: {labels:?}"
+        );
     }
 
     #[test]
     fn t62_rust_стек_даёт_clippy_и_fmt_фолбэк() {
         // Конкретная проверка строки таблицы: rust даёт cargo test, cargo clippy и
         // фолбэк cargo fmt --check.
-        let ctx = tmp(&[("Cargo.toml", "[package]")]);
-        let s = detect_stack(&ctx.root).unwrap();
+        let t = проект(&[("Cargo.toml", "[package]")]);
+        let s = detect_stack(t.path()).unwrap();
         assert_eq!(s.test, ("cargo", vec!["test", "--quiet"]));
         assert_eq!(s.lint, ("cargo", vec!["clippy", "--quiet"]));
-        assert_eq!(s.lint_fallback, Some(("cargo", vec!["fmt", "--", "--check"])));
+        assert_eq!(
+            s.lint_fallback,
+            Some(("cargo", vec!["fmt", "--", "--check"]))
+        );
     }
 
     // ── T86: разделение сбоя инструмента и находки тестов ──────────────────
@@ -2040,7 +2102,9 @@ mod tests {
         assert!(some_tests_passed("test result: ok. 13 passed; 0 failed"));
         assert!(some_tests_passed("==== 7 passed in 0.2s ===="));
         // Пустой прогон и отсутствие тестов — НЕ доказательство.
-        assert!(!some_tests_passed("running 0 tests\ntest result: ok. 0 passed; 0 failed"));
+        assert!(!some_tests_passed(
+            "running 0 tests\ntest result: ok. 0 passed; 0 failed"
+        ));
         assert!(!some_tests_passed("no tests ran in 0.01s"));
     }
 
@@ -2064,23 +2128,29 @@ mod tests {
     fn t86_сбой_инструмента_даёт_outcome_failed_а_не_skipped() {
         // CapabilityOutput с причиной-сбоем обязан давать Failed, а обычный пропуск —
         // Skipped: именно это разделение мешает выдать пустой/сломанный прогон за успех.
-        let mut failed = CapabilityOutput::default();
-        failed.skipped = Some(
-            "verify/test (rust): сборка/импорт не прошли, could not compile `crate`".into(),
-        );
+        let failed = CapabilityOutput {
+            skipped: Some(
+                "verify/test (rust): сборка/импорт не прошли, could not compile `crate`".into(),
+            ),
+            ..Default::default()
+        };
         assert!(matches!(failed.outcome(), CheckOutcome::Failed(_)));
 
         // Производственная формулировка verify/test и verify/coverage без английского
         // маркера, но с явной пометкой «не отработал», тоже обязана давать Failed (раньше
         // эта строка ошибочно классифицировалась как Skipped).
-        let mut failed_ru = CapabilityOutput::default();
-        failed_ru.skipped = Some(
-            "verify/test (rust): инструмент не отработал (сборка/импорт), прогон тестов не состоялся".into(),
-        );
+        let failed_ru = CapabilityOutput {
+            skipped: Some(
+                "verify/test (rust): инструмент не отработал (сборка/импорт), прогон тестов не состоялся".into(),
+            ),
+            ..Default::default()
+        };
         assert!(matches!(failed_ru.outcome(), CheckOutcome::Failed(_)));
 
-        let mut skipped = CapabilityOutput::default();
-        skipped.skipped = Some("verify/test (rust): тесты не найдены/не настроены".into());
+        let skipped = CapabilityOutput {
+            skipped: Some("verify/test (rust): тесты не найдены/не настроены".into()),
+            ..Default::default()
+        };
         assert!(matches!(skipped.outcome(), CheckOutcome::Skipped(_)));
     }
 

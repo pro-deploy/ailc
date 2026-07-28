@@ -75,11 +75,16 @@ struct Pat {
     kind: SymbolKind,
 }
 
-fn pat(re: &str, kind: SymbolKind) -> Pat {
-    Pat {
-        re: Regex::new(re).expect("статический паттерн валиден"),
-        kind,
-    }
+/// Паттерн извлечения символа. `None` означает, что встроенный литерал невалиден: тогда
+/// выпадает ОДИН паттерн, а не весь разбор и не процесс целиком (см. `crate::re`).
+fn pat(re: &str, kind: SymbolKind) -> Option<Pat> {
+    crate::re::compile(re).map(|re| Pat { re, kind })
+}
+
+/// Собрать таблицу паттернов, отбросив несобравшиеся: единственная точка, где отказ
+/// отдельного литерала превращается в отсутствие одного паттерна.
+fn pats(v: Vec<Option<Pat>>) -> Vec<Pat> {
+    v.into_iter().flatten().collect()
 }
 
 /// Таблица «расширение → паттерны символов». Группа 1 каждого паттерна = имя символа.
@@ -91,101 +96,101 @@ fn table() -> &'static HashMap<&'static str, Vec<Pat>> {
 
         m.insert(
             "go",
-            vec![
+            pats(vec![
                 pat(r"^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*[\(\[]", Function),
                 pat(r"^\s*type\s+([A-Za-z_]\w*)\s", Type),
-            ],
+            ]),
         );
 
         m.insert(
             "rs",
-            vec![
+            pats(vec![
                 pat(r"^\s*(?:pub\s+(?:\([^)]*\)\s+)?)?(?:async\s+)?fn\s+([A-Za-z_]\w*)", Function),
                 pat(r"^\s*(?:pub\s+)?struct\s+([A-Za-z_]\w*)", Type),
                 pat(r"^\s*(?:pub\s+)?enum\s+([A-Za-z_]\w*)", Enum),
                 pat(r"^\s*(?:pub\s+)?trait\s+([A-Za-z_]\w*)", Trait),
-            ],
+            ]),
         );
 
         m.insert(
             "py",
-            vec![
+            pats(vec![
                 pat(r"^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)", Function),
                 pat(r"^\s*class\s+([A-Za-z_]\w*)", Class),
-            ],
+            ]),
         );
 
-        let web = vec![
+        let web = pats(vec![
             pat(r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)", Function),
             pat(r"^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)", Class),
             pat(r"^\s*(?:export\s+)?interface\s+([A-Za-z_$][\w$]*)", Interface),
             pat(r"^\s*(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?\([^)]*\)\s*(?::\s*[^=]+)?=>", Function),
-        ];
+        ]);
         for e in ["ts", "tsx", "js", "jsx", "mjs", "cjs"] {
             m.insert(e, web.clone());
         }
 
         m.insert(
             "java",
-            vec![
+            pats(vec![
                 pat(r"^\s*(?:public|private|protected)?\s*(?:abstract\s+|final\s+)?(?:class|interface|enum)\s+([A-Za-z_]\w*)", Type),
                 pat(r"^\s*(?:public|private|protected)\s+(?:static\s+|final\s+|synchronized\s+)*[\w<>\[\],\s\.]+\s+([A-Za-z_]\w*)\s*\(", Method),
-            ],
+            ]),
         );
 
-        let kt = vec![
+        let kt = pats(vec![
             pat(r"^\s*(?:public\s+|private\s+|protected\s+|internal\s+)?(?:suspend\s+)?fun\s+([A-Za-z_]\w*)", Function),
             pat(r"^\s*(?:public\s+|private\s+|protected\s+|internal\s+)?(?:data\s+|sealed\s+|abstract\s+|open\s+)?(?:class|interface|object)\s+([A-Za-z_]\w*)", Class),
-        ];
+        ]);
         for e in ["kt", "kts"] {
             m.insert(e, kt.clone());
         }
 
         m.insert(
             "swift",
-            vec![
+            pats(vec![
                 pat(r"^\s*(?:public\s+|private\s+|internal\s+|fileprivate\s+|open\s+)?(?:static\s+)?func\s+([A-Za-z_]\w*)", Function),
                 pat(r"^\s*(?:public\s+|private\s+|internal\s+|open\s+)?(?:final\s+)?(?:class|struct|enum|protocol|extension)\s+([A-Za-z_]\w*)", Type),
-            ],
+            ]),
         );
 
         m.insert(
             "cs",
-            vec![pat(
+            pats(vec![pat(
                 r"^\s*(?:public|private|protected|internal)?\s*(?:static\s+|abstract\s+|sealed\s+|partial\s+)*(?:class|interface|struct|enum)\s+([A-Za-z_]\w*)",
                 Type,
-            )],
+            )]),
         );
 
         // Regex-фолбэк для языков, у которых раньше был ТОЛЬКО AST (теряли символы при
         // сбое парсера). AST остаётся основным слоем; это страховка.
         m.insert(
             "rb",
-            vec![
+            pats(vec![
                 pat(r"^\s*def\s+(?:self\.)?([A-Za-z_]\w*[!?=]?)", Method),
                 pat(r"^\s*class\s+([A-Za-z_]\w*)", Class),
                 pat(r"^\s*module\s+([A-Za-z_]\w*)", Type),
-            ],
+            ]),
         );
         m.insert(
             "php",
-            vec![
+            pats(vec![
                 pat(r"^\s*(?:(?:public|private|protected|static|final|abstract)\s+)*function\s+([A-Za-z_]\w*)", Method),
                 pat(r"^\s*(?:(?:final|abstract)\s+)*class\s+([A-Za-z_]\w*)", Class),
                 pat(r"^\s*interface\s+([A-Za-z_]\w*)", Interface),
                 pat(r"^\s*trait\s+([A-Za-z_]\w*)", Trait),
-            ],
+            ]),
         );
-        let scala = vec![
+        let scala = pats(vec![
             pat(r"^\s*(?:override\s+)?def\s+([A-Za-z_]\w*)", Method),
             pat(r"^\s*(?:(?:final|sealed|abstract|case)\s+)*class\s+([A-Za-z_]\w*)", Class),
             pat(r"^\s*(?:case\s+)?object\s+([A-Za-z_]\w*)", Type),
             pat(r"^\s*trait\s+([A-Za-z_]\w*)", Trait),
-        ];
+        ]);
         for e in ["scala", "sc"] {
             m.insert(e, scala.clone());
         }
-        let cpp = vec![pat(r"^\s*(?:struct|class)\s+([A-Za-z_]\w*)", Type)];
+        let cpp = pats(vec![pat(r"^\s*(?:struct|class)\s+([A-Za-z_]\w*)", Type)]);
         for e in ["c", "cpp", "cc", "cxx", "h", "hpp", "hh", "hxx"] {
             m.insert(e, cpp.clone());
         }
@@ -643,8 +648,17 @@ fn is_entry_point(rel: &str, content: &str) -> bool {
     let name = lower.rsplit(['/', '\\']).next().unwrap_or(&lower);
     if matches!(
         name,
-        "main.go" | "main.rs" | "main.py" | "__main__.py" | "app.py" | "server.py"
-            | "index.ts" | "index.js" | "index.tsx" | "main.ts" | "manage.py"
+        "main.go"
+            | "main.rs"
+            | "main.py"
+            | "__main__.py"
+            | "app.py"
+            | "server.py"
+            | "index.ts"
+            | "index.js"
+            | "index.tsx"
+            | "main.ts"
+            | "manage.py"
     ) {
         return true;
     }
@@ -768,7 +782,11 @@ fn tarjan_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
             if next < adj[v].len() {
                 // Берём очередного соседа и продвигаем счётчик кадра.
                 let w = adj[v][next];
-                call_stack.last_mut().expect("кадр на вершине стека").1 += 1;
+                // Кадр на вершине есть по построению обхода; при его отсутствии шаг просто
+                // пропускается, а не завершает процесс, обслуживающий чужой репозиторий.
+                if let Some(frame) = call_stack.last_mut() {
+                    frame.1 += 1;
+                }
                 if indices[w] == usize::MAX {
                     // Спускаемся в непосещённого соседа новым кадром (вместо рекурсии).
                     call_stack.push((w, 0));
@@ -779,8 +797,9 @@ fn tarjan_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
                 // Все соседи обработаны: «возврат» из вершины.
                 if low[v] == indices[v] {
                     let mut comp = Vec::new();
-                    loop {
-                        let w = comp_stack.pop().expect("комп-стек Tarjan непуст");
+                    // Стек компоненты непуст по инварианту алгоритма Тарьяна; исчерпание
+                    // стека прекращает выделение компоненты, а не работу процесса.
+                    while let Some(w) = comp_stack.pop() {
                         on_stack[w] = false;
                         comp.push(w);
                         if w == v {
@@ -1015,7 +1034,8 @@ fn import_targets(lang: &str, content: &str) -> Vec<String> {
                     if !path.is_empty() {
                         out.push(path.replace('\\', "/"));
                     }
-                } else if (t.starts_with("require") || t.starts_with("include")) && t.contains('(') {
+                } else if (t.starts_with("require") || t.starts_with("include")) && t.contains('(')
+                {
                     if let Some(s) = quoted_any(t) {
                         out.push(s);
                     }
@@ -1099,13 +1119,9 @@ struct OutboundHit {
 fn outbound_res() -> &'static Vec<(Regex, &'static str)> {
     static R: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
     R.get_or_init(|| {
-        let mk = |p: &str, proto: &'static str| {
-            (
-                Regex::new(p).expect("встроенный паттерн outbound валиден"),
-                proto,
-            )
-        };
-        vec![
+        // Несобравшийся встроенный паттерн исключает СВОЮ строку таблицы (см. `crate::re`).
+        let mk = |p: &str, proto: &'static str| crate::re::compile(p).map(|re| (re, proto));
+        let rows: Vec<Option<(Regex, &'static str)>> = vec![
             // Полный URL в строковом литерале: http(s)://host/path.
             mk(r#"(?i)["'`](https?://[^"'`\s]+)["'`]"#, "http"),
             // gRPC/прочие транспорты в литералах (grpc/nats/amqp/kafka/redis).
@@ -1138,7 +1154,8 @@ fn outbound_res() -> &'static Vec<(Regex, &'static str)> {
                 r#"(?i)\bHttpClient\b[^\n;]*?["'`](https?://[^"'`]+)["'`]"#,
                 "http",
             ),
-        ]
+        ];
+        rows.into_iter().flatten().collect()
     })
 }
 
@@ -1166,7 +1183,11 @@ fn outbound_in_line(line: &str) -> Vec<OutboundHit> {
 fn scheme_of(s: &str) -> Option<String> {
     let idx = s.find("://")?;
     let scheme = &s[..idx];
-    if scheme.is_empty() || !scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '+') {
+    if scheme.is_empty()
+        || !scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+')
+    {
         return None;
     }
     Some(scheme.to_ascii_lowercase())
@@ -1180,10 +1201,7 @@ fn normalize_outbound_target(raw: &str) -> String {
             let scheme = &trimmed[..p];
             let rest = &trimmed[p + 3..];
             // Отрезаем путь/запрос; убираем user:pass@ перед хостом.
-            let host_part = rest
-                .split(['/', '?', '#'])
-                .next()
-                .unwrap_or(rest);
+            let host_part = rest.split(['/', '?', '#']).next().unwrap_or(rest);
             let host = host_part.rsplit('@').next().unwrap_or(host_part);
             format!("{scheme}://{host}")
         }
@@ -1214,7 +1232,8 @@ fn containers_in_file(rel: &str, content: &str) -> Vec<String> {
 
     // docker-compose: ключи под верхним `services:`. Имя сервиса — ключ с отступом в
     // два пробела (одно слово, заканчивается двоеточием) внутри блока services.
-    let is_compose = file.starts_with("docker-compose") || file == "compose.yaml" || file == "compose.yml";
+    let is_compose =
+        file.starts_with("docker-compose") || file == "compose.yaml" || file == "compose.yml";
     if is_compose {
         let mut in_services = false;
         for line in content.lines() {
@@ -1294,7 +1313,9 @@ fn mask_comments_and_strings(lang: &str, content: &str) -> String {
             }
         }
         if in_triple {
-            let ch = content[i..].chars().next().unwrap();
+            let Some(ch) = content[i..].chars().next() else {
+                break;
+            };
             out.push(if ch == '\n' { '\n' } else { ' ' });
             i += ch.len_utf8();
             continue;
@@ -1309,7 +1330,9 @@ fn mask_comments_and_strings(lang: &str, content: &str) -> String {
                     i += block_close.len();
                     continue;
                 }
-                let ch = content[i..].chars().next().unwrap();
+                let Some(ch) = content[i..].chars().next() else {
+                    break;
+                };
                 out.push(if ch == '\n' { '\n' } else { ' ' });
                 i += ch.len_utf8();
                 continue;
@@ -1322,7 +1345,9 @@ fn mask_comments_and_strings(lang: &str, content: &str) -> String {
                 continue;
             }
         }
-        let ch = content[i..].chars().next().unwrap();
+        let Some(ch) = content[i..].chars().next() else {
+            break;
+        };
         out.push(ch);
         i += ch.len_utf8();
     }
@@ -1482,9 +1507,14 @@ fn c_func_name<'a>(node: &tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>
     let mut d = node.child_by_field_name("declarator")?;
     loop {
         match d.kind() {
-            "identifier" | "field_identifier" | "qualified_identifier" | "operator_name"
+            "identifier"
+            | "field_identifier"
+            | "qualified_identifier"
+            | "operator_name"
             | "destructor_name" => return Some(d),
-            "function_declarator" | "pointer_declarator" | "parenthesized_declarator"
+            "function_declarator"
+            | "pointer_declarator"
+            | "parenthesized_declarator"
             | "reference_declarator" => d = d.child_by_field_name("declarator")?,
             _ => return None,
         }
@@ -1734,8 +1764,12 @@ fn collect_calls(
     let lines: Vec<&str> = content.lines().collect();
 
     // DFS с контекстом: (узел, имя объемлющей функции, квалификатор, вид квалификатора).
-    let mut stack: Vec<(tree_sitter::Node, String, String, String)> =
-        vec![(tree.root_node(), "(верх)".into(), String::new(), String::new())];
+    let mut stack: Vec<(tree_sitter::Node, String, String, String)> = vec![(
+        tree.root_node(),
+        "(верх)".into(),
+        String::new(),
+        String::new(),
+    )];
     while let Some((node, caller, qualifier, qual_kind)) = stack.pop() {
         let mut child_caller = caller.clone();
         let mut child_qualifier = qualifier.clone();
@@ -1824,7 +1858,11 @@ fn trailing_ident(node: tree_sitter::Node, bytes: &[u8]) -> Option<String> {
     while let Some(n) = stack.pop() {
         if matches!(
             n.kind(),
-            "identifier" | "field_identifier" | "property_identifier" | "name" | "simple_identifier"
+            "identifier"
+                | "field_identifier"
+                | "property_identifier"
+                | "name"
+                | "simple_identifier"
         ) {
             if let Some(s) = n.utf8_text(bytes).ok().map(String::from) {
                 return Some(s);
@@ -1879,28 +1917,8 @@ fn contains_word(line: &str, name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ailc_contracts::{Ctx, RunInput};
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    static CNT: AtomicU32 = AtomicU32::new(0);
-
-    /// Уникальная пустая временная папка для файловых фикстур.
-    fn tmp() -> std::path::PathBuf {
-        let n = CNT.fetch_add(1, Ordering::SeqCst);
-        let dir =
-            std::env::temp_dir().join(format!("ailc-codeintel-{}-{}", std::process::id(), n));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn write(dir: &Path, rel: &str, content: &str) {
-        let p = dir.join(rel);
-        if let Some(parent) = p.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(p, content).unwrap();
-    }
+    use ailc_contracts::RunInput;
+    use ailc_testkit::TempTree;
 
     // ───────────────────────── T68: устойчивое чтение ─────────────────────────
 
@@ -2016,23 +2034,21 @@ mod tests {
 
     #[test]
     fn dependency_graph_no_false_cycle_across_services() {
-        let dir = tmp();
+        let t = TempTree::new("codeintel");
         // Два одноимённых пакета utils в разных сервисах не должны сливаться в цикл.
-        write(&dir, "services/a/utils/u.py", "def a_helper():\n    return 1\n");
-        write(
-            &dir,
+        t.write("services/a/utils/u.py", "def a_helper():\n    return 1\n");
+        t.write(
             "services/a/main/m.py",
             "from services.a.utils import a_helper\n",
         );
-        write(&dir, "services/b/utils/u.py", "def b_helper():\n    return 2\n");
-        let ctx = Ctx::new(&dir);
+        t.write("services/b/utils/u.py", "def b_helper():\n    return 2\n");
+        let ctx = t.ctx();
         let g = CodeIntelEngine::dependency_graph(&ctx, &RunInput::default()).unwrap();
         // utils из a и b — РАЗНЫЕ узлы.
         assert!(g.modules.iter().any(|m| m == "services/a/utils"));
         assert!(g.modules.iter().any(|m| m == "services/b/utils"));
         // Никакого цикла быть не должно.
         assert!(g.cycles().is_empty(), "ложный цикл: {:?}", g.cycles());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     // ───────────────────────── T67: outbound и контейнеры ─────────────────────────
@@ -2055,7 +2071,8 @@ mod tests {
 
     #[test]
     fn containers_from_compose() {
-        let yaml = "version: '3'\nservices:\n  api:\n    image: api:latest\n  worker:\n    build: .\n";
+        let yaml =
+            "version: '3'\nservices:\n  api:\n    image: api:latest\n  worker:\n    build: .\n";
         let c = containers_in_file("docker-compose.yml", yaml);
         assert!(c.contains(&"service:api".to_string()));
         assert!(c.contains(&"service:worker".to_string()));
@@ -2070,29 +2087,29 @@ mod tests {
 
     #[test]
     fn service_graph_collects_outbound_and_containers() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("codeintel");
+        t.write(
             "svc/client.go",
             "package svc\nfunc call() { http.Get(\"https://billing.internal/api\") }\n",
         );
-        write(&dir, "Dockerfile", "FROM golang:1.22\n");
-        let ctx = Ctx::new(&dir);
+        t.write("Dockerfile", "FROM golang:1.22\n");
+        let ctx = t.ctx();
         let g = CodeIntelEngine::service_graph(&ctx, &RunInput::default()).unwrap();
-        assert!(g.outbound.iter().any(|o| o.target.contains("billing.internal")));
+        assert!(g
+            .outbound
+            .iter()
+            .any(|o| o.target.contains("billing.internal")));
         assert!(g.containers.iter().any(|c| c == "image:golang:1.22"));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     // ───────────────────────── T66: квалифицированные вызовы ─────────────────────────
 
     #[test]
     fn call_graph_does_not_flag_trait_impl_as_dead() {
-        let dir = tmp();
+        let t = TempTree::new("codeintel");
         // save определён только как метод трейта/impl и нигде не вызывается по имени:
         // не должен попадать в недостижимые (диспетчеризация).
-        write(
-            &dir,
+        t.write(
             "lib.rs",
             "pub trait Store { fn save(&self); }\n\
              pub struct S;\n\
@@ -2100,7 +2117,7 @@ mod tests {
              fn helper() {}\n\
              pub fn entry() { let s = S; }\n",
         );
-        let ctx = Ctx::new(&dir);
+        let ctx = t.ctx();
         let cg = CodeIntelEngine::call_graph(&ctx, &RunInput::default()).unwrap();
         let unreachable = cg.unreachable();
         assert!(
@@ -2108,48 +2125,46 @@ mod tests {
             "метод трейта ложно объявлен мёртвым: {unreachable:?}"
         );
         // Уверенность результата — низкая (эвристика, не жёсткая находка).
-        assert_eq!(cg.reachability_confidence(), ailc_contracts::Confidence::Low);
-        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(
+            cg.reachability_confidence(),
+            ailc_contracts::Confidence::Low
+        );
     }
 
     #[test]
     fn call_graph_ambiguous_name_not_dead() {
-        let dir = tmp();
+        let t = TempTree::new("codeintel");
         // Два разных метода `process` (омонимы): неоднозначное имя нельзя объявлять мёртвым.
-        write(
-            &dir,
+        t.write(
             "a.py",
             "class A:\n    def process(self):\n        return 1\n",
         );
-        write(
-            &dir,
+        t.write(
             "b.py",
             "class B:\n    def process(self):\n        return 2\n",
         );
-        let ctx = Ctx::new(&dir);
+        let ctx = t.ctx();
         let cg = CodeIntelEngine::call_graph(&ctx, &RunInput::default()).unwrap();
         assert!(cg.ambiguous.contains("process"));
         assert!(!cg.unreachable().contains(&"process".to_string()));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     // ───────────────────────── T70: лимит ссылок и компиляция паттернов ─────────────────────────
 
     #[test]
     fn references_are_capped() {
-        let dir = tmp();
+        let t = TempTree::new("codeintel");
         // Создаём заведомо больше MAX_REFERENCES вхождений имени `widget`.
         let mut body = String::new();
         for _ in 0..(MAX_REFERENCES + 50) {
             body.push_str("let widget = 1;\n");
         }
-        write(&dir, "big.rs", &body);
-        let ctx = Ctx::new(&dir);
+        t.write("big.rs", &body);
+        let ctx = t.ctx();
         let r = CodeIntelEngine::references_capped(&ctx, &RunInput::default(), "widget").unwrap();
         assert_eq!(r.hits.len(), MAX_REFERENCES);
         assert!(r.truncated);
         assert!(r.total > MAX_REFERENCES);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

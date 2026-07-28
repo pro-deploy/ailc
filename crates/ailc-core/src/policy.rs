@@ -11,10 +11,10 @@
 //!   во-первых, после загрузки политика сверяется с организационным дефолтом, и при
 //!   любом ослаблении в заметку выносится ЯВНОЕ предупреждение, видимое человеку;
 //!   во-вторых, поддержан доверенный источник вне рабочего дерева через переменную
-//!   окружения `CO_MCP_POLICY` с путём к эталонному файлу, который имеет приоритет над
+//!   окружения `AILC_POLICY` с путём к эталонному файлу, который имеет приоритет над
 //!   файлом проекта;
 //!   в-третьих, поддержана сверка контрольной суммы файла проекта с эталоном через
-//!   переменную окружения `CO_MCP_POLICY_SHA256`: при несовпадении применяется дефолт
+//!   переменную окружения `AILC_POLICY_SHA256`: при несовпадении применяется дефолт
 //!   с предупреждением о подмене.
 //!
 //! Валидация значений (T34). После десериализации диапазоны проверяются явно: веса
@@ -31,17 +31,17 @@ pub const POLICY_FILE: &str = "ailc.policy.toml";
 /// Если переменная задана и файл читается и валиден, он имеет приоритет над файлом
 /// проекта: командный или CI-режим получает политику из источника, который проверяемый
 /// код изменить не может.
-pub const TRUSTED_POLICY_ENV: &str = "CO_MCP_POLICY";
+pub const TRUSTED_POLICY_ENV: &str = "AILC_POLICY";
 
 /// Имя переменной окружения с эталонной контрольной суммой (SHA-256, шестнадцатеричная
 /// строка в нижнем регистре) файла политики проекта. Если задана, фактическая сумма
 /// файла сверяется с эталоном; при несовпадении файл считается подменённым и берётся
 /// дефолт с предупреждением.
-pub const POLICY_SHA256_ENV: &str = "CO_MCP_POLICY_SHA256";
+pub const POLICY_SHA256_ENV: &str = "AILC_POLICY_SHA256";
 
 /// Возвращает (политика, заметка-для-человека о её источнике).
 ///
-/// Порядок разрешения источника: сначала доверенный файл из `CO_MCP_POLICY` (если задан
+/// Порядок разрешения источника: сначала доверенный файл из `AILC_POLICY` (если задан
 /// и валиден), затем файл проекта `ailc.policy.toml`. Любой выбор сопровождается
 /// заметкой, а ослабление относительно организационного дефолта, поломка разбора или
 /// нарушение диапазонов значений добавляют в заметку явное предупреждение.
@@ -49,10 +49,56 @@ pub fn load(root: &Path) -> (PolicyPack, Option<String>) {
     // Чтение окружения вынесено сюда (T33), а вся логика разрешения источника в чистую
     // `load_with`, чтобы тесты проверяли её детерминированно, не мутируя процессное
     // окружение (иначе параллельные тесты, читающие те же переменные, гонялись бы).
-    let trusted = std::env::var_os(TRUSTED_POLICY_ENV)
+    let trusted = crate::env::var_os(TRUSTED_POLICY_ENV)
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty());
-    load_with(root, trusted.as_deref(), trusted_checksum())
+    let (mut pack, note) = load_with(root, trusted.as_deref(), trusted_checksum());
+
+    // Автокалибровка структурных порогов под размер и возраст репозитория. Пороги,
+    // заданные человеком в файле политики, не трогаются: осознанное решение старшего
+    // важнее автоматики. Порог блокировки и веса балла не калибруются вовсе. Факт
+    // калибровки попадает в заметку для человека: подменять правила молча недопустимо.
+    let explicit = explicit_thresholds(root);
+    let refs: Vec<&str> = explicit.iter().map(String::as_str).collect();
+    let scale = crate::calibrate::observe(&ailc_contracts::Ctx::new(root));
+    let cal_note = crate::calibrate::apply(&mut pack.thresholds, scale, &refs);
+
+    let note = match (note, cal_note) {
+        (Some(a), Some(b)) => Some(format!("{a}; {b}")),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    };
+    (pack, note)
+}
+
+/// Имена порогов, ЯВНО заданных человеком в файле политики проекта. Разбор нарочно
+/// текстовый и грубый: нужен лишь факт присутствия ключа в разделе `[thresholds]`,
+/// поскольку значение по умолчанию и значение, совпавшее с умолчанием случайно, для
+/// калибровки различаются принципиально.
+fn explicit_thresholds(root: &Path) -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(root.join(POLICY_FILE)) else {
+        return Vec::new();
+    };
+    let mut in_section = false;
+    let mut names = Vec::new();
+    for line in raw.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_section = t.starts_with("[thresholds]");
+            continue;
+        }
+        if !in_section || t.starts_with('#') {
+            continue;
+        }
+        if let Some((key, _)) = t.split_once('=') {
+            let key = key.trim();
+            if !key.is_empty() {
+                names.push(key.to_string());
+            }
+        }
+    }
+    names
 }
 
 /// Чистое ядро разрешения источника политики (T33/T34): получает уже извлечённые из
@@ -119,7 +165,9 @@ fn parse_and_validate(raw: &str, origin: &str, trusted: bool) -> (PolicyPack, Op
         Err(e) => {
             return (
                 PolicyPack::default(),
-                Some(format!("⚠ битый {POLICY_FILE} ({origin}): {e}; применён дефолт")),
+                Some(format!(
+                    "⚠ битый {POLICY_FILE} ({origin}): {e}; применён дефолт"
+                )),
             );
         }
     };
@@ -187,23 +235,69 @@ fn validate_pack(pp: &PolicyPack) -> std::result::Result<(), Vec<String>> {
             problems.push(format!("вес {name}={v} должен быть неотрицательным числом"));
         }
     }
-    if t.max_defs_per_file == 0 {
-        problems.push("порог max_defs_per_file должен быть больше нуля".into());
+    // ВЕРХНИЕ ГРАНИЦЫ ПОРОГОВ так же обязательны, как нижние.
+    //
+    // Прежде отвергался только ноль, а потолка не было вовсе. Это оставляло проверяемому
+    // репозиторию простой способ обнулить структурные проверки СВОЕЙ ЖЕ политикой и без
+    // единого предупреждения: значения `max_lines`, `max_complexity` и `max_nesting` в
+    // четыре миллиарда, а `doc_coverage_floor` в одну десятитысячную процента проходили как
+    // вполне валидные, после чего правила о длинных файлах, сложности, глубине вложенности и
+    // покрытии документацией не могли сработать никогда. Формально политика оставалась
+    // «настроенной», фактически соответствующие проверки исчезали.
+    //
+    // Границы выбраны как заведомо недостижимые в осмысленном коде, но с большим запасом
+    // относительно значений по умолчанию (400 строк, сложность 50, вложенность 6), чтобы не
+    // мешать проектам с обоснованно мягкими требованиями.
+    const MAX_LINES_CAP: u32 = 20_000;
+    const MAX_COMPLEXITY_CAP: u32 = 1_000;
+    const MAX_NESTING_CAP: usize = 50;
+    const MAX_DEFS_CAP: usize = 2_000;
+
+    if t.max_defs_per_file == 0 || t.max_defs_per_file > MAX_DEFS_CAP {
+        problems.push(format!(
+            "порог max_defs_per_file={} должен быть в пределах 1..={MAX_DEFS_CAP}: за этой \
+             границей правило о god-файле не срабатывает никогда",
+            t.max_defs_per_file
+        ));
     }
-    if t.max_nesting == 0 {
-        problems.push("порог max_nesting должен быть больше нуля".into());
+    if t.max_nesting == 0 || t.max_nesting > MAX_NESTING_CAP {
+        problems.push(format!(
+            "порог max_nesting={} должен быть в пределах 1..={MAX_NESTING_CAP}: за этой \
+             границей правило о глубине вложенности не срабатывает никогда",
+            t.max_nesting
+        ));
     }
-    if t.max_lines == 0 {
-        problems.push("порог max_lines должен быть больше нуля".into());
+    if t.max_lines == 0 || t.max_lines > MAX_LINES_CAP {
+        problems.push(format!(
+            "порог max_lines={} должен быть в пределах 1..={MAX_LINES_CAP}: за этой границей \
+             правило о длинном файле не срабатывает никогда",
+            t.max_lines
+        ));
     }
-    if t.max_complexity == 0 {
-        problems.push("порог max_complexity должен быть больше нуля".into());
+    if t.max_complexity == 0 || t.max_complexity > MAX_COMPLEXITY_CAP {
+        problems.push(format!(
+            "порог max_complexity={} должен быть в пределах 1..={MAX_COMPLEXITY_CAP}: за этой \
+             границей правило о сложности не срабатывает никогда",
+            t.max_complexity
+        ));
     }
+    // Покрытие документацией задаётся в процентах, поэтому осмысленный диапазон это (0, 100].
     if !t.doc_coverage_floor.is_finite() || t.doc_coverage_floor <= 0.0 {
         problems.push("порог doc_coverage_floor должен быть больше нуля".into());
+    } else if t.doc_coverage_floor > 100.0 {
+        problems.push(format!(
+            "порог doc_coverage_floor={} задаётся в процентах и не может превышать 100",
+            t.doc_coverage_floor
+        ));
     }
+    // Близость эмбеддингов нормирована, осмысленный диапазон это (0, 1].
     if !t.semantic_threshold.is_finite() || t.semantic_threshold <= 0.0 {
         problems.push("порог semantic_threshold должен быть больше нуля".into());
+    } else if t.semantic_threshold > 1.0 {
+        problems.push(format!(
+            "порог semantic_threshold={} нормирован и не может превышать 1",
+            t.semantic_threshold
+        ));
     }
     if problems.is_empty() {
         Ok(())
@@ -267,11 +361,49 @@ fn weights_weaker_than_default(pp: &PolicyPack) -> Option<Vec<String>> {
         ("score_low", t.score_low, d.score_low),
         ("score_info", t.score_info, d.score_info),
     ];
-    let lowered: Vec<String> = pairs
+    let mut lowered: Vec<String> = pairs
         .iter()
         .filter(|(_, proj, def)| proj < def)
         .map(|(name, proj, def)| format!("вес {name}={proj} ниже дефолта {def}"))
         .collect();
+
+    // СТРУКТУРНЫЕ ПОРОГИ ТОЖЕ ЕСТЬ ОСЛАБЛЕНИЕ. Прежде сравнивались только веса штрафов и
+    // политика гейта, поэтому поднятие порога длины файла, сложности или вложенности
+    // проходило совершенно молча, хотя по действию это то же самое, что отключить правило:
+    // находок просто не возникает. Занижение требования к покрытию документацией
+    // равносильно ему же.
+    if t.max_lines > d.max_lines {
+        lowered.push(format!(
+            "порог max_lines={} выше дефолта {}: длинные файлы перестают отмечаться",
+            t.max_lines, d.max_lines
+        ));
+    }
+    if t.max_complexity > d.max_complexity {
+        lowered.push(format!(
+            "порог max_complexity={} выше дефолта {}: сложные функции перестают отмечаться",
+            t.max_complexity, d.max_complexity
+        ));
+    }
+    if t.max_nesting > d.max_nesting {
+        lowered.push(format!(
+            "порог max_nesting={} выше дефолта {}: глубокая вложенность перестаёт отмечаться",
+            t.max_nesting, d.max_nesting
+        ));
+    }
+    if t.max_defs_per_file > d.max_defs_per_file {
+        lowered.push(format!(
+            "порог max_defs_per_file={} выше дефолта {}: god-файлы перестают отмечаться",
+            t.max_defs_per_file, d.max_defs_per_file
+        ));
+    }
+    if t.doc_coverage_floor < d.doc_coverage_floor {
+        lowered.push(format!(
+            "порог doc_coverage_floor={} ниже дефолта {}: требование к покрытию документацией \
+             снижено",
+            t.doc_coverage_floor, d.doc_coverage_floor
+        ));
+    }
+
     if lowered.is_empty() {
         None
     } else {
@@ -325,12 +457,20 @@ pub fn weakness_warning(pp: &PolicyPack) -> Option<String> {
 /// SHA-256 в шестнадцатеричной строке нижнего регистра. Самодостаточная реализация без
 /// внешних зависимостей: контрольная сумма политики не должна тащить криптокрейт в ядро,
 /// а сверка с эталоном из доверенного окружения целостности соответствует этой задаче.
-fn sha256_hex(data: &[u8]) -> String {
+/// Шестнадцатеричный SHA-256. Публичен внутри крейта: та же функция нужна кэшу и базовой
+/// линии долга, где прежде применялись самодельные короткие хеши, подверженные совпадениям.
+pub(crate) fn sha256_hex(data: &[u8]) -> String {
     let h = Sha256::digest(data);
     let mut out = String::with_capacity(64);
     for b in h {
-        out.push(char::from_digit((b >> 4) as u32, 16).unwrap());
-        out.push(char::from_digit((b & 0x0f) as u32, 16).unwrap());
+        // Таблица вместо `char::from_digit(..).unwrap()`: полубайт заведомо меньше
+        // шестнадцати, но индексация по константной таблице исключает саму возможность
+        // аварийного завершения, а не полагается на рассуждение о значении.
+        const HEX: [char; 16] = [
+            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+        ];
+        out.push(HEX[(b >> 4) as usize]);
+        out.push(HEX[(b & 0x0f) as usize]);
     }
     out
 }
@@ -462,7 +602,10 @@ mod tests {
         let root = root_with_policy(None);
         let (pp, note) = load_with(&root, None, None);
         assert_eq!(pp.gate.block_at, Severity::High);
-        assert!(note.is_none(), "нет файла означает штатный дефолт без предупреждения");
+        assert!(
+            note.is_none(),
+            "нет файла означает штатный дефолт без предупреждения"
+        );
     }
 
     /// Битый TOML: дефолт плюс ЯВНОЕ предупреждение (T34, инвариант «нет молчаливых
@@ -473,7 +616,10 @@ mod tests {
         let (pp, note) = load_with(&root, None, None);
         assert_eq!(pp.gate.block_at, Severity::High, "применён дефолт");
         let note = note.expect("должна быть заметка о битом файле");
-        assert!(note.contains("битый"), "заметка обязана называть проблему: {note}");
+        assert!(
+            note.contains("битый"),
+            "заметка обязана называть проблему: {note}"
+        );
     }
 
     /// Невалидные значения (отрицательный вес, нулевой порог) отвергаются с заметкой,
@@ -500,7 +646,11 @@ mod tests {
             "name = \"weak\"\n[gate]\nblock_at = \"critical\"\nfamilies = [\"security\"]\n",
         ));
         let (pp, note) = load_with(&root, None, None);
-        assert_eq!(pp.gate.block_at, Severity::Critical, "политика всё же применена");
+        assert_eq!(
+            pp.gate.block_at,
+            Severity::Critical,
+            "политика всё же применена"
+        );
         let note = note.expect("ослабление обязано дать предупреждение");
         assert!(note.contains("СЛАБЕЕ"), "видимое предупреждение: {note}");
     }
@@ -516,7 +666,10 @@ mod tests {
         ));
         let (_pp, note) = load_with(&root, None, None);
         let note = note.expect("источник всегда называется");
-        assert!(note.contains("СЛАБЕЕ"), "занижен вес должно дать предупреждение: {note}");
+        assert!(
+            note.contains("СЛАБЕЕ"),
+            "занижен вес должно дать предупреждение: {note}"
+        );
         assert!(note.contains("score_high"), "назван конкретный вес: {note}");
     }
 
@@ -530,7 +683,10 @@ mod tests {
         ));
         let (_pp, note) = load_with(&root, None, None);
         let note = note.expect("источник всегда называется");
-        assert!(!note.contains("СЛАБЕЕ"), "политика не слабее дефолта: {note}");
+        assert!(
+            !note.contains("СЛАБЕЕ"),
+            "политика не слабее дефолта: {note}"
+        );
     }
 
     /// Доверенный источник вне дерева имеет приоритет над файлом проекта (T33).
@@ -548,7 +704,10 @@ mod tests {
         assert_eq!(pp.name, "org", "приоритет у доверенного источника");
         assert_eq!(pp.gate.block_at, Severity::Medium);
         let note = note.expect("источник назван");
-        assert!(note.contains("org"), "заметка ссылается на доверенный файл: {note}");
+        assert!(
+            note.contains("org"),
+            "заметка ссылается на доверенный файл: {note}"
+        );
         // Доверенный источник не помечается как «СЛАБЕЕ», даже если он слабее дефолта.
         assert!(!note.contains("СЛАБЕЕ"), "доверенный авторитетен: {note}");
     }
@@ -559,9 +718,15 @@ mod tests {
         let root = root_with_policy(None);
         let missing = root.join("нет-такого-файла.toml");
         let (pp, note) = load_with(&root, Some(&missing), None);
-        assert_eq!(pp.name, "default", "нечитаемый доверенный файл означает дефолт");
+        assert_eq!(
+            pp.name, "default",
+            "нечитаемый доверенный файл означает дефолт"
+        );
         let note = note.expect("нечитаемость обязана дать предупреждение");
-        assert!(note.contains("не читается"), "видимое предупреждение: {note}");
+        assert!(
+            note.contains("не читается"),
+            "видимое предупреждение: {note}"
+        );
     }
 
     /// Несовпадение контрольной суммы файла проекта с эталоном отвергает файл как
@@ -572,9 +737,15 @@ mod tests {
             "name = \"tampered\"\n[gate]\nblock_at = \"critical\"\n",
         ));
         let (pp, note) = load_with(&root, None, Some("0".repeat(64)));
-        assert_eq!(pp.name, "default", "подменённый файл отвергнут, взят дефолт");
+        assert_eq!(
+            pp.name, "default",
+            "подменённый файл отвергнут, взят дефолт"
+        );
         let note = note.expect("несовпадение суммы обязано дать предупреждение");
-        assert!(note.contains("контрольная сумма"), "видимое предупреждение: {note}");
+        assert!(
+            note.contains("контрольная сумма"),
+            "видимое предупреждение: {note}"
+        );
     }
 
     /// Совпадение контрольной суммы пропускает файл проекта (T33, позитив).
@@ -597,7 +768,10 @@ mod tests {
         pp.thresholds.score_high = 1.0; // занижен вес High (дефолт 10)
         let w = weakness_warning(&pp).expect("ослабление обнаружено");
         assert!(w.contains("block_at"), "порог в предупреждении: {w}");
-        assert!(w.contains("обрезаны семейства"), "охват в предупреждении: {w}");
+        assert!(
+            w.contains("обрезаны семейства"),
+            "охват в предупреждении: {w}"
+        );
         assert!(w.contains("score_high"), "веса в предупреждении: {w}");
         // Дефолт сам по себе не слабее себя.
         assert!(weakness_warning(&PolicyPack::default()).is_none());
@@ -611,6 +785,80 @@ mod tests {
         assert!(
             weaker_than_default(&pp.gate, &PolicyPack::default()).is_none(),
             "пустой families = все семейства, не ослабление"
+        );
+    }
+
+    /// РЕГРЕССИЯ. У структурных порогов обязана быть ВЕРХНЯЯ граница. Прежде отвергался
+    /// только ноль, поэтому проверяемый репозиторий мог обнулить структурные проверки своей
+    /// же политикой и без единого предупреждения: при пороге в четыре миллиарда правила о
+    /// длинном файле, сложности и вложенности не срабатывают никогда.
+    #[test]
+    fn запредельные_пороги_отвергаются() {
+        let mut pack = PolicyPack::default();
+        pack.thresholds.max_lines = u32::MAX;
+        pack.thresholds.max_complexity = u32::MAX;
+        pack.thresholds.max_nesting = usize::MAX;
+        pack.thresholds.max_defs_per_file = usize::MAX;
+        let problems = validate_pack(&pack).expect_err("запредельные пороги невалидны");
+        for expect in [
+            "max_lines",
+            "max_complexity",
+            "max_nesting",
+            "max_defs_per_file",
+        ] {
+            assert!(
+                problems.iter().any(|p| p.contains(expect)),
+                "названа причина по {expect}: {problems:?}"
+            );
+        }
+    }
+
+    /// Доля в процентах и нормированная близость имеют осмысленные потолки.
+    #[test]
+    fn доли_имеют_потолок() {
+        let mut pack = PolicyPack::default();
+        pack.thresholds.doc_coverage_floor = 1000.0;
+        pack.thresholds.semantic_threshold = 42.0;
+        let problems = validate_pack(&pack).expect_err("доли вне диапазона невалидны");
+        assert!(problems.iter().any(|p| p.contains("doc_coverage_floor")));
+        assert!(problems.iter().any(|p| p.contains("semantic_threshold")));
+    }
+
+    /// Значения по умолчанию обязаны проходить собственную проверку, иначе инструмент
+    /// отвергал бы сам себя.
+    #[test]
+    fn дефолт_валиден() {
+        assert!(validate_pack(&PolicyPack::default()).is_ok());
+    }
+
+    /// РЕГРЕССИЯ. Поднятие структурного порога это ОСЛАБЛЕНИЕ и обязано называться им.
+    /// Прежде сравнивались только веса штрафов и политика гейта, поэтому смягчение порогов
+    /// проходило молча, хотя по действию равносильно отключению правила.
+    #[test]
+    fn поднятый_структурный_порог_считается_ослаблением() {
+        let mut pack = PolicyPack::default();
+        pack.thresholds.max_lines = 10_000;
+        pack.thresholds.doc_coverage_floor = 1.0;
+        let reasons = weights_weaker_than_default(&pack).expect("ослабление распознано");
+        assert!(
+            reasons.iter().any(|r| r.contains("max_lines")),
+            "названо ослабление по длине файла: {reasons:?}"
+        );
+        assert!(
+            reasons.iter().any(|r| r.contains("doc_coverage_floor")),
+            "названо снижение требования к документации: {reasons:?}"
+        );
+    }
+
+    /// Обратная сторона: УЖЕСТОЧЕНИЕ порогов ослаблением не является и предупреждения не даёт.
+    #[test]
+    fn ужесточённый_порог_не_считается_ослаблением() {
+        let mut pack = PolicyPack::default();
+        pack.thresholds.max_lines = 100;
+        pack.thresholds.max_complexity = 10;
+        assert!(
+            weights_weaker_than_default(&pack).is_none(),
+            "строгая политика не помечается ослабленной"
         );
     }
 }

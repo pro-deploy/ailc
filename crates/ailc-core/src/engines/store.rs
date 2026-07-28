@@ -122,7 +122,12 @@ impl Store {
     /// целевое имя), чтобы два одновременных писателя не затёрли промежуточный файл друг
     /// друга до переименования. При любой ошибке временный файл подчищается, чтобы не
     /// копить мусор в каталоге.
-    fn atomic_write(dir: &Path, name: &str, bytes: &[u8]) -> Result<()> {
+    /// Публична внутри крейта: тот же приём нужен генератору управляемых блоков, который
+    /// правит ФАЙЛЫ ПОЛЬЗОВАТЕЛЯ (`CLAUDE.md`, `AGENTS.md`, документы), а не только
+    /// служебное состояние. Там цена рваной записи выше: прямой `fs::write` усекает файл и
+    /// затем дописывает содержимое, поэтому аварийное завершение в этом окне оставляло бы
+    /// пользователя с обрезанным собственным файлом.
+    pub(crate) fn atomic_write(dir: &Path, name: &str, bytes: &[u8]) -> Result<()> {
         let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
         let tmp_name = format!(".{name}{TMP_MARKER}{pid}.{seq}");
@@ -256,7 +261,11 @@ mod tests {
             .flatten()
             .filter_map(|e| e.file_name().into_string().ok())
             .collect();
-        assert_eq!(names, vec!["f.txt".to_string()], "лишних файлов быть не должно");
+        assert_eq!(
+            names,
+            vec!["f.txt".to_string()],
+            "лишних файлов быть не должно"
+        );
     }
 
     #[test]
@@ -280,7 +289,10 @@ mod tests {
         assert!(is_temp_artifact(".baseline.txt.tmp.123.0"));
         assert!(is_temp_artifact(".f.tmp.1.2"));
         assert!(!is_temp_artifact("baseline.txt"), "обычное имя не tmp");
-        assert!(!is_temp_artifact(".gitignore"), "точка-файл без маркера не tmp");
+        assert!(
+            !is_temp_artifact(".gitignore"),
+            "точка-файл без маркера не tmp"
+        );
         assert!(
             !is_temp_artifact("name.tmp.1.2"),
             "без ведущей точки это не наш артефакт"

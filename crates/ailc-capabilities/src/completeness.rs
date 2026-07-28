@@ -38,7 +38,8 @@ fn is_unimplemented_stub(l: &str) -> bool {
         || c.contains("todo!(")                 // Rust: todo!()
         || c.contains("TODO(")                  // Kotlin: TODO("…")
         || c.contains("=???")                   // Scala: def f = ???
-        || cl.contains("unimplementederror(")   // Dart: throw UnimplementedError()
+        || cl.contains("unimplementederror(")
+    // Dart: throw UnimplementedError()
     {
         return true;
     }
@@ -144,7 +145,9 @@ fn is_test_file(file: &str) -> bool {
         || f.contains("/tests/")
         || f.contains(".test.")
         || f.contains(".spec.")
-        || f.rsplit(['/', '\\']).next().is_some_and(|n| n.starts_with("test_"))
+        || f.rsplit(['/', '\\'])
+            .next()
+            .is_some_and(|n| n.starts_with("test_"))
 }
 
 /// Точка входа/служебное имя — её «вызывает» рантайм, описание необязательно.
@@ -231,7 +234,10 @@ impl Capability for UndocumentedCheck {
 
     fn run(&self, ctx: &Ctx, input: &RunInput) -> Result<CapabilityOutput> {
         // Порог покрытия документацией — из PolicyPack (а не магическое число).
-        let floor = ailc_core::policy::load(&ctx.root).0.thresholds.doc_coverage_floor;
+        let floor = ailc_core::policy::load(&ctx.root)
+            .0
+            .thresholds
+            .doc_coverage_floor;
         let syms = CodeIntelEngine::symbols(ctx, input)?;
         let mut out = CapabilityOutput::default();
 
@@ -269,12 +275,16 @@ impl Capability for UndocumentedCheck {
         let coverage = 100.0 * documented as f64 / total as f64;
 
         for s in undocumented.iter().take(40) {
-            out.records
-                .push(format!("{}:{} [{}] {} {}", s.file, s.line, s.lang, s.kind, s.name));
+            out.records.push(format!(
+                "{}:{} [{}] {} {}",
+                s.file, s.line, s.lang, s.kind, s.name
+            ));
         }
         if undocumented.len() > 40 {
-            out.records
-                .push(format!("… ещё {} символов без описания", undocumented.len() - 40));
+            out.records.push(format!(
+                "… ещё {} символов без описания",
+                undocumented.len() - 40
+            ));
         }
         out.metrics.push(("public_symbols".into(), total as f64));
         out.metrics.push(("documented".into(), documented as f64));

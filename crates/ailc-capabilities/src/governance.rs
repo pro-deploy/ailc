@@ -18,8 +18,7 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Схема входа: проверка по всему проекту, опциональный подпуть.
-const TARGET_SCHEMA: &str =
-    r#"{"type":"object","properties":{"target":{"type":"string"}}}"#;
+const TARGET_SCHEMA: &str = r#"{"type":"object","properties":{"target":{"type":"string"}}}"#;
 
 /// Исходник ли это — единый источник `scan::SOURCE_CODE` (был свой урезанный список).
 fn is_source_ext(ext: &str) -> bool {
@@ -74,7 +73,9 @@ fn parse_attrs(mut rest: &str) -> (RuleAttrs, &str) {
     let mut attrs = RuleAttrs::default();
     loop {
         rest = rest.trim_start();
-        let Some(r) = rest.strip_prefix('[') else { break };
+        let Some(r) = rest.strip_prefix('[') else {
+            break;
+        };
         let Some(end) = r.find(']') else { break };
         let tag = r[..end].trim();
         if tag.eq_ignore_ascii_case("warn") {
@@ -208,7 +209,9 @@ fn mask_comments_and_strings(ext: &str, content: &str) -> String {
 
     while i < bytes.len() {
         let rest = &content[i..];
-        let ch = content[i..].chars().next().unwrap();
+        let Some(ch) = content[i..].chars().next() else {
+            break;
+        };
 
         // Перевод строки завершает однострочный комментарий и сбрасывается дословно.
         if ch == '\n' {
@@ -266,7 +269,9 @@ fn mask_comments_and_strings(ext: &str, content: &str) -> String {
                 out.push(' ');
                 i += ch.len_utf8();
                 if i < bytes.len() {
-                    let next = content[i..].chars().next().unwrap();
+                    let Some(next) = content[i..].chars().next() else {
+                        break;
+                    };
                     out.push(' ');
                     i += next.len_utf8();
                 }
@@ -403,9 +408,8 @@ impl Capability for ConstitutionCheck {
 
         let rules = parse_constitution(&text);
         if rules.is_empty() {
-            out.skipped = Some(
-                "файл конституции не содержит правил FORBID/REQUIRE/REQUIRE_EACH".into(),
-            );
+            out.skipped =
+                Some("файл конституции не содержит правил FORBID/REQUIRE/REQUIRE_EACH".into());
             out.summary = "quality.check/constitution: пропущено (нет правил)".into();
             return Ok(out);
         }
@@ -523,7 +527,11 @@ impl Capability for ConstitutionCheck {
                 ConstRule::Forbid(needle, attrs) => {
                     // Находка на КАЖДОЕ исполняемое вхождение, а не только на первое.
                     // `[warn]` понижает серьёзность до Medium: видно, но не блокирует.
-                    let sev = if attrs.warn { Severity::Medium } else { Severity::High };
+                    let sev = if attrs.warn {
+                        Severity::Medium
+                    } else {
+                        Severity::High
+                    };
                     if let Some(hits) = forbid_hits.get(&ri) {
                         for (file, line) in hits {
                             out.findings.push(Finding::new(
@@ -542,7 +550,11 @@ impl Capability for ConstitutionCheck {
                     }
                 }
                 ConstRule::Require(needle, attrs) => {
-                    let sev = if attrs.warn { Severity::Low } else { Severity::Medium };
+                    let sev = if attrs.warn {
+                        Severity::Low
+                    } else {
+                        Severity::Medium
+                    };
                     if !require_seen.contains(&ri) {
                         out.findings.push(Finding::new(
                             "constitution-require",
@@ -558,15 +570,17 @@ impl Capability for ConstitutionCheck {
                 ConstRule::RequireEach(needle, attrs) => {
                     // Находка на КАЖДЫЙ релевантный файл, где маркер отсутствует: это и
                     // есть контроль покрытия, которого не давало старое REQUIRE.
-                    let sev = if attrs.warn { Severity::Low } else { Severity::Medium };
+                    let sev = if attrs.warn {
+                        Severity::Low
+                    } else {
+                        Severity::Medium
+                    };
                     if let Some(missing) = require_each_missing.get(&ri) {
                         for file in missing {
                             out.findings.push(Finding::new(
                                 "constitution-require",
                                 sev,
-                                format!(
-                                    "Требуемое отсутствует в файле (REQUIRE_EACH): {needle}"
-                                ),
+                                format!("Требуемое отсутствует в файле (REQUIRE_EACH): {needle}"),
                                 Some(Location {
                                     file: file.clone(),
                                     line: 1,
@@ -624,9 +638,7 @@ fn parse_layers(text: &str) -> BTreeMap<String, BTreeSet<String>> {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        map.entry(module.to_string())
-            .or_default()
-            .extend(allowed);
+        map.entry(module.to_string()).or_default().extend(allowed);
     }
     map
 }
@@ -710,9 +722,7 @@ impl Capability for LayersCheck {
                 out.findings.push(Finding {
                     rule: "layer-violation".into(),
                     severity: Severity::Medium,
-                    message: format!(
-                        "Нарушение слоёв: {from} не должен зависеть от {to}"
-                    ),
+                    message: format!("Нарушение слоёв: {from} не должен зависеть от {to}"),
                     location: None,
                     evidence: None,
                     verified: true,
@@ -733,9 +743,9 @@ impl Capability for LayersCheck {
     }
 }
 
-/// Регистрирует governance-capability.
 // ───────────────────────── governance/rule-add ─────────────────────────
 
+/// Схема входа инструмента `governance/rule-add`.
 const RULE_ADD_SCHEMA: &str = r#"{"type":"object","properties":{"query":{"type":"string","description":"Строка правила: FORBID/REQUIRE/REQUIRE_EACH [warn] [in: путь] <подстрока> # обоснование"}},"required":["query"]}"#;
 
 /// `governance/rule-add` — закон одной репликой.
@@ -773,6 +783,163 @@ impl RuleAdd {
     }
 }
 
+// ───────────────── компиляция правила из фразы естественного языка ─────────────────
+
+/// Перевести фразу человека в строку правила конституции.
+///
+/// Прежде эту работу выполняла нейросеть среды разработки: пользователь говорил «запрети
+/// console.log», модель переводила фразу в `FORBID console.log`, а ailc лишь применял
+/// результат. Такой порядок неудобен и ненадёжен: он требует клиента с моделью, даёт
+/// разный результат от прогона к прогону и превращает правило команды, то есть закон
+/// проекта, в продукт вероятностного вывода. Перевод выполняется здесь, детерминированно
+/// и без сети, поэтому одна и та же фраза всегда даёт одно и то же правило.
+///
+/// Разбор намеренно консервативен: если директиву или предмет правила распознать не
+/// удалось, возвращается `None`, и пользователь получает внятный отказ вместо
+/// правдоподобного, но неверного закона.
+pub fn compile_rule(phrase: &str) -> Option<String> {
+    let raw = phrase.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let lower = raw.to_lowercase();
+
+    // 1. Директива. Порядок проверки важен: «в каждом файле» превращает требование в
+    //    контроль ПОКРЫТИЯ, а не в разовое присутствие маркера где-то в дереве.
+    const FORBID_WORDS: &[&str] = &[
+        "запрет",
+        "запрещ",
+        "нельзя",
+        "не должно",
+        "не должен",
+        "не использ",
+        "убер",
+        "недопустим",
+        "предупрежд",
+        "forbid",
+        "ban ",
+        "no ",
+    ];
+    const REQUIRE_WORDS: &[&str] = &[
+        "требу",
+        "должно быть",
+        "должен быть",
+        "обязател",
+        "нужно",
+        "добавь",
+        "require",
+        "must ",
+    ];
+    const EACH_WORDS: &[&str] = &[
+        "в каждом",
+        "каждый файл",
+        "в каждый",
+        "всюду",
+        "повсюду",
+        "во всех файлах",
+        "each ",
+    ];
+
+    let has = |words: &[&str]| words.iter().any(|w| lower.contains(w));
+    let directive = if has(FORBID_WORDS) {
+        "FORBID"
+    } else if has(EACH_WORDS) && has(REQUIRE_WORDS) {
+        "REQUIRE_EACH"
+    } else if has(REQUIRE_WORDS) {
+        "REQUIRE"
+    } else {
+        return None; // директива не распознана: закон по догадке не пишется
+    };
+
+    // 2. Предмет правила. Предпочитается явно выделенный фрагмент: в обратных кавычках,
+    //    в кавычках-ёлочках или в обычных кавычках. Это самый надёжный сигнал намерения.
+    let needle = quoted_fragment(raw).or_else(|| code_like_token(raw))?;
+
+    // 3. Область действия: «в папке src», «в каталоге crates/core», «in: путь».
+    let scope = scope_from(&lower, raw);
+
+    // 4. Мягкость: правило-предупреждение вместо блокирующего.
+    let warn = ["предупре", "не блокир", "мягк", "warn"]
+        .iter()
+        .any(|w| lower.contains(w));
+
+    // 5. Обоснование для людей: хвост после «потому что», «так как», «чтобы».
+    let why = ["потому что", "так как", "поскольку", "чтобы", "because"]
+        .iter()
+        .find_map(|m| lower.find(m).map(|i| raw[i..].trim().to_string()));
+
+    let mut line = String::from(directive);
+    if warn {
+        line.push_str(" [warn]");
+    }
+    if let Some(scope) = scope {
+        line.push_str(&format!(" [in: {scope}]"));
+    }
+    line.push(' ');
+    line.push_str(&needle);
+    if let Some(why) = why {
+        line.push_str(" # ");
+        line.push_str(&why);
+    }
+    Some(line)
+}
+
+/// Явно выделенный фрагмент фразы: в обратных кавычках, кавычках-ёлочках или обычных.
+fn quoted_fragment(raw: &str) -> Option<String> {
+    for (open, close) in [('`', '`'), ('«', '»'), ('"', '"'), ('\'', '\'')] {
+        if let Some(i) = raw.find(open) {
+            if let Some(j) = raw[i + open.len_utf8()..].find(close) {
+                let frag = raw[i + open.len_utf8()..i + open.len_utf8() + j].trim();
+                if !frag.is_empty() {
+                    return Some(frag.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Токен, похожий на код: содержит точку, подчёркивание, двойное двоеточие или скобку
+/// вызова, либо целиком записан латиницей. Из нескольких кандидатов берётся самый
+/// длинный: он несёт больше конкретики и меньше рискует совпасть со случайным словом.
+fn code_like_token(raw: &str) -> Option<String> {
+    raw.split_whitespace()
+        .map(|w| w.trim_matches(|c: char| ",;:!?()[]".contains(c)))
+        .filter(|w| w.len() >= 3)
+        .filter(|w| {
+            let codey = w.contains('.') || w.contains('_') || w.contains("::") || w.contains('(');
+            let latin = w
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._:-<>!".contains(c));
+            codey || (latin && w.chars().any(|c| c.is_ascii_alphabetic()))
+        })
+        .max_by_key(|w| w.len())
+        .map(str::to_string)
+}
+
+/// Область действия правила из оборотов «в папке X», «в каталоге X», «in: X».
+fn scope_from(lower: &str, raw: &str) -> Option<String> {
+    for marker in [
+        "в папке ",
+        "в каталоге ",
+        "в директории ",
+        "внутри ",
+        "in: ",
+    ] {
+        if let Some(i) = lower.find(marker) {
+            let tail = raw[i + marker.len()..].trim();
+            let word = tail
+                .split_whitespace()
+                .next()?
+                .trim_matches(|c: char| ",;.!?()[]«»\"'".contains(c));
+            if !word.is_empty() && word.chars().any(|c| c.is_ascii_alphanumeric()) {
+                return Some(word.trim_end_matches('/').to_string());
+            }
+        }
+    }
+    None
+}
+
 const TEAM_SECTION: &str = "## Правила команды";
 
 impl Capability for RuleAdd {
@@ -782,19 +949,31 @@ impl Capability for RuleAdd {
 
     fn run(&self, ctx: &Ctx, input: &RunInput) -> Result<CapabilityOutput> {
         let mut out = CapabilityOutput::default();
-        let line = input
+        let query = input
             .query
             .as_deref()
             .map(str::trim)
             .unwrap_or_default()
             .to_string();
+        // Формальная строка принимается как есть; фраза естественного языка переводится
+        // в строку правила ЗДЕСЬ, детерминированно (см. `compile_rule`), а не нейросетью
+        // среды: закон проекта не должен зависеть от вероятностного вывода и от наличия
+        // модели у клиента.
+        let formal = ["FORBID ", "REQUIRE ", "REQUIRE_EACH "]
+            .iter()
+            .any(|d| query.starts_with(d));
+        let compiled = if formal { None } else { compile_rule(&query) };
+        let line = compiled.clone().unwrap_or_else(|| query.clone());
         // Валидация синтаксиса тем же парсером, что и проверка: что не разобралось,
         // то не станет законом молча.
         let parsed = parse_constitution(&line);
         let [rule] = parsed.as_slice() else {
             out.skipped = Some(
-                "правило не распознано: нужна одна строка вида FORBID/REQUIRE/REQUIRE_EACH \
-                 [warn] [in: путь] <подстрока> # обоснование"
+                "правило не распознано. Допустима либо формальная строка вида \
+                 FORBID/REQUIRE/REQUIRE_EACH [warn] [in: путь] <подстрока> # обоснование, \
+                 либо фраза, из которой видно ДЕЙСТВИЕ (запрети / требуй / требуй в каждом \
+                 файле) и ПРЕДМЕТ правила (лучше в обратных кавычках), например: \
+                 запрети `console.log` в папке src, потому что это отладочный вывод"
                     .into(),
             );
             out.summary = "governance/rule-add: пропущено (не правило)".into();
@@ -839,7 +1018,8 @@ impl Capability for RuleAdd {
             .iter()
             .filter(|f| f.message.contains(&needle))
             .count();
-        out.metrics.push(("violations_now".into(), check.findings.len() as f64));
+        out.metrics
+            .push(("violations_now".into(), check.findings.len() as f64));
         out.summary = format!(
             "governance/rule-add: правило принято → .ailc/constitution.md. Нарушений по \
              конституции сейчас: {} (по этому правилу: {}). Заморозить существующее как \
@@ -860,29 +1040,8 @@ pub fn register(reg: &mut Registry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ailc_testkit::TempTree;
     use std::path::Path;
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    static CNT: AtomicU32 = AtomicU32::new(0);
-
-    /// Уникальная пустая временная папка для файловых фикстур (без внешних зависимостей).
-    fn tmp() -> PathBuf {
-        let n = CNT.fetch_add(1, Ordering::SeqCst);
-        let dir =
-            std::env::temp_dir().join(format!("ailc-governance-{}-{}", std::process::id(), n));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    /// Записать файл по относительному пути внутри корня, создав родительские каталоги.
-    fn write(dir: &Path, rel: &str, content: &str) {
-        let p = dir.join(rel);
-        if let Some(parent) = p.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(p, content).unwrap();
-    }
 
     /// Прогнать ConstitutionCheck по корню без подпути.
     fn run_const(root: &Path) -> CapabilityOutput {
@@ -952,11 +1111,17 @@ REQUIRE_EACH // SPDX
     #[test]
     fn scope_limits_forbid_to_prefix() {
         assert!(in_scope(
-            &RuleAttrs { warn: false, scope: Some("src/ui".into()) },
+            &RuleAttrs {
+                warn: false,
+                scope: Some("src/ui".into())
+            },
             "src/ui/button.tsx"
         ));
         assert!(!in_scope(
-            &RuleAttrs { warn: false, scope: Some("src/ui".into()) },
+            &RuleAttrs {
+                warn: false,
+                scope: Some("src/ui".into())
+            },
             "src/api/db.rs"
         ));
         assert!(in_scope(&RuleAttrs::default(), "любой/путь.rs"));
@@ -1051,119 +1216,118 @@ REQUIRE_EACH // SPDX
 
     #[test]
     fn forbid_reports_every_executable_occurrence() {
-        let dir = tmp();
-        write(&dir, ".ailc/constitution.md", "FORBID unwrap()\n");
-        write(
-            &dir,
+        let t = TempTree::new("governance");
+        t.write(".ailc/constitution.md", "FORBID unwrap()\n");
+        t.write(
             "src/a.rs",
             "fn a() { x.unwrap(); }\nfn b() { y.unwrap(); }\n",
         );
-        write(&dir, "src/b.rs", "fn c() { z.unwrap(); }\n");
-        let out = run_const(&dir);
+        t.write("src/b.rs", "fn c() { z.unwrap(); }\n");
+        let out = run_const(t.path());
         assert_eq!(
             count_rule(&out, "constitution-forbid"),
             3,
             "должны найтись все три исполняемых вхождения, а не только первое"
         );
         // У каждой находки есть привязка к file:line.
-        for f in out.findings.iter().filter(|f| f.rule == "constitution-forbid") {
+        for f in out
+            .findings
+            .iter()
+            .filter(|f| f.rule == "constitution-forbid")
+        {
             assert!(f.location.is_some());
-            assert!(f.verified, "достоверность взята из rule_confidence (Pattern)");
+            assert!(
+                f.verified,
+                "достоверность взята из rule_confidence (Pattern)"
+            );
         }
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn forbid_ignores_comments_and_string_literals() {
-        let dir = tmp();
-        write(&dir, ".ailc/constitution.md", "FORBID unwrap()\n");
+        let t = TempTree::new("governance");
+        t.write(".ailc/constitution.md", "FORBID unwrap()\n");
         // Только комментарий и строковый литерал: ни одной находки быть не должно.
-        write(
-            &dir,
+        t.write(
             "src/a.rs",
             "// не делай unwrap() тут\nlet s = \"unwrap() как текст\";\n",
         );
-        let out = run_const(&dir);
+        let out = run_const(t.path());
         assert_eq!(
             count_rule(&out, "constitution-forbid"),
             0,
             "комментарий и литерал не являются нарушением FORBID"
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn forbid_ignores_test_files() {
-        let dir = tmp();
-        write(&dir, ".ailc/constitution.md", "FORBID unwrap()\n");
+        let t = TempTree::new("governance");
+        t.write(".ailc/constitution.md", "FORBID unwrap()\n");
         // Исполняемое вхождение, но в тест-файле: фикстура, не нарушение прод-кода.
-        write(&dir, "src/foo_test.go", "func T() { x.unwrap() }\n");
-        let out = run_const(&dir);
+        t.write("src/foo_test.go", "func T() { x.unwrap() }\n");
+        let out = run_const(t.path());
         assert_eq!(
             count_rule(&out, "constitution-forbid"),
             0,
             "запрет в тест-файле не считается нарушением"
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     // ───────────────────────── поведение REQUIRE ─────────────────────────
 
     #[test]
     fn require_not_satisfied_by_comment_only_occurrence() {
-        let dir = tmp();
-        write(&dir, ".ailc/constitution.md", "REQUIRE LICENSE-HEADER\n");
+        let t = TempTree::new("governance");
+        t.write(".ailc/constitution.md", "REQUIRE LICENSE-HEADER\n");
         // Маркер встречается ТОЛЬКО в комментарии: требование не закрыто.
-        write(&dir, "src/a.rs", "// LICENSE-HEADER\nfn a() {}\n");
-        let out = run_const(&dir);
+        t.write("src/a.rs", "// LICENSE-HEADER\nfn a() {}\n");
+        let out = run_const(t.path());
         assert_eq!(
             count_rule(&out, "constitution-require"),
             1,
             "вхождение в комментарии не закрывает REQUIRE"
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn require_not_satisfied_by_test_file_only() {
-        let dir = tmp();
-        write(&dir, ".ailc/constitution.md", "REQUIRE MARKER\n");
+        let t = TempTree::new("governance");
+        t.write(".ailc/constitution.md", "REQUIRE MARKER\n");
         // Маркер только в тест-файле: фейк-маркер не должен подделывать покрытие.
-        write(&dir, "src/foo_test.go", "// MARKER\nfunc T() {}\n");
-        write(&dir, "src/a.go", "package a\n");
-        let out = run_const(&dir);
+        t.write("src/foo_test.go", "// MARKER\nfunc T() {}\n");
+        t.write("src/a.go", "package a\n");
+        let out = run_const(t.path());
         assert_eq!(
             count_rule(&out, "constitution-require"),
             1,
             "маркер только в тесте не закрывает REQUIRE"
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn require_satisfied_by_real_executable_occurrence() {
-        let dir = tmp();
-        write(&dir, ".ailc/constitution.md", "REQUIRE register_all\n");
-        write(&dir, "src/a.rs", "fn boot() { register_all(); }\n");
-        let out = run_const(&dir);
+        let t = TempTree::new("governance");
+        t.write(".ailc/constitution.md", "REQUIRE register_all\n");
+        t.write("src/a.rs", "fn boot() { register_all(); }\n");
+        let out = run_const(t.path());
         assert_eq!(
             count_rule(&out, "constitution-require"),
             0,
             "настоящее исполняемое вхождение закрывает REQUIRE"
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     // ───────────────────────── поведение REQUIRE_EACH ─────────────────────────
 
     #[test]
     fn require_each_flags_only_files_without_marker() {
-        let dir = tmp();
-        write(&dir, ".ailc/constitution.md", "REQUIRE_EACH GUARD\n");
+        let t = TempTree::new("governance");
+        t.write(".ailc/constitution.md", "REQUIRE_EACH GUARD\n");
         // Один файл содержит маркер как исполняемую подстроку (покрыт), другой нет.
-        write(&dir, "src/has.rs", "fn f() { let GUARD = 1; }\n");
-        write(&dir, "src/missing.rs", "fn g() { do_work(); }\n");
-        let out = run_const(&dir);
+        t.write("src/has.rs", "fn f() { let GUARD = 1; }\n");
+        t.write("src/missing.rs", "fn g() { do_work(); }\n");
+        let out = run_const(t.path());
         let each: Vec<_> = out
             .findings
             .iter()
@@ -1181,18 +1345,17 @@ REQUIRE_EACH // SPDX
                 .is_some_and(|l| l.file.ends_with("missing.rs")),
             "находка указывает на файл без маркера"
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn require_each_ignores_marker_in_comment_or_test() {
-        let dir = tmp();
-        write(&dir, ".ailc/constitution.md", "REQUIRE_EACH MARK\n");
+        let t = TempTree::new("governance");
+        t.write(".ailc/constitution.md", "REQUIRE_EACH MARK\n");
         // Маркер только в комментарии: покрытие НЕ закрыто, файл нарушает требование.
-        write(&dir, "src/a.rs", "// MARK\nfn a() {}\n");
+        t.write("src/a.rs", "// MARK\nfn a() {}\n");
         // Тест-файл вообще не входит в покрытие (не релевантен) и находки не даёт.
-        write(&dir, "src/a_test.go", "// MARK\nfunc T() {}\n");
-        let out = run_const(&dir);
+        t.write("src/a_test.go", "// MARK\nfunc T() {}\n");
+        let out = run_const(t.path());
         let each = out
             .findings
             .iter()
@@ -1202,34 +1365,79 @@ REQUIRE_EACH // SPDX
             each, 1,
             "файл a.rs нарушает покрытие (маркер только в комментарии), тест не учитывается"
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn require_each_all_covered_yields_no_findings() {
-        let dir = tmp();
-        write(&dir, ".ailc/constitution.md", "REQUIRE_EACH MARK\n");
-        write(&dir, "src/a.rs", "fn a() { let MARK = 1; }\n");
-        write(&dir, "src/b.rs", "fn b() { use_MARK(); }\n");
-        let out = run_const(&dir);
+        let t = TempTree::new("governance");
+        t.write(".ailc/constitution.md", "REQUIRE_EACH MARK\n");
+        t.write("src/a.rs", "fn a() { let MARK = 1; }\n");
+        t.write("src/b.rs", "fn b() { use_MARK(); }\n");
+        let out = run_const(t.path());
         let each = out
             .findings
             .iter()
             .filter(|f| f.rule == "constitution-require" && f.message.contains("REQUIRE_EACH"))
             .count();
         assert_eq!(each, 0, "все релевантные файлы покрыты — нарушений нет");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     // ───────────────────────── пропуски и метрики ─────────────────────────
 
     #[test]
     fn skipped_when_no_constitution_file() {
-        let dir = tmp();
-        write(&dir, "src/a.rs", "fn a() {}\n");
-        let out = run_const(&dir);
-        assert!(out.skipped.is_some(), "без файла конституции проверка пропущена");
+        let t = TempTree::new("governance");
+        t.write("src/a.rs", "fn a() {}\n");
+        let out = run_const(t.path());
+        assert!(
+            out.skipped.is_some(),
+            "без файла конституции проверка пропущена"
+        );
         assert!(out.findings.is_empty());
-        let _ = fs::remove_dir_all(&dir);
+    }
+    /// Компиляция правила из фразы: закон проекта переводится детерминированно, без сети
+    /// и без нейросети, поэтому одна и та же фраза всегда даёт одно и то же правило.
+    #[test]
+    fn фраза_переводится_в_правило() {
+        let cases: &[(&str, &str)] = &[
+            ("запрети `console.log`", "FORBID console.log"),
+            (
+                "нельзя использовать `unwrap()` в папке src",
+                "FORBID [in: src] unwrap()",
+            ),
+            ("требуй `// SPDX` в каждом файле", "REQUIRE_EACH // SPDX"),
+            ("требуй `SECURITY.md`", "REQUIRE SECURITY.md"),
+            (
+                "предупреждай про `println!` в каталоге crates",
+                "FORBID [warn] [in: crates] println!",
+            ),
+        ];
+        for (phrase, expect) in cases {
+            let got =
+                compile_rule(phrase).unwrap_or_else(|| panic!("не скомпилировалось: {phrase}"));
+            assert_eq!(&got, expect, "фраза «{phrase}»");
+        }
+    }
+
+    /// Обоснование человека сохраняется в правиле после решётки.
+    #[test]
+    fn обоснование_переносится_в_правило() {
+        let r = compile_rule("запрети `eval(` потому что это инъекция кода").unwrap();
+        assert!(r.starts_with("FORBID eval("), "директива и предмет: {r}");
+        assert!(
+            r.contains(" # потому что это инъекция кода"),
+            "обоснование: {r}"
+        );
+    }
+
+    /// Нераспознанная фраза даёт отказ, а не правдоподобное, но выдуманное правило.
+    #[test]
+    fn непонятная_фраза_не_становится_законом() {
+        assert!(compile_rule("сделай красиво").is_none());
+        assert!(compile_rule("").is_none());
+        assert!(
+            compile_rule("запрети").is_none(),
+            "без предмета правила нет"
+        );
     }
 }

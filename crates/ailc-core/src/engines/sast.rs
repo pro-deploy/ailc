@@ -201,12 +201,48 @@ fn check_call(call: &Node, callee: &str, bytes: &[u8], rel: &str, out: &mut Vec<
     // константой, давая ложные срабатывания на безопасных файлах. Поток к стоку строит
     // taint-проход; здесь остаются командные исполнители ОС, у которых сам факт
     // непостоянного аргумента самодостаточно подозрителен.
-    const EXEC: &[&str] = &["system", "popen", "execsync", "execfile", "spawnsync"];
-    if EXEC.contains(&lc.as_str()) {
+    //
+    // Список разделён на два по признаку УЧАСТИЯ ОБОЛОЧКИ, потому что именно оболочка
+    // придаёт метасимволам (`;`, `|`, `$()`) исполняемый смысл. У `system`, `popen` и
+    // `execSync` командная строка разбирается оболочкой всегда, поэтому непостоянный
+    // аргумент подозрителен сам по себе. У `execFile`, `spawn` и `spawnSync` программа
+    // и её аргументы передаются ядру раздельно, оболочка не запускается, и подстановка
+    // метасимволов инъекции не даёт: такой вызов флагуется ТОЛЬКО при явном включении
+    // оболочки параметром `shell: true`. Прежде вторая группа флагова́лась наравне с
+    // первой, из-за чего безопасный запуск программы с вычисленным путём объявлялся
+    // инъекцией команд и блокировал сдачу.
+    const SHELL_EXEC: &[&str] = &["system", "popen", "execsync"];
+    const ARGV_EXEC: &[&str] = &["execfile", "spawnsync", "spawn"];
+    let shell_exec = SHELL_EXEC.contains(&lc.as_str());
+    let argv_exec = ARGV_EXEC.contains(&lc.as_str()) && call_enables_shell(call, bytes);
+    if shell_exec || argv_exec {
         if let Some(arg) = first {
             if is_dynamic(arg) {
                 push(out, rel, line, "sast/dynamic-exec", Severity::High, true, None,
                     format!("Динамическое исполнение `{callee}(…)` с непроверенным аргументом — инъекция кода/команд; валидируй ввод или избегай {callee}"));
+            }
+        }
+    }
+
+    // (1b) Динамическое исполнение КОДА: `eval`/`exec` с не-литеральным аргументом.
+    //
+    // Историческая версия правила была снята целиком в пользу потокового стока
+    // `sast/taint-dynamic-exec`, поскольку голый структурный предикат срабатывал и на
+    // `eval(bar)`, где `bar` заведомо является свёрнутой константой. Однако потоковый
+    // сток требует прослеженного источника, а канонический случай `x = eval(user_input)`
+    // источника не имеет: имя переменной не связано с известным входом. В итоге ailc
+    // МОЛЧАЛ на хрестоматийной инъекции кода, что подтвердил контролируемый бенчмарк
+    // (пропуск в группе owasp). Правило возвращается в узком и проверяемом виде: только
+    // безрецепторные `eval`/`exec` (у `regex.exec` есть приёмник, поэтому шума нет) и
+    // только если аргумент не является литералом и не оказывается идентификатором,
+    // которому в этом же файле присваивается строковый литерал.
+    let bare_eval = matches!(lc.as_str(), "eval" | "exec") && !callee.contains('.');
+    if bare_eval {
+        if let Some(arg) = first {
+            let name = arg.utf8_text(bytes).ok().map(str::trim).unwrap_or("");
+            if is_dynamic(arg) && !assigned_literal_in_file(name, bytes) {
+                push(out, rel, line, "sast/dynamic-exec", Severity::High, true, node_evidence(call, bytes),
+                    format!("Исполнение кода из непостоянного значения `{callee}(…)` — инъекция кода (CWE-94); не исполняйте данные, используйте разбор по белому списку"));
             }
         }
     }
@@ -234,7 +270,10 @@ fn check_call(call: &Node, callee: &str, bytes: &[u8], rel: &str, out: &mut Vec<
             // «yaml.load» их НЕ содержит) и алиасы. pickle.loads сохраняем подстрокой.
             let leaf = f.rsplit('.').next().unwrap_or(f.as_str());
             let yaml_de = f.contains("yaml")
-                && matches!(leaf, "load" | "full_load" | "unsafe_load" | "load_all" | "loads");
+                && matches!(
+                    leaf,
+                    "load" | "full_load" | "unsafe_load" | "load_all" | "loads"
+                );
             let unsafe_de = f.contains("pickle.load")
                 || (leaf == "loads" && f.contains("pickle"))
                 || yaml_de
@@ -248,13 +287,71 @@ fn check_call(call: &Node, callee: &str, bytes: &[u8], rel: &str, out: &mut Vec<
                 .and_then(|a| a.utf8_text(bytes).ok())
                 .map(|t| t.to_lowercase())
                 .unwrap_or_default();
-            let safe = args_lc.contains("safeloader") || args_lc.contains("baseloader");
+            // Подстрочный поиск ловил «unsafeloader» как «safeloader»; требуем, чтобы
+            // перед именем загрузчика не стояла буква (граница слова слева).
+            let word_hit = |hay: &str, needle: &str| {
+                hay.match_indices(needle).any(|(i, _)| {
+                    !hay[..i]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| c.is_ascii_alphanumeric())
+                })
+            };
+            let safe = word_hit(&args_lc, "safeloader")
+                || word_hit(&args_lc, "csafeloader")
+                || word_hit(&args_lc, "baseloader");
             if unsafe_de && !safe {
                 push(out, rel, line, "sast/unsafe-deserialize", Severity::High, true, None,
                     format!("Небезопасная десериализация `{callee}(…)` — источник данных может исполнить код; используй безопасный загрузчик"));
             }
         }
     }
+}
+
+/// Включает ли вызов оболочку явным параметром.
+///
+/// Проверяется исходный текст самого вызова на присутствие `shell` со значением истины
+/// (`shell: true` в JavaScript и TypeScript, `shell=True` в Python). Явное `shell: false`
+/// и `shell=False`, равно как и отсутствие параметра, оболочки не включают, а значит
+/// подстановка метасимволов в аргумент инъекцией команд не является.
+fn call_enables_shell(call: &Node, bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(&bytes[call.start_byte()..call.end_byte()]) else {
+        return false;
+    };
+    let lower = text.to_lowercase();
+    let Some(pos) = lower.find("shell") else {
+        return false;
+    };
+    let tail = lower[pos + "shell".len()..].trim_start();
+    let Some(rest) = tail.strip_prefix(':').or_else(|| tail.strip_prefix('=')) else {
+        return false;
+    };
+    rest.trim_start().starts_with("true")
+}
+
+/// Присваивается ли идентификатору `name` строковый или числовой ЛИТЕРАЛ где-либо в этом
+/// файле. Дешёвая текстовая проверка: она нужна лишь для того, чтобы `eval(bar)`, где
+/// `bar` рядом объявлен константой, не считался инъекцией. Ложное «да» здесь безопасно
+/// (правило промолчит), а поток от настоящего ввода всё равно ловится taint-проходом.
+fn assigned_literal_in_file(name: &str, bytes: &[u8]) -> bool {
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    text.lines().any(|l| {
+        let l = l.trim();
+        let Some(rest) = l.strip_prefix(name) else {
+            return false;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            return false;
+        };
+        let v = rest.trim_start();
+        v.starts_with('"') || v.starts_with('\'') || v.starts_with(|c: char| c.is_ascii_digit())
+    })
 }
 
 /// Аргумент не является статическим литералом (значит — переменная/выражение/ввод).
@@ -312,7 +409,7 @@ fn is_interpolated_string(kind: &str) -> bool {
             | "interpolated_string_expression" // c#
             | "encapsed_string"      // php  "...$x..."
             | "heredoc"              // php heredoc
-            | "interpolation"        // обёртка-вставка в ряде грамматик
+            | "interpolation" // обёртка-вставка в ряде грамматик
     )
 }
 
@@ -491,7 +588,7 @@ pub fn scan_pii_logs(ctx: &Ctx, input: &RunInput) -> Result<SastReport> {
         let mut stack = vec![tree.root_node()];
         while let Some(node) = stack.pop() {
             if is_call_node(lang, node.kind()) {
-                check_pii_log(&node, bytes, &rel, &mut rep.findings);
+                check_pii_log(&node, bytes, lang, &rel, &mut rep.findings);
             }
             let mut cur = node.walk();
             for ch in node.children(&mut cur) {
@@ -503,12 +600,157 @@ pub fn scan_pii_logs(ctx: &Ctx, input: &RunInput) -> Result<SastReport> {
     Ok(rep)
 }
 
-/// Вызов похож на логирование: полное имя содержит log/console/print/fmt.
+/// Вызов похож на журналирование: хотя бы один СЕГМЕНТ полного имени вызываемого
+/// совпадает целиком с известным именем журнала (log, logger, logging, console, print,
+/// slog, klog, zap, logrus и подобные).
+///
+/// ПРИЧИНА строгости. Прежняя проверка искала подстроку «log» в любом месте текста
+/// вызова, поэтому журналированием объявлялись `catalog.append(...)`, `login(...)`,
+/// `dialog(...)` и `blog.publish(...)`. ПОСЛЕДСТВИЕ было прямым: правило
+/// compliance.ru/pdn-logs-ast сообщало о персональных данных в журнале там, где журнала
+/// нет вовсе. Ложное срабатывание в жёстком гейте вреднее пропуска: пользователь либо
+/// правит исправный код, либо отключает проверку целиком. Поэтому имя разбивается на
+/// сегменты (границы: точка, двоеточие, стрелка, скобки, знак доллара, подчёркивание,
+/// пробел, а также переход строчной буквы в заглавную), и сегмент обязан совпасть с
+/// известным именем ЦЕЛИКОМ: «catalog», «login», «dialog», «blog» таким сегментом не
+/// являются и журналированием больше не считаются.
 fn is_log_callee(full: &str) -> bool {
-    full.contains("log") // logger.info, logging.info, log.Print, console.log
-        || full.contains("console.")
-        || full.starts_with("print")
-        || full.starts_with("fmt.")
+    const LOG_NAMES: &[&str] = &[
+        // общие имена журнала и его объектов
+        "log", "logs", "logger", "loggers", "logging", "syslog", "audit",
+        // популярные библиотеки журналирования разных экосистем
+        "logrus", "logback", "loguru", "slog", "klog", "zap", "zerolog", "tracing", "winston",
+        "pino", "bunyan",
+        // печать в стандартный вывод, которая на практике служит журналом
+        "console", "print", "printf", "println", "printk", "fprintf", "fmt",
+    ];
+    name_tokens(full)
+        .iter()
+        .any(|t| LOG_NAMES.contains(&t.as_str()))
+}
+
+/// Разбить имя (возможно квалифицированное) на сегменты-лексемы в нижнем регистре.
+///
+/// Границей считается любой символ, не являющийся буквой или цифрой (точка, двоеточие,
+/// стрелка, подчёркивание, скобки, знак доллара, пробел), а также переход от строчной
+/// буквы к заглавной внутри слова (`auditLog` даёт «audit» и «log»). Разбиение нужно
+/// там, где подстрочное сравнение даёт ложные совпадения: `catalog` не содержит сегмента
+/// «log», хотя содержит такую подстроку.
+fn name_tokens(name: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut prev_lower = false;
+    for ch in name.chars() {
+        if ch.is_alphanumeric() {
+            if ch.is_uppercase() && prev_lower && !cur.is_empty() {
+                tokens.push(std::mem::take(&mut cur));
+            }
+            cur.extend(ch.to_lowercase());
+            prev_lower = ch.is_lowercase() || ch.is_numeric();
+        } else {
+            if !cur.is_empty() {
+                tokens.push(std::mem::take(&mut cur));
+            }
+            prev_lower = false;
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    tokens
+}
+
+/// Имя выражает МАСКИРОВАНИЕ значения: среди его лексем есть маскировщик (mask, redact,
+/// anonymize, sanitize, hash и подобные), причём непосредственно перед ним не стоит
+/// отрицающая приставка.
+///
+/// Отрицание учитывается двумя способами. Слитная приставка не образует известной лексемы
+/// вовсе (`unmasked` целиком не совпадает ни с «mask», ни с «masked»), а раздельная
+/// отсекается явно (`not_masked`, `без_маски`). Иначе получалось противоположное смыслу
+/// поведение: слово «unmasked», прямо сообщающее об ОТСУТСТВИИ маскирования, глушило
+/// находку о персональных данных в журнале.
+fn is_masking_name(name: &str) -> bool {
+    const MASK: &[&str] = &[
+        "mask",
+        "masked",
+        "masking",
+        "redact",
+        "redacted",
+        "redaction",
+        "anonymize",
+        "anonymized",
+        "anonymise",
+        "anonymised",
+        "pseudonymize",
+        "sanitize",
+        "sanitized",
+        "scrub",
+        "scrubbed",
+        "obfuscate",
+        "obfuscated",
+        "hash",
+        "hashed",
+        "маска",
+        "маски",
+        "замаскировать",
+        "обезличить",
+    ];
+    const NEGATION: &[&str] = &[
+        "un", "not", "no", "non", "never", "without", "raw", "plain", "без", "не",
+    ];
+    let tokens = name_tokens(name);
+    tokens.iter().enumerate().any(|(i, t)| {
+        MASK.contains(&t.as_str()) && !(i > 0 && NEGATION.contains(&tokens[i - 1].as_str()))
+    })
+}
+
+/// Есть ли среди аргументов вызова признак маскирования: ВЫЗОВ маскировщика
+/// (`mask(...)`, `anonymize(...)`, `.redact()`) либо обращение к полю с таким именем
+/// (`user.masked_passport`).
+///
+/// ПРИЧИНА структурной проверки. Прежде глушение находки происходило по вхождению
+/// подстроки «mask»/«redact»/«anonym» в ЛЮБОМ месте текста аргументов. ПОСЛЕДСТВИЕ:
+/// вызов `logger.info("passport=%s", user.passport, extra={"unmasked": True})` находки не
+/// давал, хотя слово «unmasked» означает ровно обратное, и подавлялось именно то
+/// нарушение, ради которого правило существует. Теперь маскирование обязано быть
+/// действием над значением (вызов или обращение к полю), а не случайным словом в тексте.
+fn args_are_masked(args: &Node, bytes: &[u8], lang: &str) -> bool {
+    let mut stack = vec![*args];
+    while let Some(n) = stack.pop() {
+        let kind = n.kind();
+        let name = if is_call_node(lang, kind) {
+            callee_text(&n, bytes)
+        } else if is_field_access(kind) {
+            n.utf8_text(bytes).ok().map(String::from)
+        } else {
+            None
+        };
+        if let Some(name) = name {
+            if is_masking_name(&name) {
+                return true;
+            }
+        }
+        let mut cur = n.walk();
+        for ch in n.named_children(&mut cur) {
+            stack.push(ch);
+        }
+    }
+    false
+}
+
+/// Узел является обращением к полю или свойству объекта в одной из поддержанных грамматик.
+fn is_field_access(kind: &str) -> bool {
+    matches!(
+        kind,
+        "attribute"                       // python
+            | "member_expression"         // javascript/typescript
+            | "member_access_expression"  // c#
+            | "field_expression"          // c/c++/rust
+            | "selector_expression"       // go
+            | "field_access"              // java
+            | "navigation_expression"     // kotlin
+            | "property_access_expression"
+    )
 }
 
 /// ПДн-токен в идентификаторе: точное совпадение токена после разбиения
@@ -557,52 +799,145 @@ fn has_pii_token(ident: &str) -> bool {
 /// самосрабатыванием на штатной функции CLI, а не дефектом.
 fn taint_sources(lang: &str) -> &'static [&'static str] {
     const PY: &[&str] = &[
-        "request.args", "request.form", "request.values", "request.json", "request.data",
-        "request.get_json", "request.cookies", "request.headers", "request.GET", "request.POST",
-        "request.query_params", "request.META", "request.FILES", "self.get_argument",
-        "os.environ", "os.getenv", "flask.request",
+        "request.args",
+        "request.form",
+        "request.values",
+        "request.json",
+        "request.data",
+        "request.get_json",
+        "request.cookies",
+        "request.headers",
+        "request.GET",
+        "request.POST",
+        "request.query_params",
+        "request.META",
+        "request.FILES",
+        "self.get_argument",
+        "os.environ",
+        "os.getenv",
+        "flask.request",
     ];
     const JS: &[&str] = &[
-        "req.body", "req.query", "req.params", "req.headers", "req.cookies", "req.url",
-        "req.originalUrl", "request.body", "request.query", "request.params", "ctx.query",
-        "ctx.request", "process.env", "location.search", "location.hash",
-        "location.href", "document.location", "document.referrer", "window.name",
+        "req.body",
+        "req.query",
+        "req.params",
+        "req.headers",
+        "req.cookies",
+        "req.url",
+        "req.originalUrl",
+        "request.body",
+        "request.query",
+        "request.params",
+        "ctx.query",
+        "ctx.request",
+        "process.env",
+        "location.search",
+        "location.hash",
+        "location.href",
+        "document.location",
+        "document.referrer",
+        "window.name",
     ];
     const GO: &[&str] = &[
-        ".URL.Query", ".URL.RawQuery", ".FormValue", ".PostFormValue", ".URL.Path", ".Form",
-        ".PostForm", ".Body", ".Header.Get", ".Cookie", "mux.Vars", "os.Getenv",
+        ".URL.Query",
+        ".URL.RawQuery",
+        ".FormValue",
+        ".PostFormValue",
+        ".URL.Path",
+        ".Form",
+        ".PostForm",
+        ".Body",
+        ".Header.Get",
+        ".Cookie",
+        "mux.Vars",
+        "os.Getenv",
     ];
     const JAVA: &[&str] = &[
-        ".getParameter", ".getParameterValues", ".getParameterMap", ".getHeader",
-        ".getHeaders", ".getQueryString", ".getCookies", ".getInputStream", ".getReader",
-        ".getPathInfo", ".getRequestURI", ".getRequestURL", "System.getenv", "System.getProperty",
+        ".getParameter",
+        ".getParameterValues",
+        ".getParameterMap",
+        ".getHeader",
+        ".getHeaders",
+        ".getQueryString",
+        ".getCookies",
+        ".getInputStream",
+        ".getReader",
+        ".getPathInfo",
+        ".getRequestURI",
+        ".getRequestURL",
+        "System.getenv",
+        "System.getProperty",
     ];
     const RUBY: &[&str] = &[
-        "params[", "params.", "cookies[", "ENV[", "request.params", "request.body",
-        "request.GET", "request.POST", "request.query_parameters", "request.env",
-        "request.path", "request.url", "request.referer",
+        "params[",
+        "params.",
+        "cookies[",
+        "ENV[",
+        "request.params",
+        "request.body",
+        "request.GET",
+        "request.POST",
+        "request.query_parameters",
+        "request.env",
+        "request.path",
+        "request.url",
+        "request.referer",
     ];
     // PHP-суперглобалы + getenv/заголовки — основной источник недоверенного ввода.
     const PHP: &[&str] = &[
-        "$_GET", "$_POST", "$_REQUEST", "$_COOKIE", "$_SERVER", "$_FILES", "php://input",
-        "getenv", "apache_request_headers",
+        "$_GET",
+        "$_POST",
+        "$_REQUEST",
+        "$_COOKIE",
+        "$_SERVER",
+        "$_FILES",
+        "php://input",
+        "getenv",
+        "apache_request_headers",
     ];
     const CSHARP: &[&str] = &[
-        "Request.QueryString", "Request.Query", "Request.Form", "Request.Params",
-        "Request.Headers", "Request.Cookies", "Request.Body", "Request.Files", "Request.RawUrl",
+        "Request.QueryString",
+        "Request.Query",
+        "Request.Form",
+        "Request.Params",
+        "Request.Headers",
+        "Request.Cookies",
+        "Request.Body",
+        "Request.Files",
+        "Request.RawUrl",
         "Environment.GetEnvironmentVariable",
     ];
     const RUST: &[&str] = &[
-        "env::var", ".query_string", ".query_pairs", "web::Query", "web::Path",
-        "web::Form", ".headers(",
+        "env::var",
+        ".query_string",
+        ".query_pairs",
+        "web::Query",
+        "web::Path",
+        "web::Form",
+        ".headers(",
     ];
     const KOTLIN: &[&str] = &[
-        "call.parameters", ".queryParameters", ".formParameters", ".receiveText", ".receive(",
-        ".getParameter", ".getHeader", ".getStringExtra", ".getExtras", "System.getenv",
+        "call.parameters",
+        ".queryParameters",
+        ".formParameters",
+        ".receiveText",
+        ".receive(",
+        ".getParameter",
+        ".getHeader",
+        ".getStringExtra",
+        ".getExtras",
+        "System.getenv",
     ];
     const SCALA: &[&str] = &[
-        ".getQueryString", ".queryString", ".rawQueryString", "request.body", ".getParameter",
-        ".getHeader", ".headers", ".cookies", "sys.env",
+        ".getQueryString",
+        ".queryString",
+        ".rawQueryString",
+        "request.body",
+        ".getParameter",
+        ".getHeader",
+        ".headers",
+        ".cookies",
+        "sys.env",
     ];
     // C/C++: return-value источник getenv; argv/stdin исключены как ввод оператора, ввод из
     // сети ловит mark_input_buffer.
@@ -610,13 +945,22 @@ fn taint_sources(lang: &str) -> &'static [&'static str] {
     // Swift (Vapor): req.query/parameters/content, окружение. CommandLine.arguments исключён
     // как ввод оператора.
     const SWIFT: &[&str] = &[
-        ".query", "req.parameters", "req.content", ".queryParameters", ".headers",
-        "ProcessInfo", ".environment",
+        ".query",
+        "req.parameters",
+        "req.content",
+        ".queryParameters",
+        ".headers",
+        "ProcessInfo",
+        ".environment",
     ];
     // Dart (shelf/io/CLI): request.url.queryParameters, headers, окружение, args.
     const DART: &[&str] = &[
-        ".queryParameters", "request.headers", ".requestedUri", "request.url",
-        "Platform.environment", "request.context",
+        ".queryParameters",
+        "request.headers",
+        ".requestedUri",
+        "request.url",
+        "Platform.environment",
+        "request.context",
     ];
     match lang {
         "python" => PY,
@@ -638,6 +982,44 @@ fn taint_sources(lang: &str) -> &'static [&'static str] {
 
 /// Узел-присваивание по языку → Some(augmented). augmented не снимает заражение при
 /// чистом правом значении (`x += y`, а также Go `=` — консервативно, без операторного разбора).
+/// Является ли присваивание ДОПОЛНЯЮЩИМ, с учётом оператора узла.
+///
+/// Нужно там, где по одному виду узла решить нельзя. В грамматике Go простое присваивание и
+/// дополняющее описаны ОДНИМ узлом `assignment_statement`, и он был помечен как дополняющее,
+/// то есть переприсваивание в Go не снимало метку заражения НИКОГДА. Следствие проверялось:
+/// `name := r.FormValue("n"); name = "безопасная константа"; exec.Command("sh","-c",name)`
+/// давал критичную находку на заведомо корректном коде.
+///
+/// Дополняющими считаются операторы, у которых перед знаком равенства стоит арифметический
+/// или побитовый знак (`+=`, `|=`, `<<=` и подобные): такое присваивание сохраняет прежнее
+/// значение как часть нового, поэтому метку снимать нельзя. Простое `=` метку снимает.
+fn assignment_augmented(node: &Node, bytes: &[u8]) -> Option<bool> {
+    if let Some(k) = assignment_kind(node.kind()) {
+        return Some(k);
+    }
+    // Оператор ищем среди прямых потомков узла: это единственный неименованный потомок,
+    // оканчивающийся знаком равенства.
+    let mut cur = node.walk();
+    for ch in node.children(&mut cur) {
+        if ch.is_named() {
+            continue;
+        }
+        let Ok(op) = ch.utf8_text(bytes) else {
+            continue;
+        };
+        let op = op.trim();
+        if op == "=" {
+            return Some(false);
+        }
+        if op.len() > 1 && op.ends_with('=') && !matches!(op, "==" | "!=" | ">=" | "<=") {
+            return Some(true);
+        }
+    }
+    // Оператор не опознан: считаем присваивание простым. Ошибка в эту сторону снимает метку
+    // и потому даёт пропуск, а не ложное срабатывание в жёсткой оси.
+    Some(false)
+}
+
 fn assignment_kind(kind: &str) -> Option<bool> {
     match kind {
         "assignment" => Some(false),                     // python  x = y
@@ -646,13 +1028,16 @@ fn assignment_kind(kind: &str) -> Option<bool> {
         "augmented_assignment_expression" => Some(true), // js/ts   x += y
         "variable_declarator" => Some(false),            // js/ts   let/const x = y
         "short_var_declaration" => Some(false),          // go      x := y
-        "assignment_statement" => Some(true),            // go      x = y / x += y
-        "operator_assignment" => Some(true),             // ruby    x += y
-        "let_declaration" => Some(false),                // rust    let x = y
-        "compound_assignment_expr" => Some(true),        // rust    x += y
-        "property_declaration" => Some(false),           // kotlin  val/var x = y
+        // Go: узел `assignment_statement` покрывает И простое `x = y`, И дополняющее
+        // `x += y`, поэтому по одному лишь виду узла решить нельзя. Здесь возвращается
+        // «неизвестно», а решение принимается по ОПЕРАТОРУ (см. `assignment_augmented`).
+        "assignment_statement" => None,
+        "operator_assignment" => Some(true), // ruby    x += y
+        "let_declaration" => Some(false),    // rust    let x = y
+        "compound_assignment_expr" => Some(true), // rust    x += y
+        "property_declaration" => Some(false), // kotlin  val/var x = y
         "val_definition" | "var_definition" => Some(false), // scala val/var x = y
-        "init_declarator" => Some(false),                // c/c++  T x = y
+        "init_declarator" => Some(false),    // c/c++  T x = y
         "initialized_variable_definition" => Some(false), // dart var x = y
         _ => None,
     }
@@ -673,7 +1058,7 @@ fn mark_input_buffer(call: &Node, tainted: &mut HashSet<String>, bytes: &[u8]) {
     };
     // scanf-семейство: все аргументы-приёмники начиная с указанной позиции заражаются.
     let scan_start: Option<usize> = match full.as_str() {
-        "scanf" => Some(1),            // scanf(fmt, &a, &b, …)
+        "scanf" => Some(1),             // scanf(fmt, &a, &b, …)
         "sscanf" | "fscanf" => Some(2), // (src|stream), fmt, &a, &b, …
         _ => None,
     };
@@ -690,7 +1075,7 @@ fn mark_input_buffer(call: &Node, tainted: &mut HashSet<String>, bytes: &[u8]) {
     // Одно-буферные функции ввода: позиция целевого буфера фиксирована.
     let pos: usize = match full.as_str() {
         "gets" | "fgets" => 0,
-        "fread" => 0,                 // fread(ptr, size, n, stream)
+        "fread" => 0,                      // fread(ptr, size, n, stream)
         "read" | "recv" | "recvfrom" => 1, // read(fd, buf, n) / recv(s, buf, …)
         _ => return,
     };
@@ -713,6 +1098,45 @@ fn inner_ident(node: &Node, bytes: &[u8]) -> Option<String> {
 }
 
 /// Граница функции по языку — новый scope заражения (не течёт между функциями).
+/// ЗАМЫКАНИЕ, то есть функция, ЛЕКСИЧЕСКИ ЗАХВАТЫВАЮЩАЯ окружающую область видимости.
+///
+/// Различение принципиально для анализа потока. Объявленная функция это отдельная область,
+/// достижимая только вызовом, и её локальные переменные с локальными переменными вызывающего
+/// никак не связаны: для неё правильно начинать с ПУСТОГО множества помеченных значений, а
+/// передачу через аргументы описывают межпроцедурные сводки. Замыкание же видит переменные
+/// объемлющей функции напрямую, поэтому пустое множество для него означает, что анализа нет
+/// вовсе.
+///
+/// Практический масштаб пропуска был велик: обработчик события в React или колбэк в Node это
+/// почти всегда стрелочная функция, поэтому код вида
+/// `const c = req.query.c; ... onClick={() => child_process.exec(c)}` давал НОЛЬ находок, как
+/// и `fs.readFile(p, () => exec(c))`. То же относилось к литералу функции в горутине Go и к
+/// лямбде в Java и C#.
+///
+/// В список входят только ВЫРАЖЕНЧЕСКИЕ формы (стрелочная функция, функциональное выражение,
+/// лямбда, литерал функции, замыкание Rust). Объявления функций сюда сознательно НЕ включены,
+/// хотя во вложенном виде они тоже захватывают область в Python и JavaScript: расширять
+/// наследование на них означало бы менять поведение для основной массы кода ради редкого
+/// случая, а цена ошибки в сторону лишних находок в жёсткой оси высока.
+/// Перечень является ПОДМНОЖЕСТВОМ [`is_function_boundary`]: проверка на замыкание имеет
+/// смысл только там, где обход вообще создаёт отдельную область. Формы, которые границей не
+/// считаются (лямбда Python, блок Ruby), и без того обходятся внутри текущей области и
+/// наследуют поток естественным образом.
+fn is_closure(kind: &str) -> bool {
+    matches!(
+        kind,
+        "arrow_function"                    // js/ts
+            | "function_expression"          // js
+            | "generator_function"           // js (выраженческая форма)
+            | "func_literal"                 // go
+            | "lambda_expression"            // java/c#
+            | "local_function_statement"     // c# (локальная функция захватывает область)
+            | "closure_expression"           // rust
+            | "anonymous_function"           // kotlin
+            | "lambda_literal" // kotlin
+    )
+}
+
 fn is_function_boundary(kind: &str) -> bool {
     matches!(
         kind,
@@ -744,14 +1168,25 @@ fn is_function_boundary(kind: &str) -> bool {
 /// базовую переменную (заражение элемента консервативно заражает контейнер).
 fn qualified_path(node: &Node, bytes: &[u8]) -> Option<String> {
     match node.kind() {
-        "identifier" | "variable_name" | "simple_identifier" | "field_identifier"
-        | "property_identifier" | "this" | "self" => node.utf8_text(bytes).ok().map(String::from),
+        "identifier"
+        | "variable_name"
+        | "simple_identifier"
+        | "field_identifier"
+        | "property_identifier"
+        | "this"
+        | "self" => node.utf8_text(bytes).ok().map(String::from),
         // python attribute (obj.attr), js member_expression (obj.field),
         // go selector_expression (x.Field), java field_access, rust field_expression,
         // c#/php member access, kotlin navigation_expression.
-        "attribute" | "member_expression" | "selector_expression" | "field_access"
-        | "field_expression" | "member_access_expression" | "scoped_property_access_expression"
-        | "navigation_expression" | "property_access_expression" => {
+        "attribute"
+        | "member_expression"
+        | "selector_expression"
+        | "field_access"
+        | "field_expression"
+        | "member_access_expression"
+        | "scoped_property_access_expression"
+        | "navigation_expression"
+        | "property_access_expression" => {
             // Нормализуем весь текст доступа, схлопнув пробелы (`self . cmd` → `self.cmd`).
             let text = node.utf8_text(bytes).ok()?;
             let key: String = text.chars().filter(|c| !c.is_whitespace()).collect();
@@ -783,8 +1218,11 @@ fn qualified_path(node: &Node, bytes: &[u8]) -> Option<String> {
             qualified_path(&base, bytes)
         }
         // index-присваивание arr[i]=/m[k]= (прочие языки): заражаем базовую переменную.
-        "subscript_expression" | "index_expression" | "element_reference"
-        | "element_access_expression" | "subscript_argument_list" => {
+        "subscript_expression"
+        | "index_expression"
+        | "element_reference"
+        | "element_access_expression"
+        | "subscript_argument_list" => {
             let base = node
                 .child_by_field_name("object")
                 .or_else(|| node.child_by_field_name("value"))
@@ -835,8 +1273,13 @@ fn left_names(left: &Node, bytes: &[u8]) -> Vec<String> {
     match left.kind() {
         // python tuple/list pattern, js array/object pattern, go expression_list,
         // rust tuple_pattern, ruby left_assignment_list.
-        "pattern_list" | "tuple_pattern" | "list_pattern" | "array_pattern"
-        | "expression_list" | "left_assignment_list" | "tuple_type" => {
+        "pattern_list"
+        | "tuple_pattern"
+        | "list_pattern"
+        | "array_pattern"
+        | "expression_list"
+        | "left_assignment_list"
+        | "tuple_type" => {
             let mut cur = left.walk();
             let kids: Vec<Node> = left.named_children(&mut cur).collect();
             let names: Vec<String> = kids.iter().filter_map(|c| left_name(c, bytes)).collect();
@@ -855,8 +1298,20 @@ fn left_names(left: &Node, bytes: &[u8]) -> Vec<String> {
 fn is_mutating_method(leaf: &str) -> bool {
     matches!(
         leaf,
-        "append" | "push" | "push_str" | "add" | "insert" | "extend" | "put" | "addall"
-            | "concat" | "write" | "set" | "unshift" | "merge" | "update"
+        "append"
+            | "push"
+            | "push_str"
+            | "add"
+            | "insert"
+            | "extend"
+            | "put"
+            | "addall"
+            | "concat"
+            | "write"
+            | "set"
+            | "unshift"
+            | "merge"
+            | "update"
     )
 }
 
@@ -870,6 +1325,18 @@ struct InterProc {
     source_fns: HashSet<String>,
     /// (имя_функции → множество индексов формальных параметров, текущих в сток).
     sink_params: HashMap<String, HashSet<usize>>,
+    /// Имена, объявленные хотя бы раз как СВОБОДНАЯ функция (не метод класса).
+    ///
+    /// Форма вызова обязана соответствовать форме объявления, иначе сводка применяется к
+    /// чужой одноимённой функции. Прежде ключом служило голое имя без учёта файла, класса и
+    /// вида объявления, а сводки объединялись по всему набору файлов языка, поэтому
+    /// `def run(cmd): os.system(cmd)` в одном файле делал стоком ЛЮБОЙ вызов `.run(...)` во
+    /// всём корпусе, а `def get(self): return request.args.get('x')` делал заражённым любой
+    /// `d.get(...)`, включая обращение к обычному словарю. Ложное срабатывание в жёсткой оси
+    /// дороже пропуска, поэтому сопоставление ужесточено (см. `summary_applies`).
+    free_fns: HashSet<String>,
+    /// Имена, объявленные хотя бы раз как МЕТОД класса.
+    method_fns: HashSet<String>,
 }
 
 /// Полиглот taint-анализ на 15 языках. Возвращает находки «источник→сток».
@@ -913,7 +1380,10 @@ pub fn scan_taint(ctx: &Ctx, input: &RunInput) -> Result<SastReport> {
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
-        by_lang.entry(lang).or_default().push(FileSrc { rel, content });
+        by_lang
+            .entry(lang)
+            .or_default()
+            .push(FileSrc { rel, content });
     })?;
 
     // Второй проход: по каждому языку отдельно строим межпроцедурную сводку и ищем потоки.
@@ -943,7 +1413,11 @@ pub fn scan_taint(ctx: &Ctx, input: &RunInput) -> Result<SastReport> {
         // Межпроцедурная сводка по всему набору файлов языка (T09): source-функции +
         // sink-параметры. Парсим каждый файл заново внутри (tree-sitter Tree самоссылочно,
         // дёшево перепарсить, чем хранить дерево рядом с источником через unsafe).
-        let inter = collect_interproc(&ok.iter().map(|s| s.content.as_str()).collect::<Vec<_>>(), &language, lang);
+        let inter = collect_interproc(
+            &ok.iter().map(|s| s.content.as_str()).collect::<Vec<_>>(),
+            &language,
+            lang,
+        );
 
         // Поиск потоков с учётом сводки.
         for s in &ok {
@@ -958,18 +1432,23 @@ pub fn scan_taint(ctx: &Ctx, input: &RunInput) -> Result<SastReport> {
             let mut tainted: HashSet<String> = HashSet::new();
             let mut sanitized: HashMap<String, SanClass> = HashMap::new();
             let mut freed: HashSet<String> = HashSet::new();
-            walk_taint(
-                tree.root_node(),
-                &mut tainted,
-                &mut sanitized,
-                &mut freed,
-                bytes,
-                &s.rel,
-                lang,
-                &inter,
-                0,
-                &mut rep.findings,
-            );
+            // Алиасы импорта действуют на время разбора ЭТОГО файла: канонические имена
+            // модулей у каждого файла свои (см. `with_import_aliases`).
+            let aliases = collect_import_aliases(&s.content, lang);
+            with_import_aliases(aliases, || {
+                walk_taint(
+                    tree.root_node(),
+                    &mut tainted,
+                    &mut sanitized,
+                    &mut freed,
+                    bytes,
+                    &s.rel,
+                    lang,
+                    &inter,
+                    0,
+                    &mut rep.findings,
+                );
+            });
         }
     }
 
@@ -995,28 +1474,54 @@ fn collect_interproc(contents: &[&str], language: &tree_sitter::Language, lang: 
     }
     // (имя, тело, параметры, индекс_файла) по всем функциям набора. Индекс файла прямо
     // указывает на нужные байты, поэтому привязка узла к источнику однозначна.
-    let mut funcs: Vec<(String, Node, Vec<String>, usize)> = Vec::new();
+    let mut funcs: Vec<(String, Node, Vec<String>, usize, bool)> = Vec::new();
     for (i, t) in trees.iter().enumerate() {
         let bytes = contents[i].as_bytes();
-        let mut local: Vec<(String, Node, Vec<String>)> = Vec::new();
+        let mut local: Vec<(String, Node, Vec<String>, bool)> = Vec::new();
         collect_functions_full(t.root_node(), bytes, &mut local);
-        for (name, body, params) in local {
-            funcs.push((name, body, params, i));
+        for (name, body, params, is_method) in local {
+            funcs.push((name, body, params, i, is_method));
         }
     }
 
     let mut inter = InterProc::default();
+    // Вид объявления каждого имени: он решает, к какой форме вызова сводка применима.
+    for (name, _b, _p, _fi, is_method) in &funcs {
+        if *is_method {
+            inter.method_fns.insert(name.clone());
+        } else {
+            inter.free_fns.insert(name.clone());
+        }
+    }
 
     // Фикспойнт source-функций (прямой поток через возвращаемое значение).
+    //
+    // ИМЯ ЗАПИСЫВАЕТСЯ В ТОЙ ФОРМЕ, В КАКОЙ ФУНКЦИЯ ВЫЗЫВАЕТСЯ. Свободная функция вызывается
+    // голым именем, поэтому записывается как есть. Метод вызывается через получателя, а класс
+    // получателя без вывода типов не определить, поэтому метод записывается в единственной
+    // заведомо однозначной форме обращения к своему же классу: `self.имя` и `this.имя`.
+    //
+    // Прежде метод записывался голым именем наравне со свободной функцией, и это давало
+    // ложные связи между несвязанными файлами: объявление `def get(self)`, возвращающее
+    // данные запроса, делало заражённым ЛЮБОЕ обращение `d.get(...)`, включая обычный
+    // словарь. Место применения сравнивает и короткое имя, и полный текст вызываемого,
+    // поэтому такая запись работает без изменений на стороне применения.
     loop {
         let mut changed = false;
-        for (name, body, _params, fi) in &funcs {
-            if inter.source_fns.contains(name) {
+        for (name, body, _params, fi, is_method) in &funcs {
+            let keys: Vec<String> = if *is_method {
+                vec![format!("self.{name}"), format!("this.{name}")]
+            } else {
+                vec![name.clone()]
+            };
+            if keys.iter().any(|k| inter.source_fns.contains(k)) {
                 continue;
             }
             let bytes = contents[*fi].as_bytes();
             if function_returns_taint(*body, bytes, lang, &inter.source_fns) {
-                inter.source_fns.insert(name.clone());
+                for k in keys {
+                    inter.source_fns.insert(k);
+                }
                 changed = true;
             }
         }
@@ -1031,7 +1536,7 @@ fn collect_interproc(contents: &[&str], language: &tree_sitter::Language, lang: 
     // обёрток вида run(cmd){exec(cmd)} и outer(x){run(x)}).
     loop {
         let mut changed = false;
-        for (name, body, params, fi) in &funcs {
+        for (name, body, params, fi, _is_method) in &funcs {
             let bytes = contents[*fi].as_bytes();
             let mut reached = inter.sink_params.get(name).cloned().unwrap_or_default();
             for (idx, pname) in params.iter().enumerate() {
@@ -1060,7 +1565,7 @@ fn collect_interproc(contents: &[&str], language: &tree_sitter::Language, lang: 
 fn collect_functions_full<'a>(
     root: Node<'a>,
     bytes: &[u8],
-    out: &mut Vec<(String, Node<'a>, Vec<String>)>,
+    out: &mut Vec<(String, Node<'a>, Vec<String>, bool)>,
 ) {
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
@@ -1070,7 +1575,7 @@ fn collect_functions_full<'a>(
             {
                 if let Ok(nm) = name.utf8_text(bytes) {
                     let params = function_param_names(&n, bytes);
-                    out.push((nm.to_string(), body, params));
+                    out.push((nm.to_string(), body, params, is_inside_class(&n)));
                 }
             }
         }
@@ -1081,10 +1586,46 @@ fn collect_functions_full<'a>(
     }
 }
 
+/// Объявлена ли функция ВНУТРИ класса, то есть является ли она методом.
+///
+/// Различение нужно для сопоставления сводки с формой вызова (см. `summary_applies`):
+/// свободная функция вызывается голым именем, метод через получателя.
+fn is_inside_class(func: &Node) -> bool {
+    let mut cur = func.parent();
+    while let Some(p) = cur {
+        if matches!(
+            p.kind(),
+            "class_definition"        // python
+                | "class_declaration"  // js/ts/java/kotlin/c#
+                | "class_body"
+                | "class_specifier"    // c++
+                | "class"              // ruby
+                | "impl_item"          // rust
+                | "trait_item"         // rust
+                | "object_declaration" // kotlin
+                | "interface_declaration"
+        ) {
+            return true;
+        }
+        cur = p.parent();
+    }
+    false
+}
+
 /// Имена формальных параметров функции по порядку (T09). Поле `parameters` есть почти у
 /// всех грамматик; внутри каждого параметра берём первый идентификатор (имя), пропуская
 /// типы/модификаторы/значения по умолчанию. Это даёт устойчивое сопоставление по индексу.
 fn function_param_names(func: &Node, bytes: &[u8]) -> Vec<String> {
+    // Краткая форма стрелочной функции (`c => …`) не имеет поля `parameters`: единственный
+    // параметр лежит в поле `parameter` (в единственном числе). Без этой ветви такой
+    // параметр не опознавался вовсе, из-за чего он не перекрывал одноимённую переменную
+    // объемлющей области, и наследование потока в замыкание давало ложное срабатывание на
+    // самой распространённой форме перебора коллекции: `items.map(c => f(c))`.
+    if let Some(single) = func.child_by_field_name("parameter") {
+        if let Some(nm) = inner_ident(&single, bytes) {
+            return vec![nm];
+        }
+    }
     let params = func
         .child_by_field_name("parameters")
         .or_else(|| func.child_by_field_name("parameter_list"));
@@ -1145,8 +1686,16 @@ fn param_sink_walk(
         return false;
     }
     let kind = node.kind();
-    if let Some(augmented) = assignment_kind(kind) {
-        update_taint(&node, tainted, sanitized, bytes, lang, &inter.source_fns, augmented);
+    if let Some(augmented) = assignment_augmented(&node, bytes) {
+        update_taint(
+            &node,
+            tainted,
+            sanitized,
+            bytes,
+            lang,
+            &inter.source_fns,
+            augmented,
+        );
     }
     if matches!(lang, "c" | "cpp") && is_call_node(lang, kind) {
         mark_input_buffer(&node, tainted, bytes);
@@ -1179,10 +1728,23 @@ fn param_sink_walk(
 /// каждом `return` проверяем выражение. Вложенные функции пропускаем (свой анализ).
 /// T09: для C/C++ внутри прохода тоже вызываем mark_input_buffer, чтобы хелпер ввода
 /// (читает в буфер и возвращает его) распознавался как source-функция.
-fn function_returns_taint(body: Node, bytes: &[u8], lang: &str, source_fns: &HashSet<String>) -> bool {
+fn function_returns_taint(
+    body: Node,
+    bytes: &[u8],
+    lang: &str,
+    source_fns: &HashSet<String>,
+) -> bool {
     let mut tainted: HashSet<String> = HashSet::new();
     let mut sanitized: HashMap<String, SanClass> = HashMap::new();
-    returns_taint_walk(body, &mut tainted, &mut sanitized, bytes, lang, source_fns, 0)
+    returns_taint_walk(
+        body,
+        &mut tainted,
+        &mut sanitized,
+        bytes,
+        lang,
+        source_fns,
+        0,
+    )
 }
 
 fn returns_taint_walk(
@@ -1198,8 +1760,10 @@ fn returns_taint_walk(
         return false; // T13: лимит глубины — защита от переполнения стека
     }
     let kind = node.kind();
-    if let Some(augmented) = assignment_kind(kind) {
-        update_taint(&node, tainted, sanitized, bytes, lang, source_fns, augmented);
+    if let Some(augmented) = assignment_augmented(&node, bytes) {
+        update_taint(
+            &node, tainted, sanitized, bytes, lang, source_fns, augmented,
+        );
     }
     // T09: C/C++ хелпер ввода, читающий в буфер и возвращающий его, тоже source-функция.
     if matches!(lang, "c" | "cpp") && is_call_node(lang, kind) {
@@ -1208,7 +1772,16 @@ fn returns_taint_walk(
     if kind == "return_statement" {
         let mut cur = node.walk();
         for ch in node.named_children(&mut cur) {
-            if expr_tainted(&ch, tainted, sanitized, bytes, lang, source_fns, SinkClass::Other, 0) {
+            if expr_tainted(
+                &ch,
+                tainted,
+                sanitized,
+                bytes,
+                lang,
+                source_fns,
+                SinkClass::Other,
+                0,
+            ) {
                 return true;
             }
         }
@@ -1250,12 +1823,14 @@ fn walk_taint(
     }
     let kind = node.kind();
     let source_fns = &inter.source_fns;
-    if let Some(augmented) = assignment_kind(kind) {
+    if let Some(augmented) = assignment_augmented(&node, bytes) {
         // Граница доверия (CWE-501): запись в серверную сессию проверяется ДО update_taint,
         // пока множество отражает состояние перед этим присваиванием (ключ/значение могли
         // быть заражены ранее).
         check_trust_boundary(&node, tainted, bytes, rel, lang, source_fns, out);
-        update_taint(&node, tainted, sanitized, bytes, lang, source_fns, augmented);
+        update_taint(
+            &node, tainted, sanitized, bytes, lang, source_fns, augmented,
+        );
         // T08: переназначение указателя снимает его из множества освобождённых
         // (после `p = malloc(...)`/`p = NULL` использование p снова корректно).
         if matches!(lang, "c" | "cpp") && !freed.is_empty() {
@@ -1268,7 +1843,9 @@ fn walk_taint(
     }
     // T08: модель памяти C/C++ — free/malloc/format-string до классификации обычного стока.
     if matches!(lang, "c" | "cpp") && is_call_node(lang, kind) {
-        check_memory_safety(&node, tainted, sanitized, freed, bytes, rel, lang, source_fns, out);
+        check_memory_safety(
+            &node, tainted, sanitized, freed, bytes, rel, lang, source_fns, out,
+        );
         mark_input_buffer(&node, tainted, bytes);
     }
     // Стоком может быть и вызов, и конструктор (Java/C# `new ProcessBuilder/SqlCommand(...)`).
@@ -1285,22 +1862,89 @@ fn walk_taint(
         check_response_sink(&node, tainted, sanitized, bytes, rel, lang, source_fns, out);
     }
 
+    // Цикл: предварительный сбор меток по всему телу, см. `collect_loop_taint`.
+    if is_loop(kind) {
+        let mut loop_tainted = tainted.clone();
+        let mut loop_sanitized = sanitized.clone();
+        collect_loop_taint(
+            node,
+            &mut loop_tainted,
+            &mut loop_sanitized,
+            bytes,
+            lang,
+            source_fns,
+            depth,
+        );
+        // В основное состояние переносятся ТОЛЬКО новые метки: снятие метки, выполненное
+        // предварительным проходом, игнорируется, иначе присваивание безопасного значения
+        // в конце тела гасило бы заражение, пришедшее в цикл извне. Для вновь заражённых
+        // имён переносится и класс санитизации, чтобы значение, которое тело цикла и
+        // заражает, и очищает, не давало ложного срабатывания.
+        for name in loop_tainted {
+            if tainted.insert(name.clone()) {
+                if let Some(class) = loop_sanitized.get(&name) {
+                    sanitized.insert(name, *class);
+                }
+            }
+        }
+    }
+
     // T12: ветвление — join состояний веток (объединение заражённых), чтобы реассайн в
     // одной ветке не гасил заражение для кода ПОСЛЕ ветвления.
     if is_branching(kind) {
-        walk_branching(node, tainted, sanitized, freed, bytes, rel, lang, inter, depth, out);
+        walk_branching(
+            node, tainted, sanitized, freed, bytes, rel, lang, inter, depth, out,
+        );
         return;
     }
 
     let mut cur = node.walk();
     for ch in node.children(&mut cur) {
         if is_function_boundary(ch.kind()) {
-            let mut inner: HashSet<String> = HashSet::new();
-            let mut inner_san: HashMap<String, SanClass> = HashMap::new();
-            let mut inner_freed: HashSet<String> = HashSet::new();
-            walk_taint(ch, &mut inner, &mut inner_san, &mut inner_freed, bytes, rel, lang, inter, depth + 1, out);
+            // ЗАМЫКАНИЕ НАСЛЕДУЕТ состояние объемлющей области, объявленная функция нет.
+            // Обоснование различия см. в `is_closure`.
+            let (mut inner, mut inner_san, mut inner_freed) = if is_closure(ch.kind()) {
+                (tainted.clone(), sanitized.clone(), freed.clone())
+            } else {
+                (HashSet::new(), HashMap::new(), HashSet::new())
+            };
+            // Собственные ПАРАМЕТРЫ замыкания перекрывают одноимённые переменные снаружи:
+            // внутри тела это уже другое значение, и переносить на него метку объемлющей
+            // переменной значило бы выдумывать поток. Без этого шага наследование давало бы
+            // ложные срабатывания на распространённой форме `items.map(c => render(c))`, где
+            // снаружи есть своя недоверенная переменная `c`.
+            if is_closure(ch.kind()) {
+                for p in function_param_names(&ch, bytes) {
+                    inner.remove(&p);
+                    inner_san.remove(&p);
+                    inner_freed.remove(&p);
+                }
+            }
+            walk_taint(
+                ch,
+                &mut inner,
+                &mut inner_san,
+                &mut inner_freed,
+                bytes,
+                rel,
+                lang,
+                inter,
+                depth + 1,
+                out,
+            );
         } else {
-            walk_taint(ch, tainted, sanitized, freed, bytes, rel, lang, inter, depth + 1, out);
+            walk_taint(
+                ch,
+                tainted,
+                sanitized,
+                freed,
+                bytes,
+                rel,
+                lang,
+                inter,
+                depth + 1,
+                out,
+            );
         }
     }
 }
@@ -1323,6 +1967,218 @@ fn is_branching(kind: &str) -> bool {
             | "conditional_expression"
             | "ternary_expression"
     )
+}
+
+/// Узел вводит ЦИКЛ: тело исполняется повторно, поэтому текстовый порядок операторов
+/// внутри него не совпадает с порядком исполнения.
+fn is_loop(kind: &str) -> bool {
+    matches!(
+        kind,
+        "for_statement"                   // python, js/ts, go, java, c/c++, c#, php, kotlin, swift
+            | "while_statement"
+            | "do_statement"              // js/ts, java, c/c++, c#, php
+            | "do_while_statement"        // kotlin
+            | "for_in_statement"          // js/ts, php-альтернатива
+            | "for_of_statement"          // js/ts
+            | "enhanced_for_statement"    // java
+            | "foreach_statement"         // c#, php
+            | "for_each_statement"
+            | "for_range_loop"            // c++
+            | "for_expression"            // rust, scala
+            | "while_expression"          // rust
+            | "loop_expression"           // rust
+            | "repeat_while_statement"    // swift
+            | "repeat_statement"
+            | "while_modifier"            // ruby (`x while cond`)
+            | "until"                     // ruby
+            | "while"                     // ruby
+            | "for"                       // ruby
+            | "do_block" // ruby (`items.each do |i| ... end`)
+    )
+}
+
+/// Предварительный сбор меток заражения по телу цикла (первый из двух проходов).
+///
+/// ПРИЧИНА. Обход велся один раз и строго в текстовом порядке, а значит соответствовал
+/// ровно одной итерации цикла. ПОСЛЕДСТВИЕ: сток, стоящий в теле цикла ТЕКСТУАЛЬНО РАНЬШЕ
+/// заражающего присваивания, не находился, хотя на второй итерации он получает уже
+/// заражённое значение. Классический пример на Python: `for i in range(2): os.system(cmd);
+/// cmd = request.args.get('c')` не давал ни одной находки, будучи полноценным внедрением
+/// команды.
+///
+/// РЕШЕНИЕ. Тело цикла проходится дважды: настоящий этот проход только СОБИРАЕТ метки, не
+/// выпуская находок, а основной обход затем ищет стоки, уже располагая полным множеством
+/// заражённых имён. Двух проходов достаточно: множество меток растёт монотонно, поэтому
+/// неподвижная точка достигается за один дополнительный обход тела.
+///
+/// СТОИМОСТЬ. Проход линеен по поддереву цикла и сам повторных проходов по вложенным
+/// циклам не делает, поэтому суммарная работа растёт как произведение размера дерева на
+/// глубину вложенности циклов, но не экспоненциально. Ограничение `MAX_TAINT_DEPTH`
+/// действует и здесь, защищая от переполнения стека на глубоко вложенном коде.
+fn collect_loop_taint(
+    node: Node,
+    tainted: &mut HashSet<String>,
+    sanitized: &mut HashMap<String, SanClass>,
+    bytes: &[u8],
+    lang: &str,
+    source_fns: &HashSet<String>,
+    depth: u32,
+) {
+    if depth > MAX_TAINT_DEPTH {
+        return;
+    }
+    let kind = node.kind();
+    if let Some(augmented) = assignment_augmented(&node, bytes) {
+        update_taint(
+            &node, tainted, sanitized, bytes, lang, source_fns, augmented,
+        );
+    }
+    if is_call_node(lang, kind) {
+        mark_mutating_receiver(&node, tainted, sanitized, bytes, lang, source_fns);
+        if matches!(lang, "c" | "cpp") {
+            mark_input_buffer(&node, tainted, bytes);
+        }
+    }
+    let mut cur = node.walk();
+    for ch in node.children(&mut cur) {
+        if is_function_boundary(ch.kind()) {
+            continue; // вложенная функция имеет собственную область видимости
+        }
+        collect_loop_taint(ch, tainted, sanitized, bytes, lang, source_fns, depth + 1);
+    }
+}
+
+// ─── Охранная проверка как санитайзер (T08) ───
+//
+// Канонический безопасный код проверяет недоверенное значение на принадлежность
+// разрешающему списку либо на равенство известной константе и лишь затем передаёт его
+// дальше. Без учёта такой охраны анализ объявлял инъекцией заведомо корректный код, а
+// поскольку ось потока данных жёсткая, вердикт блокировал сдачу исправного проекта.
+// Ложное срабатывание в гейте вреднее пропуска: пользователь либо ломает работающий код,
+// либо отключает проверку целиком.
+//
+// Распознаются две формы. ПОЛОЖИТЕЛЬНАЯ («значение входит в множество», «значение равно
+// константе») делает значение проверенным ВНУТРИ ветки. ОТРИЦАТЕЛЬНАЯ («не входит», «не
+// равно») делает значение проверенным ПОСЛЕ условия, но только если тело ветки прерывает
+// поток управления (возврат, исключение, выход, продолжение цикла): именно эта пара
+// образует охранную конструкцию раннего выхода.
+
+/// Результат разбора условия: имя проверяемой переменной и знак проверки.
+struct Guard {
+    name: String,
+    positive: bool,
+}
+
+/// Разобрать условие ветвления как охранную проверку недоверенного значения.
+///
+/// Поддержаны формы, встречающиеся в подавляющем большинстве кода: `x in ALLOWED` и
+/// `x not in ALLOWED` (Python), `ALLOWED.includes(x)`, `ALLOWED.contains(x)`,
+/// `ALLOWED.has(x)`, `ALLOWED.indexOf(x) >= 0` (JavaScript, Java, Rust, Kotlin, Go),
+/// а также сравнение с литералом `x == "лит"` и `x != "лит"`. Правая часть проверки
+/// обязана быть КОНСТАНТНОЙ по форме (идентификатор коллекции или литерал), иначе
+/// проверка ничего не гарантирует.
+fn parse_guard(cond: &Node, bytes: &[u8]) -> Option<Guard> {
+    let text = cond.utf8_text(bytes).ok()?.trim();
+    if text.len() > 200 {
+        return None; // длинное составное условие не разбираем: гарантий оно не даёт
+    }
+    let ident = |s: &str| {
+        let s = s.trim();
+        !s.is_empty()
+            && s.chars()
+                .next()
+                .is_some_and(|c| c.is_alphabetic() || c == '_')
+            && s.chars().all(|c| c.is_alphanumeric() || c == '_')
+    };
+    let literal = |s: &str| {
+        let s = s.trim();
+        s.starts_with('"') || s.starts_with('\'') || s.parse::<f64>().is_ok()
+    };
+
+    // Отрицание вида `!ALLOWED.includes(x)` или `not (x in ALLOWED)`.
+    let (body, negated) = match text.strip_prefix('!') {
+        Some(rest) => (rest.trim(), true),
+        None => match text.strip_prefix("not ") {
+            Some(rest) => (rest.trim(), true),
+            None => (text, false),
+        },
+    };
+    let body = body.trim_start_matches('(').trim_end_matches(')').trim();
+
+    // Форма «x in ALLOWED» / «x not in ALLOWED» (Python, Ruby-подобные).
+    if let Some((lhs, rhs)) = body.split_once(" not in ") {
+        if ident(lhs) && ident(rhs) {
+            return Some(Guard {
+                name: lhs.trim().to_string(),
+                positive: negated,
+            });
+        }
+    }
+    if let Some((lhs, rhs)) = body.split_once(" in ") {
+        if ident(lhs) && ident(rhs) {
+            return Some(Guard {
+                name: lhs.trim().to_string(),
+                positive: !negated,
+            });
+        }
+    }
+
+    // Форма «КОЛЛЕКЦИЯ.метод(x)».
+    for method in [
+        ".includes(",
+        ".contains(",
+        ".has(",
+        ".contains_key(",
+        ".containsKey(",
+    ] {
+        if let Some((recv, rest)) = body.split_once(method) {
+            let arg = rest.trim_end_matches(')').trim().trim_start_matches('&');
+            if ident(recv) && ident(arg) {
+                return Some(Guard {
+                    name: arg.to_string(),
+                    positive: !negated,
+                });
+            }
+        }
+    }
+
+    // Сравнение с литералом: `x == "лит"` и `x != "лит"`.
+    for (op, positive) in [("==", true), ("!=", false), ("===", true), ("!==", false)] {
+        if let Some((lhs, rhs)) = body.split_once(op) {
+            if ident(lhs) && literal(rhs) {
+                return Some(Guard {
+                    name: lhs.trim().to_string(),
+                    positive: positive != negated,
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Прерывает ли тело ветки поток управления. Достаточно поверхностного признака: тело
+/// охранной конструкции почти всегда состоит из одного оператора выхода.
+fn branch_terminates(node: &Node, bytes: &[u8]) -> bool {
+    let Ok(text) = node.utf8_text(bytes) else {
+        return false;
+    };
+    if text.len() > 400 {
+        return false;
+    }
+    text.lines().any(|l| {
+        let l = l.trim();
+        l.starts_with("return")
+            || l.starts_with("raise ")
+            || l.starts_with("throw ")
+            || l.starts_with("panic")
+            || l.starts_with("abort")
+            || l.starts_with("continue")
+            || l.starts_with("break")
+            || l.starts_with("sys.exit")
+            || l.starts_with("os.exit")
+            || l.starts_with("process.exit")
+            || l.starts_with("std::process::exit")
+    })
 }
 
 /// Обработка ветвления с join (T12). Каждая ветка анализируется на КОПИИ входного
@@ -1352,12 +2208,33 @@ fn walk_branching(
     let base_sanitized = sanitized.clone();
     let mut union_sanitized = base_sanitized.clone();
 
+    // Охранная проверка (T08): условие вида «значение входит в разрешающий список» или
+    // «значение равно константе» подтверждает значение. Положительная форма действует
+    // внутри ветки, отрицательная — после ветвления при условии, что тело ветки прерывает
+    // поток управления. Класс санитизации берётся полным (`Numeric`): проверка по
+    // разрешающему списку не пропускает метасимволы ни в одном из контекстов стока.
+    let guard = node
+        .child_by_field_name("condition")
+        .as_ref()
+        .and_then(|c| parse_guard(c, bytes));
+
     let mut cur = node.walk();
     let kids: Vec<Node> = node.children(&mut cur).collect();
     for ch in kids {
         // Условие/селектор ветвления исполняется всегда — анализируем в общем состоянии.
         if ch.is_named() && is_condition_part(node.kind(), &ch, &node) {
-            walk_taint(ch, tainted, sanitized, freed, bytes, rel, lang, inter, depth + 1, out);
+            walk_taint(
+                ch,
+                tainted,
+                sanitized,
+                freed,
+                bytes,
+                rel,
+                lang,
+                inter,
+                depth + 1,
+                out,
+            );
             union_tainted.extend(tainted.iter().cloned());
             union_freed.extend(freed.iter().cloned());
             union_sanitized = sanitized.clone();
@@ -1367,6 +2244,16 @@ fn walk_branching(
         let mut branch_tainted = union_tainted.clone();
         let mut branch_sanitized = union_sanitized.clone();
         let mut branch_freed = union_freed.clone();
+        // Положительная охрана подтверждает значение внутри тела «истинной» ветки. Ветку
+        // `else` она не покрывает, поэтому применяется только к телу условия.
+        let is_consequence = node
+            .child_by_field_name("consequence")
+            .is_some_and(|c| c.id() == ch.id());
+        if let Some(g) = &guard {
+            if g.positive && is_consequence {
+                branch_sanitized.insert(g.name.clone(), SanClass::Numeric);
+            }
+        }
         walk_taint(
             ch,
             &mut branch_tainted,
@@ -1385,6 +2272,15 @@ fn walk_branching(
         union_tainted.extend(branch_tainted);
         union_freed.extend(branch_freed);
         union_sanitized.retain(|k, v| branch_sanitized.get(k) == Some(v));
+
+        // Отрицательная охрана с прерыванием потока управления («если значение не входит
+        // в список, то выход») подтверждает значение ПОСЛЕ ветвления: до этой точки
+        // исполнение доходит только с проверенным значением.
+        if let Some(g) = &guard {
+            if !g.positive && is_consequence && branch_terminates(&ch, bytes) {
+                union_sanitized.insert(g.name.clone(), SanClass::Numeric);
+            }
+        }
     }
     *tainted = union_tainted;
     *freed = union_freed;
@@ -1419,9 +2315,11 @@ fn fold_constant_ternary<'a>(right: Node<'a>, lang: &str, bytes: &[u8]) -> Node<
     }
     // Грамматика python: conditional_expression = consequence `if` condition `else`
     // alternative; именованные дети идут в этом порядке.
-    let (Some(conseq), Some(cond), Some(alt)) =
-        (right.named_child(0), right.named_child(1), right.named_child(2))
-    else {
+    let (Some(conseq), Some(cond), Some(alt)) = (
+        right.named_child(0),
+        right.named_child(1),
+        right.named_child(2),
+    ) else {
         return right;
     };
     match fold_const_condition(cond, bytes) {
@@ -1438,7 +2336,10 @@ fn fold_const_condition(cond: Node, bytes: &[u8]) -> Option<bool> {
         "comparison_operator" => {
             let l = eval_const_int(cond.named_child(0)?, true, bytes)?;
             let r = eval_const_int(cond.named_child(1)?, true, bytes)?;
-            let op = cond.child_by_field_name("operators")?.utf8_text(bytes).ok()?;
+            let op = cond
+                .child_by_field_name("operators")?
+                .utf8_text(bytes)
+                .ok()?;
             Some(match op {
                 ">" => l > r,
                 "<" => l < r,
@@ -1467,7 +2368,11 @@ fn eval_const_int(node: Node, allow_vars: bool, bytes: &[u8]) -> Option<i64> {
         "parenthesized_expression" => eval_const_int(node.named_child(0)?, allow_vars, bytes),
         "unary_operator" => {
             let arg = eval_const_int(node.child_by_field_name("argument")?, allow_vars, bytes)?;
-            match node.child_by_field_name("operator")?.utf8_text(bytes).ok()? {
+            match node
+                .child_by_field_name("operator")?
+                .utf8_text(bytes)
+                .ok()?
+            {
                 "-" => Some(-arg),
                 "+" => Some(arg),
                 _ => None,
@@ -1476,7 +2381,11 @@ fn eval_const_int(node: Node, allow_vars: bool, bytes: &[u8]) -> Option<i64> {
         "binary_operator" => {
             let l = eval_const_int(node.child_by_field_name("left")?, allow_vars, bytes)?;
             let r = eval_const_int(node.child_by_field_name("right")?, allow_vars, bytes)?;
-            match node.child_by_field_name("operator")?.utf8_text(bytes).ok()? {
+            match node
+                .child_by_field_name("operator")?
+                .utf8_text(bytes)
+                .ok()?
+            {
                 "+" => Some(l + r),
                 "-" => Some(l - r),
                 "*" => Some(l * r),
@@ -1519,13 +2428,14 @@ fn collect_literal_assign(
     let mut cur = node.walk();
     for ch in node.children(&mut cur) {
         if ch.kind() == "assignment" && ch.start_byte() < limit {
-            if let (Some(l), Some(r)) =
-                (ch.child_by_field_name("left"), ch.child_by_field_name("right"))
-            {
+            if let (Some(l), Some(r)) = (
+                ch.child_by_field_name("left"),
+                ch.child_by_field_name("right"),
+            ) {
                 if l.kind() == "identifier" && l.utf8_text(bytes).ok() == Some(name) {
                     if let Some(v) = eval_const_int(r, false, bytes) {
                         let pos = ch.start_byte();
-                        if best.map_or(true, |(b, _)| pos > b) {
+                        if best.is_none_or(|(b, _)| pos > b) {
                             *best = Some((pos, v));
                         }
                     }
@@ -1634,7 +2544,16 @@ fn update_taint(
     // rhs считается заражённым, если значение опасно для контекста стока. Для оценки на
     // присваивании используем «сырой» источник: численный санитайзер уже очистил (Other),
     // контекстный санитайзер заражение НЕ снимает (вернёт true при заражённом аргументе).
-    let rhs_tainted = expr_tainted(&right, tainted, sanitized, bytes, lang, source_fns, SinkClass::Other, 0);
+    let rhs_tainted = expr_tainted(
+        &right,
+        tainted,
+        sanitized,
+        bytes,
+        lang,
+        source_fns,
+        SinkClass::Other,
+        0,
+    );
     for name in names {
         if rhs_tainted {
             tainted.insert(name.clone());
@@ -1664,7 +2583,8 @@ fn outer_sanitizer_class(right: &Node, bytes: &[u8], lang: &str) -> Option<SanCl
         return None;
     }
     let full_raw = callee_text(right, bytes)?;
-    let full = full_raw.to_lowercase();
+    // Алиас импорта разворачивается ДО классификации (см. `expand_alias`).
+    let full = expand_alias(&full_raw.to_lowercase());
     let leaf = full.rsplit(['.', ':']).next().unwrap_or(full.as_str());
     sanitizer_class(&full, leaf)
 }
@@ -1702,9 +2622,18 @@ fn mark_mutating_receiver(
     // Любой заражённый аргумент заражает ресивер.
     if let Some(args) = call_args(call) {
         let mut cur = args.walk();
-        let any = args
-            .named_children(&mut cur)
-            .any(|a| expr_tainted(&unwrap_arg(a), tainted, sanitized, bytes, lang, source_fns, SinkClass::Other, 0));
+        let any = args.named_children(&mut cur).any(|a| {
+            expr_tainted(
+                &unwrap_arg(a),
+                tainted,
+                sanitized,
+                bytes,
+                lang,
+                source_fns,
+                SinkClass::Other,
+                0,
+            )
+        });
         if any {
             tainted.insert(recv_key);
         }
@@ -1714,9 +2643,15 @@ fn mark_mutating_receiver(
 /// Ресивер из узла вызываемого `obj.method`/`pkg::f`: левая часть доступа к члену.
 fn receiver_of<'a>(func: &Node<'a>) -> Option<Node<'a>> {
     match func.kind() {
-        "attribute" | "member_expression" | "selector_expression" | "field_access"
-        | "field_expression" | "member_access_expression" | "navigation_expression"
-        | "scoped_identifier" | "scoped_call_expression" => func
+        "attribute"
+        | "member_expression"
+        | "selector_expression"
+        | "field_access"
+        | "field_expression"
+        | "member_access_expression"
+        | "navigation_expression"
+        | "scoped_identifier"
+        | "scoped_call_expression" => func
             .child_by_field_name("object")
             .or_else(|| func.child_by_field_name("value"))
             .or_else(|| func.child_by_field_name("operand"))
@@ -1761,26 +2696,67 @@ enum SinkClass {
 fn sanitizer_class(full: &str, leaf: &str) -> Option<SanClass> {
     // Числовые приведения: безопасны для всех текстовых стоков.
     const NUMERIC: &[&str] = &[
-        "int", "float", "atoi", "atol", "atof", "strtol", "strtoul", "strtod", "itoa",
-        "parseint", "parsefloat", "number", "bool", "intval", "floatval", "toint32",
-        "toint64", "toint16", "todouble", "tosingle",
+        "int",
+        "float",
+        "atoi",
+        "atol",
+        "atof",
+        "strtol",
+        "strtoul",
+        "strtod",
+        "itoa",
+        "parseint",
+        "parsefloat",
+        "number",
+        "bool",
+        "intval",
+        "floatval",
+        "toint32",
+        "toint64",
+        "toint16",
+        "todouble",
+        "tosingle",
     ];
     // Shell-санитайзеры.
     const SHELL: &[&str] = &["escapeshellarg", "escapeshellcmd"];
     // SQL-санитайзеры.
     const SQL: &[&str] = &[
-        "escapesql", "mysqli_real_escape_string", "real_escape_string", "quote_ident",
+        "escapesql",
+        "mysqli_real_escape_string",
+        "real_escape_string",
+        "quote_ident",
         "quote_literal",
     ];
     // HTML/markup-санитайзеры.
     const HTML: &[&str] = &[
-        "escape", "escapestring", "escapehtml", "escapehtml4", "htmlescape", "jsescape",
-        "htmlescapestring", "html_escape", "escape_for_html", "encodeuricomponent", "encodeuri",
-        "htmlspecialchars", "htmlentities", "htmlencode", "urlencode", "escapedatastring",
-        "escapeuristring", "sanitize", "clean",
+        "escape",
+        "escapestring",
+        "escapehtml",
+        "escapehtml4",
+        "htmlescape",
+        "jsescape",
+        "htmlescapestring",
+        "html_escape",
+        "escape_for_html",
+        "encodeuricomponent",
+        "encodeuri",
+        "htmlspecialchars",
+        "htmlentities",
+        "htmlencode",
+        "urlencode",
+        "escapedatastring",
+        "escapeuristring",
+        "sanitize",
+        "clean",
     ];
     // Path-санитайзеры (нормализация пути убирает обход каталога).
-    const PATH: &[&str] = &["basename", "realpath", "canonicalize", "normpath", "abspath"];
+    const PATH: &[&str] = &[
+        "basename",
+        "realpath",
+        "canonicalize",
+        "normpath",
+        "abspath",
+    ];
 
     if NUMERIC.contains(&leaf) {
         return Some(SanClass::Numeric);
@@ -1829,7 +2805,6 @@ fn sanitizer_clears(san: SanClass, sink: SinkClass) -> bool {
     }
 }
 
-
 /// Поддерево ссылается на заражённую переменную/source-функцию (для проверки ресивера).
 fn expr_refs_tainted(
     node: &Node,
@@ -1839,7 +2814,10 @@ fn expr_refs_tainted(
 ) -> bool {
     let mut stack = vec![*node];
     while let Some(n) = stack.pop() {
-        if matches!(n.kind(), "identifier" | "variable_name" | "simple_identifier") {
+        if matches!(
+            n.kind(),
+            "identifier" | "variable_name" | "simple_identifier"
+        ) {
             if let Ok(t) = n.utf8_text(bytes) {
                 if tainted.contains(t) || source_fns.contains(t) {
                     return true;
@@ -1879,7 +2857,7 @@ fn expr_tainted(
 
     if is_call_node(lang, kind) {
         if let Some(full_raw) = callee_text(node, bytes) {
-            let full = full_raw.to_lowercase();
+            let full = expand_alias(&full_raw.to_lowercase());
             let leaf = full.rsplit(['.', ':']).next().unwrap_or(full.as_str());
             // (1) Санитайзер (T06): снимает заражение, только если его класс совместим с
             // классом стока (для SinkClass::Other снимаем лишь универсальный числовой).
@@ -1913,7 +2891,16 @@ fn expr_tainted(
         if let Some(args) = call_args(node) {
             let mut cur = args.walk();
             for arg in args.named_children(&mut cur) {
-                if expr_tainted(&unwrap_arg(arg), tainted, sanitized, bytes, lang, source_fns, sink, depth + 1) {
+                if expr_tainted(
+                    &unwrap_arg(arg),
+                    tainted,
+                    sanitized,
+                    bytes,
+                    lang,
+                    source_fns,
+                    sink,
+                    depth + 1,
+                ) {
                     return true;
                 }
             }
@@ -1970,7 +2957,16 @@ fn expr_tainted(
     // заражены, если заражён хотя бы один ребёнок.
     let mut cur = node.walk();
     for ch in node.named_children(&mut cur) {
-        if expr_tainted(&ch, tainted, sanitized, bytes, lang, source_fns, sink, depth + 1) {
+        if expr_tainted(
+            &ch,
+            tainted,
+            sanitized,
+            bytes,
+            lang,
+            source_fns,
+            sink,
+            depth + 1,
+        ) {
             return true;
         }
     }
@@ -1995,6 +2991,19 @@ fn var_is_cleared(name: &str, sanitized: &HashMap<String, SanClass>, sink: SinkC
 /// сегмент есть в цепочке. Источник без точки (`getenv`, `os.environ`, `request.args`)
 /// должен совпасть как СУФФИКС цепочки сегментов или как точная подцепочка по границам.
 fn segment_source_match(text: &str, source: &str) -> bool {
+    // Переменные окружения, задаваемые СБОРОЧНОЙ системой, недоверенными не являются:
+    // их значение приходит не от пользователя, а от cargo, и запрет на их использование в
+    // путях сделал бы любой сборочный сценарий «уязвимым». Проверка идёт по имени
+    // переменной в самом выражении, поэтому обычное `env::var("SOME_USER_INPUT")`
+    // источником быть не перестаёт.
+    if text.contains("OUT_DIR")
+        || text.contains("CARGO_MANIFEST_DIR")
+        || text.contains("CARGO_PKG_")
+        || text.contains("CARGO_CFG_")
+        || text.contains("TARGET")
+    {
+        return false;
+    }
     // Источники со спецсимволами (PHP-суперглобалы `$_GET`, `input(`, `stdin(`, Rust
     // `web::Query`) сегментацией не разложить осмысленно — для них сохраняем подстрочное
     // совпадение с проверкой границы слева (символ перед вхождением не должен быть частью
@@ -2112,6 +3121,222 @@ fn bare_dynamic_exec(full: &str, leaf: &str, allowed: &[&str]) -> bool {
     matches!(leaf, "eval" | "exec") && eval_prefix_ok(full, leaf, allowed)
 }
 
+thread_local! {
+    /// Алиасы импорта ТЕКУЩЕГО разбираемого файла: локальное имя в каноническое.
+    ///
+    /// Хранится в локальной памяти потока, а не передаётся параметром, потому что
+    /// классификация стока вызывается из полудюжины мест на разной глубине рекурсии, и
+    /// протаскивание ещё одного аргумента через всю цепочку затемнило бы её сильнее, чем
+    /// даёт пользы. Значение действует ровно на время разбора одного файла (см. страж в
+    /// `with_import_aliases`), а разбор одного файла последователен, поэтому состояние
+    /// однозначно. Разные файлы в разных потоках друг другу не мешают по устройству.
+    static IMPORT_ALIASES: std::cell::RefCell<HashMap<String, String>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Выполнить `f`, пока действуют алиасы импорта файла; после возврата состояние снимается
+/// в любом случае, в том числе при панике.
+fn with_import_aliases<R>(aliases: HashMap<String, String>, f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            IMPORT_ALIASES.with(|a| a.borrow_mut().clear());
+        }
+    }
+    IMPORT_ALIASES.with(|a| *a.borrow_mut() = aliases);
+    let _reset = Reset;
+    f()
+}
+
+/// Развернуть алиас импорта в каноническое имя: первый сегмент имени вызываемого заменяется
+/// отображением, если оно известно.
+///
+/// Это закрывает целый класс пропусков. Классификация стока опирается на текст вызываемого,
+/// поэтому находилось `child_process.exec(u)`, но НЕ находилась господствующая в Node идиома
+/// `const cp = require('child_process'); cp.exec(u)` и деструктуризация
+/// `const { exec } = require('child_process'); exec(u)`. То же в Python:
+/// `from os import system as sh; sh(u)` и `import subprocess as sp; sp.run(...)`.
+/// Проверка команд в Node без этого работала едва ли наполовину.
+fn expand_alias(full: &str) -> String {
+    IMPORT_ALIASES.with(|a| {
+        let map = a.borrow();
+        if map.is_empty() {
+            return full.to_string();
+        }
+        let (head, tail) = match full.split_once('.') {
+            Some((h, t)) => (h, Some(t)),
+            None => (full, None),
+        };
+        match map.get(head) {
+            Some(canon) => match tail {
+                Some(t) => format!("{canon}.{t}"),
+                None => canon.clone(),
+            },
+            None => full.to_string(),
+        }
+    })
+}
+
+/// Собрать алиасы импорта файла: локальное имя в каноническое полное имя.
+///
+/// Разбор намеренно ТЕКСТОВЫЙ, а не по дереву. Формы импорта в трёх целевых языках просты и
+/// однострочны, а текстовый разбор одинаково работает и там, где грамматика различает узлы
+/// по-разному (деструктуризация в JavaScript, групповой импорт в Python). Ошибка разбора
+/// здесь безопасна в обе стороны: неузнанный алиас лишь оставляет прежнее поведение, а лишний
+/// алиас указывает на несуществующий модуль и ни с чем не совпадёт.
+fn collect_import_aliases(content: &str, lang: &str) -> HashMap<String, String> {
+    let mut map: HashMap<String, String> = HashMap::new();
+    let mut put = |local: &str, canon: &str| {
+        let local = local.trim().to_lowercase();
+        let canon = canon.trim().to_lowercase();
+        if !local.is_empty() && !canon.is_empty() && local != canon {
+            map.insert(local, canon);
+        }
+    };
+    for raw in content.lines().take(MAX_IMPORT_LINES) {
+        let line = raw.trim();
+        match lang {
+            "javascript" | "typescript" => {
+                // `const cp = require('child_process')`, `import cp from 'child_process'`,
+                // `import * as cp from 'child_process'`.
+                if let Some((lhs, rhs)) = split_js_binding(line) {
+                    let Some(module) = quoted_module(rhs) else {
+                        continue;
+                    };
+                    if let Some(inner) = lhs
+                        .trim()
+                        .strip_prefix('{')
+                        .and_then(|s| s.strip_suffix('}'))
+                    {
+                        // Деструктуризация: каждое имя ведёт к «модуль.имя».
+                        for part in inner.split(',') {
+                            let part = part.trim();
+                            let (orig, local) = match part.split_once(':') {
+                                Some((o, l)) => (o.trim(), l.trim()),
+                                None => (part, part),
+                            };
+                            if !orig.is_empty() {
+                                put(local, &format!("{module}.{orig}"));
+                            }
+                        }
+                    } else {
+                        // Модульный алиас целиком.
+                        let local = lhs.trim().trim_start_matches("* as ").trim();
+                        put(local, &module);
+                    }
+                }
+            }
+            "python" => {
+                if let Some(rest) = line.strip_prefix("import ") {
+                    // `import subprocess as sp`
+                    if let Some((module, local)) = rest.split_once(" as ") {
+                        put(local, module);
+                    }
+                } else if let Some(rest) = line.strip_prefix("from ") {
+                    // `from os import system as sh`, `from subprocess import run, Popen`
+                    if let Some((module, names)) = rest.split_once(" import ") {
+                        let module = module.trim();
+                        for part in names.split(',') {
+                            let part = part.trim().trim_end_matches('\\').trim();
+                            if part.is_empty() || part == "*" {
+                                continue;
+                            }
+                            let (orig, local) = match part.split_once(" as ") {
+                                Some((o, l)) => (o.trim(), l.trim()),
+                                None => (part, part),
+                            };
+                            put(local, &format!("{module}.{orig}"));
+                        }
+                    }
+                }
+            }
+            "go" => {
+                // `import ex "os/exec"` и та же форма внутри блока импорта.
+                let t = line.strip_prefix("import ").unwrap_or(line).trim();
+                if let Some((local, module)) = t.split_once(' ') {
+                    if let Some(m) = quoted_module(module) {
+                        // Каноническим для Go считаем последний сегмент пути пакета: именно
+                        // он и стоит в вызове (`exec.Command` для пути `os/exec`).
+                        let leaf = m.rsplit('/').next().unwrap_or(&m).to_string();
+                        put(local, &leaf);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    map
+}
+
+/// Сколько первых строк файла просматривается в поисках импортов. Импорты стоят в начале
+/// файла во всех целевых языках, а ограничение не даёт тратить время на длинные файлы.
+const MAX_IMPORT_LINES: usize = 400;
+
+/// Разобрать связывание вида `const X = require(...)` либо `import X from '...'`.
+/// Возвращает пару (левая часть, правая часть).
+fn split_js_binding(line: &str) -> Option<(&str, &str)> {
+    for kw in ["const ", "let ", "var "] {
+        if let Some(rest) = line.strip_prefix(kw) {
+            if let Some((lhs, rhs)) = rest.split_once('=') {
+                if rhs.contains("require(") {
+                    return Some((lhs, rhs));
+                }
+            }
+        }
+    }
+    if let Some(rest) = line.strip_prefix("import ") {
+        if let Some((lhs, rhs)) = rest.split_once(" from ") {
+            return Some((lhs, rhs));
+        }
+    }
+    None
+}
+
+/// Имя модуля из строкового литерала в кавычках любого вида.
+fn quoted_module(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let open = bytes
+        .iter()
+        .position(|c| matches!(c, b'"' | b'\'' | b'`'))?;
+    let quote = bytes[open];
+    let rest = &s[open + 1..];
+    let end = rest.find(quote as char)?;
+    let m = rest[..end].trim();
+    (!m.is_empty()).then(|| m.to_string())
+}
+
+/// Применима ли межпроцедурная сводка с именем `leaf` к вызову с полным именем `full`.
+///
+/// Правило простое и опирается на форму: ФОРМА ВЫЗОВА обязана соответствовать ФОРМЕ
+/// ОБЪЯВЛЕНИЯ.
+///
+/// Свободная функция вызывается голым именем, поэтому её сводка применяется только к вызову
+/// без получателя. Метод вызывается через получателя, но определить КЛАСС получателя без
+/// вывода типов нельзя, поэтому сводка метода применяется только когда получатель это `self`
+/// либо `this`, то есть вызов заведомо адресован тому же классу.
+///
+/// Это устраняет обе наблюдавшиеся формы ложных связей. Свободная функция `run`, объявленная
+/// в одном файле, больше не делает стоком вызов `s.run(...)` у несвязанного класса в другом
+/// файле. Метод `get` какого-либо класса больше не заражает обращение `d.get(...)` к обычному
+/// словарю.
+///
+/// Цена решения названа прямо: поток через вызов метода у ЧУЖОГО объекта
+/// (`obj.helper(недоверенное)`) больше не прослеживается, и это потеря полноты. Она принята
+/// сознательно, поскольку без вывода типов такой вызов неотличим от одноимённого метода
+/// любого другого класса, а ложное срабатывание в жёсткой оси обходится дороже пропуска:
+/// человек либо ломает работающий код, либо отключает проверку целиком.
+fn summary_applies(full: &str, leaf: &str, inter: &InterProc) -> bool {
+    match full.rsplit_once('.') {
+        // Вызов через получателя.
+        Some((receiver, _)) => {
+            let r = receiver.rsplit('.').next().unwrap_or(receiver);
+            (r == "self" || r == "this") && inter.method_fns.contains(leaf)
+        }
+        // Голый вызов по имени.
+        None => inter.free_fns.contains(leaf),
+    }
+}
+
 /// Классификация стока по языку: (правило, важность, что атакуется). None — не сток.
 fn classify_sink(
     lang: &str,
@@ -2135,7 +3360,13 @@ fn classify_sink(
             let subprocess = full.contains("subprocess")
                 && matches!(
                     leaf,
-                    "run" | "call" | "popen" | "check_output" | "check_call" | "getoutput" | "getstatusoutput"
+                    "run"
+                        | "call"
+                        | "popen"
+                        | "check_output"
+                        | "check_call"
+                        | "getoutput"
+                        | "getstatusoutput"
                 );
             // T10: eval/exec по leaf с контролируемым набором префиксов (поймать
             // builtins.eval/__builtins__.exec, но не object.eval из чужого namespace).
@@ -2153,7 +3384,10 @@ fn classify_sink(
                 && !full.starts_with("regex.");
             // Открытый редирект (CWE-601): flask `redirect(...)`, Django
             // `HttpResponseRedirect(...)`, Starlette/FastAPI `RedirectResponse(...)`.
-            let redirect = matches!(leaf, "redirect" | "httpresponseredirect" | "redirectresponse");
+            let redirect = matches!(
+                leaf,
+                "redirect" | "httpresponseredirect" | "redirectresponse"
+            );
             // Серверный XSS (CWE-79): рендер недоверенной строки как HTML или построение
             // ответа из неё. `render_template_string` (Jinja-инъекция и XSS), а также
             // `Markup(...)`/`make_response(...)` с заражённым телом. Возврат заражённой
@@ -2178,13 +3412,26 @@ fn classify_sink(
                     leaf,
                     // pathlib.Path: данные в ресивере (p = base / tainted; p.exists()/
                     // p.read_text()), receiver-проверку делает sink_is_dangerous.
-                    "read_text" | "read_bytes" | "write_text" | "write_bytes" | "exists"
-                        | "is_file" | "is_dir" | "unlink" | "iterdir" | "glob" | "open"
+                    "read_text"
+                        | "read_bytes"
+                        | "write_text"
+                        | "write_bytes"
+                        | "exists"
+                        | "is_file"
+                        | "is_dir"
+                        | "unlink"
+                        | "iterdir"
+                        | "glob"
+                        | "open"
                 )
             {
                 Some(path)
             } else if xpath {
-                Some(("sast/taint-xpath", Severity::High, "XPath-запроса (CWE-643)"))
+                Some((
+                    "sast/taint-xpath",
+                    Severity::High,
+                    "XPath-запроса (CWE-643)",
+                ))
             } else if ldap {
                 Some(("sast/taint-ldap", Severity::High, "LDAP-фильтра (CWE-90)"))
             } else if redirect {
@@ -2194,19 +3441,33 @@ fn classify_sink(
                     "редиректа по адресу из ввода (CWE-601)",
                 ))
             } else if xss {
-                Some(("sast/taint-xss", Severity::High, "HTML-ответа без экранирования (CWE-79)"))
+                Some((
+                    "sast/taint-xss",
+                    Severity::High,
+                    "HTML-ответа без экранирования (CWE-79)",
+                ))
             } else {
                 None
             }
         }
         "javascript" | "typescript" => {
             let child_proc = full.contains("child_process")
-                && matches!(leaf, "exec" | "execsync" | "spawn" | "spawnsync" | "execfile" | "execfilesync");
+                && matches!(
+                    leaf,
+                    "exec" | "execsync" | "spawn" | "spawnsync" | "execfile" | "execfilesync"
+                );
             let fs_path = full.contains("fs.")
                 && matches!(
                     leaf,
-                    "readfile" | "readfilesync" | "createreadstream" | "writefile"
-                        | "writefilesync" | "appendfile" | "appendfilesync" | "open" | "opensync"
+                    "readfile"
+                        | "readfilesync"
+                        | "createreadstream"
+                        | "writefile"
+                        | "writefilesync"
+                        | "appendfile"
+                        | "appendfilesync"
+                        | "open"
+                        | "opensync"
                 );
             // T10: eval/Function по leaf с контролируемым набором глобальных префиксов.
             let dyn_exec = (leaf == "eval"
@@ -2226,9 +3487,17 @@ fn classify_sink(
         "go" => {
             if full.contains("exec.command") {
                 Some(cmd)
-            } else if matches!(leaf, "query" | "exec" | "queryrow" | "querycontext" | "execcontext" | "queryrowcontext") {
+            } else if matches!(
+                leaf,
+                "query" | "exec" | "queryrow" | "querycontext" | "execcontext" | "queryrowcontext"
+            ) {
                 Some(sql)
-            } else if full.contains("os.open") || full.contains("os.readfile") || full.contains("os.create") || full.contains("os.readdir") || full.contains("ioutil.read") {
+            } else if full.contains("os.open")
+                || full.contains("os.readfile")
+                || full.contains("os.create")
+                || full.contains("os.readdir")
+                || full.contains("ioutil.read")
+            {
                 Some(path)
             } else {
                 None
@@ -2247,11 +3516,18 @@ fn classify_sink(
             } else if leaf == "exec" {
                 // ailc:ignore[dangerous-exec,command-exec-runtime] — упоминание в комментарии классификатора стоков
                 Some(cmd) // Runtime.getRuntime().exec(...)
-            } else if matches!(leaf, "executequery" | "executeupdate" | "execute" | "preparestatement") {
+            } else if matches!(
+                leaf,
+                "executequery" | "executeupdate" | "execute" | "preparestatement"
+            ) {
                 Some(sql) // JDBC (prepareStatement с конкатенацией — тоже инъекция)
             } else if matches!(
                 leaf,
-                "readallbytes" | "readalllines" | "readstring" | "lines" | "newinputstream"
+                "readallbytes"
+                    | "readalllines"
+                    | "readstring"
+                    | "lines"
+                    | "newinputstream"
                     | "newbufferedreader"
             ) {
                 Some(path) // java.nio.file.Files.*
@@ -2287,8 +3563,15 @@ fn classify_sink(
                 Some(sql)
             } else if matches!(
                 leaf,
-                "fopen" | "file_get_contents" | "file_put_contents" | "readfile" | "fread"
-                    | "fgets" | "opendir" | "scandir" | "simplexml_load_file"
+                "fopen"
+                    | "file_get_contents"
+                    | "file_put_contents"
+                    | "readfile"
+                    | "fread"
+                    | "fgets"
+                    | "opendir"
+                    | "scandir"
+                    | "simplexml_load_file"
             ) {
                 Some(path)
             } else {
@@ -2314,8 +3597,14 @@ fn classify_sink(
             } else if full.contains("file.")
                 && matches!(
                     leaf,
-                    "readalltext" | "readallbytes" | "readalllines" | "open" | "openread"
-                        | "opentext" | "writealltext" | "writeallbytes"
+                    "readalltext"
+                        | "readallbytes"
+                        | "readalllines"
+                        | "open"
+                        | "openread"
+                        | "opentext"
+                        | "writealltext"
+                        | "writeallbytes"
                 )
             {
                 Some(path)
@@ -2329,7 +3618,10 @@ fn classify_sink(
                 Some(cmd)
             } else if full.contains("sqlx::query") || full.contains("sql_query") {
                 Some(sql)
-            } else if full.contains("file::open") || full.contains("fs::read") || full.contains("fs::write") {
+            } else if full.contains("file::open")
+                || full.contains("fs::read")
+                || full.contains("fs::write")
+            {
                 Some(path)
             } else {
                 None
@@ -2339,7 +3631,10 @@ fn classify_sink(
             // Kotlin без `new`: ProcessBuilder(x)/File(x) — обычные вызовы.
             if leaf == "exec" || leaf == "processbuilder" {
                 Some(cmd)
-            } else if matches!(leaf, "executequery" | "executeupdate" | "execute" | "preparestatement") {
+            } else if matches!(
+                leaf,
+                "executequery" | "executeupdate" | "execute" | "preparestatement"
+            ) {
                 Some(sql)
             } else if matches!(
                 leaf,
@@ -2354,7 +3649,10 @@ fn classify_sink(
             if leaf == "exec" || leaf == "process" {
                 Some(cmd)
             } else if leaf == "sql"
-                || matches!(leaf, "executequery" | "executeupdate" | "execute" | "preparestatement")
+                || matches!(
+                    leaf,
+                    "executequery" | "executeupdate" | "execute" | "preparestatement"
+                )
             {
                 Some(sql) // Anorm SQL(...) / JDBC
             } else if matches!(leaf, "fromfile" | "file" | "fileinputstream") {
@@ -2376,19 +3674,43 @@ fn classify_sink(
                 "system" | "popen" | "execl" | "execlp" | "execle" | "execv" | "execvp" | "execvpe"
             ) {
                 Some(cmd)
-            } else if matches!(leaf, "mysql_query" | "mysql_real_query" | "sqlite3_exec" | "pqexec") {
+            } else if matches!(
+                leaf,
+                "mysql_query" | "mysql_real_query" | "sqlite3_exec" | "pqexec"
+            ) {
                 Some(sql)
             } else if matches!(leaf, "fopen" | "freopen" | "open" | "open64") {
                 Some(path)
             } else if matches!(
                 leaf,
                 // T08: классические переполнения буфера + n-варианты с заражённой длиной.
-                "strcpy" | "strcat" | "sprintf" | "vsprintf" | "stpcpy" | "memcpy" | "memmove"
-                    | "strncpy" | "strncat" | "snprintf" | "vsnprintf" | "bcopy" | "wcscpy"
+                "strcpy"
+                    | "strcat"
+                    | "sprintf"
+                    | "vsprintf"
+                    | "stpcpy"
+                    | "memcpy"
+                    | "memmove"
+                    | "strncpy"
+                    | "strncat"
+                    | "snprintf"
+                    | "vsnprintf"
+                    | "bcopy"
+                    | "wcscpy"
                     | "wcscat"
             ) {
                 Some(buffer)
-            } else if matches!(leaf, "printf" | "fprintf" | "syslog" | "vprintf" | "vfprintf" | "dprintf" | "err" | "warn") {
+            } else if matches!(
+                leaf,
+                "printf"
+                    | "fprintf"
+                    | "syslog"
+                    | "vprintf"
+                    | "vfprintf"
+                    | "dprintf"
+                    | "err"
+                    | "warn"
+            ) {
                 Some(fmt) // T08: форматная строка из недоверенного источника (CWE-134)
             } else {
                 None
@@ -2409,10 +3731,16 @@ fn classify_sink(
         "dart" => {
             if full.contains("process.run") || full.contains("process.start") {
                 Some(cmd)
-            } else if matches!(leaf, "rawquery" | "rawinsert" | "rawupdate" | "rawdelete" | "execute") {
+            } else if matches!(
+                leaf,
+                "rawquery" | "rawinsert" | "rawupdate" | "rawdelete" | "execute"
+            ) {
                 Some(sql)
             } else if leaf == "file"
-                || matches!(leaf, "readasstring" | "readasbytes" | "readaslines" | "open")
+                || matches!(
+                    leaf,
+                    "readasstring" | "readasbytes" | "readaslines" | "open"
+                )
             {
                 Some(path)
             } else {
@@ -2456,7 +3784,8 @@ fn sink_is_dangerous(
     let Some(full_raw) = callee_text(call, bytes) else {
         return false;
     };
-    let full = full_raw.to_lowercase();
+    // Алиас импорта разворачивается ДО классификации (см. `expand_alias`).
+    let full = expand_alias(&full_raw.to_lowercase());
     let leaf = full.rsplit(['.', ':']).next().unwrap_or(full.as_str());
     let Some((rule, _sev, _what)) = classify_sink(lang, &full, leaf) else {
         return false;
@@ -2466,14 +3795,18 @@ fn sink_is_dangerous(
     };
     let sink = sink_class_for_rule(rule);
     let qpos = sql_query_arg_index(lang, rule, leaf).unwrap_or(0);
-    let via_args = if sink_whole_args(rule, lang) {
+    let via_args = if rule == "sast/taint-path" && path_sink_content_arg(leaf) {
+        // Путь у таких стоков стоит в получателе, аргумент несёт содержимое: проверять его
+        // правилом о переходе по каталогам нельзя (см. `path_sink_content_arg`).
+        false
+    } else if sink_whole_args(rule, lang) {
         expr_tainted(&args, tainted, sanitized, bytes, lang, source_fns, sink, 0)
     } else {
         // SQL/path/format-string/alloc проверяют аргумент-запрос/путь/форматную строку/размер
         // (для Go-SQL — точную позицию qpos); buffer/command идут целиком (sink_whole_args).
-        args.named_child(qpos)
-            .map(unwrap_arg)
-            .is_some_and(|first| expr_tainted(&first, tainted, sanitized, bytes, lang, source_fns, sink, 0))
+        args.named_child(qpos).map(unwrap_arg).is_some_and(|first| {
+            expr_tainted(&first, tainted, sanitized, bytes, lang, source_fns, sink, 0)
+        })
     };
     if via_args {
         return true;
@@ -2491,6 +3824,20 @@ fn sink_is_dangerous(
         }
     }
     false
+}
+
+/// Является ли сток открытия файла таким, у которого путь стоит в ПОЛУЧАТЕЛЕ, а аргумент
+/// несёт СОДЕРЖИМОЕ.
+///
+/// Методы записи `pathlib` (`p.write_text(данные)`, `p.write_bytes(данные)`) устроены именно
+/// так. Проверять их аргумент правилом о переходе по каталогам неправильно по построению:
+/// заражённым там оказывается записываемое содержимое, а не путь, и находка о переходе по
+/// каталогам получается ложной. Обнаружено прогоном ailc на собственном коде: сценарий
+/// обновления снимка базы уязвимостей пишет загруженные данные в КОНСТАНТНЫЙ путь
+/// (`OUT.write_text(...)`), и это докладывалось как поток недоверенных данных в открытие
+/// файла важности HIGH.
+fn path_sink_content_arg(leaf: &str) -> bool {
+    matches!(leaf, "write_text" | "write_bytes")
 }
 
 /// Какие аргументы стока проверять целиком (T11). Команда/буфер — все. SQL целиком в
@@ -2555,7 +3902,8 @@ fn check_taint_sink(
     let Some(full_raw) = callee_text(call, bytes) else {
         return;
     };
-    let full = full_raw.to_lowercase();
+    // Алиас импорта разворачивается ДО классификации (см. `expand_alias`).
+    let full = expand_alias(&full_raw.to_lowercase());
     let leaf = full.rsplit(['.', ':']).next().unwrap_or(full.as_str());
 
     let Some((rule, sev, what)) = classify_sink(lang, &full, leaf) else {
@@ -2568,14 +3916,29 @@ fn check_taint_sink(
     let sink = sink_class_for_rule(rule);
     // T11: позиция строки запроса (Go Context-варианты — не первый аргумент).
     let qpos = sql_query_arg_index(lang, rule, leaf).unwrap_or(0);
-    let dangerous = if sink_whole_args(rule, lang) {
+    let via_args = if rule == "sast/taint-path" && path_sink_content_arg(leaf) {
+        // Путь у таких стоков стоит в получателе, аргумент несёт содержимое
+        // (см. `path_sink_content_arg`).
+        false
+    } else if sink_whole_args(rule, lang) {
         expr_tainted(&args, tainted, sanitized, bytes, lang, source_fns, sink, 0)
     } else {
-        args.named_child(qpos)
-            .map(unwrap_arg)
-            .is_some_and(|first| expr_tainted(&first, tainted, sanitized, bytes, lang, source_fns, sink, 0))
+        args.named_child(qpos).map(unwrap_arg).is_some_and(|first| {
+            expr_tainted(&first, tainted, sanitized, bytes, lang, source_fns, sink, 0)
+        })
     };
-    if dangerous {
+    // ПРОВЕРКА ПОЛУЧАТЕЛЯ. У методов `pathlib` (`p.read_text()`, `p.write_text(данные)`,
+    // `p.exists()`) путь находится в ПОЛУЧАТЕЛЕ, а не в аргументах, и у части из них
+    // аргументов нет вовсе. Такая проверка была реализована во вспомогательном проходе
+    // (`sink_is_dangerous`), но НЕ здесь, то есть в единственном месте, которое сообщает
+    // находку. Поэтому переход по каталогам через заражённый путь-получатель не
+    // докладывался вообще: проверялось запуском, `p = Path(request.args.get('n'));
+    // p.read_text()` не давал ни одной находки.
+    let via_receiver = rule == "sast/taint-path"
+        && callee_full(call)
+            .and_then(|f| receiver_of(&f))
+            .is_some_and(|recv| expr_refs_tainted(&recv, tainted, bytes, source_fns));
+    if via_args || via_receiver {
         let line = call.start_position().row as u32 + 1;
         // T14: taint-находка эвристична (подстрочные источники, грубые санитайзеры, проход
         // насквозь), verified=false до фактической верификации; evidence — фрагмент стока.
@@ -2654,6 +4017,7 @@ fn check_trust_boundary(
 /// HTTP-ответа. Сток это сам `return`, а не вызов, поэтому ловится отдельно. Класс стока
 /// Html: HTML-экранирование на пути (markupsafe.escape/html.escape/escape_for_html) снимает
 /// заражение, поэтому защищённые обработчики не флагуются. Числовое приведение тоже чисто.
+#[allow(clippy::too_many_arguments)]
 fn check_response_sink(
     ret: &Node,
     tainted: &HashSet<String>,
@@ -2676,7 +4040,16 @@ fn check_response_sink(
     if is_call_node(lang, expr.kind()) {
         return;
     }
-    if expr_tainted(&expr, tainted, sanitized, bytes, lang, source_fns, SinkClass::Html, 0) {
+    if expr_tainted(
+        &expr,
+        tainted,
+        sanitized,
+        bytes,
+        lang,
+        source_fns,
+        SinkClass::Html,
+        0,
+    ) {
         let line = ret.start_position().row as u32 + 1;
         push(
             out,
@@ -2711,7 +4084,8 @@ fn check_memory_safety(
     let Some(full_raw) = callee_text(call, bytes) else {
         return;
     };
-    let full = full_raw.to_lowercase();
+    // Алиас импорта разворачивается ДО классификации (см. `expand_alias`).
+    let full = expand_alias(&full_raw.to_lowercase());
     let leaf = full.rsplit(['.', ':']).next().unwrap_or(full.as_str());
 
     // Перед обработкой free проверяем use-after-free: ЛЮБОЙ аргумент вызова, ссылающийся
@@ -2780,14 +4154,31 @@ fn check_memory_safety(
     if matches!(leaf, "malloc" | "calloc" | "realloc" | "alloca") {
         if let Some(args) = call_args(call) {
             let tainted_size = match leaf {
-                "realloc" => args
-                    .named_child(1)
-                    .map(unwrap_arg)
-                    .is_some_and(|a| expr_tainted(&a, tainted, sanitized, bytes, lang, source_fns, SinkClass::Size, 0)),
+                "realloc" => args.named_child(1).map(unwrap_arg).is_some_and(|a| {
+                    expr_tainted(
+                        &a,
+                        tainted,
+                        sanitized,
+                        bytes,
+                        lang,
+                        source_fns,
+                        SinkClass::Size,
+                        0,
+                    )
+                }),
                 _ => {
                     let mut cur = args.walk();
                     let any_tainted = args.named_children(&mut cur).any(|a| {
-                        expr_tainted(&unwrap_arg(a), tainted, sanitized, bytes, lang, source_fns, SinkClass::Size, 0)
+                        expr_tainted(
+                            &unwrap_arg(a),
+                            tainted,
+                            sanitized,
+                            bytes,
+                            lang,
+                            source_fns,
+                            SinkClass::Size,
+                            0,
+                        )
                     });
                     any_tainted
                 }
@@ -2842,8 +4233,15 @@ fn check_call_into_sink_param(
     let Some(full_raw) = callee_text(call, bytes) else {
         return;
     };
-    let full = full_raw.to_lowercase();
+    // Алиас импорта разворачивается ДО классификации (см. `expand_alias`).
+    let full = expand_alias(&full_raw.to_lowercase());
     let leaf = full.rsplit(['.', ':']).next().unwrap_or(full.as_str());
+    // Сводка применяется только при СОВПАДЕНИИ ФОРМЫ вызова и объявления (см.
+    // `summary_applies`): иначе одноимённая функция из другого файла или метод другого
+    // класса порождают ложную связь.
+    if !summary_applies(&full, leaf, inter) {
+        return;
+    }
     // sink-параметры индексируются по имени функции (leaf или полное имя).
     let Some(params) = inter
         .sink_params
@@ -2859,7 +4257,16 @@ fn check_call_into_sink_param(
     let actual: Vec<Node> = args.named_children(&mut cur).collect();
     for &idx in params {
         if let Some(a) = actual.get(idx) {
-            if expr_tainted(&unwrap_arg(*a), tainted, sanitized, bytes, lang, &inter.source_fns, SinkClass::Command, 0) {
+            if expr_tainted(
+                &unwrap_arg(*a),
+                tainted,
+                sanitized,
+                bytes,
+                lang,
+                &inter.source_fns,
+                SinkClass::Command,
+                0,
+            ) {
                 let line = call.start_position().row as u32 + 1;
                 push(
                     out,
@@ -2892,8 +4299,13 @@ fn call_into_sink_param(
     let Some(full_raw) = callee_text(call, bytes) else {
         return false;
     };
-    let full = full_raw.to_lowercase();
+    // Алиас импорта разворачивается ДО классификации (см. `expand_alias`).
+    let full = expand_alias(&full_raw.to_lowercase());
     let leaf = full.rsplit(['.', ':']).next().unwrap_or(full.as_str());
+    // То же требование совпадения формы, что и в основном проходе (см. `summary_applies`).
+    if !summary_applies(&full, leaf, inter) {
+        return false;
+    }
     let Some(params) = inter
         .sink_params
         .get(leaf)
@@ -2908,7 +4320,16 @@ fn call_into_sink_param(
     let actual: Vec<Node> = args.named_children(&mut cur).collect();
     for &idx in params {
         if let Some(a) = actual.get(idx) {
-            if expr_tainted(&unwrap_arg(*a), tainted, sanitized, bytes, lang, &inter.source_fns, SinkClass::Command, 0) {
+            if expr_tainted(
+                &unwrap_arg(*a),
+                tainted,
+                sanitized,
+                bytes,
+                lang,
+                &inter.source_fns,
+                SinkClass::Command,
+                0,
+            ) {
                 return true;
             }
         }
@@ -2916,14 +4337,14 @@ fn call_into_sink_param(
     false
 }
 
-fn check_pii_log(call: &Node, bytes: &[u8], rel: &str, out: &mut Vec<Finding>) {
+fn check_pii_log(call: &Node, bytes: &[u8], lang: &str, rel: &str, out: &mut Vec<Finding>) {
     let Some(func) = callee_full(call) else {
         return;
     };
     let Ok(full) = func.utf8_text(bytes) else {
         return;
     };
-    if !is_log_callee(&full.to_lowercase()) {
+    if !is_log_callee(full) {
         return;
     }
     let Some(args) = call_args(call) else {
@@ -2932,10 +4353,10 @@ fn check_pii_log(call: &Node, bytes: &[u8], rel: &str, out: &mut Vec<Finding>) {
     let Ok(args_text) = args.utf8_text(bytes) else {
         return;
     };
-    // Замаскированное значение — не находка (ровно то, что line-regex не умеет).
-    let at = args_text.to_lowercase();
-    if at.contains("mask") || at.contains("redact") || at.contains("anonym") || at.contains("hash(")
-    {
+    // Замаскированное значение не является находкой (ровно то, что line-regex не умеет).
+    // Маскирование распознаётся структурно, как вызов маскировщика или обращение к полю,
+    // см. `args_are_masked`.
+    if args_are_masked(&args, bytes, lang) {
         return;
     }
     // Идентификаторы в поддереве аргументов: user.passport, snilsNumber, …
@@ -2975,26 +4396,126 @@ fn check_pii_log(call: &Node, bytes: &[u8], rel: &str, out: &mut Vec<Finding>) {
 // ───────────────────────────── юнит-тесты дорожки sast-taint ─────────────────────────────
 #[cfg(test)]
 mod tests {
+
+    /// T-08: проверка по разрешающему списку с ранним выходом подтверждает значение,
+    /// поэтому дальнейшее использование инъекцией не является. Это самая частая форма
+    /// безопасного кода, и ложное срабатывание на ней блокировало сдачу исправного проекта.
+    #[test]
+    fn охранная_проверка_снимает_заражение() {
+        let guarded = concat!(
+            "ALLOWED = {\"ls\", \"date\"}\n",
+            "def run():\n",
+            "    cmd = request.args.get('cmd')\n",
+            "    if cmd not in ALLOWED:\n",
+            "        return 'no'\n",
+            "    os.system(cmd)\n",
+        );
+        let t_guard = tmp(&[("guard.py", guarded)]);
+        let rep = scan_taint(&t_guard.ctx(), &RunInput::default()).unwrap();
+        assert!(
+            !rules(&rep).contains(&"sast/taint-command-exec"),
+            "значение проверено по списку до использования: {:?}",
+            rules(&rep)
+        );
+
+        // Положительная форма проверки: использование ВНУТРИ ветки тоже безопасно.
+        let inside = concat!(
+            "ALLOWED = {\"ls\"}\n",
+            "def run():\n",
+            "    cmd = request.args.get('cmd')\n",
+            "    if cmd in ALLOWED:\n",
+            "        os.system(cmd)\n",
+        );
+        let t_inside = tmp(&[("inside.py", inside)]);
+        let rep = scan_taint(&t_inside.ctx(), &RunInput::default()).unwrap();
+        assert!(
+            !rules(&rep).contains(&"sast/taint-command-exec"),
+            "значение проверено по списку в этой же ветке: {:?}",
+            rules(&rep)
+        );
+
+        // Контроль: та же форма БЕЗ прерывания потока управления защиты не даёт,
+        // поскольку исполнение доходит до стока и с непроверенным значением.
+        let leaky = concat!(
+            "ALLOWED = {\"ls\"}\n",
+            "def run():\n",
+            "    cmd = request.args.get('cmd')\n",
+            "    if cmd not in ALLOWED:\n",
+            "        log('подозрительно')\n",
+            "    os.system(cmd)\n",
+        );
+        let t_leaky = tmp(&[("leaky.py", leaky)]);
+        let rep = scan_taint(&t_leaky.ctx(), &RunInput::default()).unwrap();
+        assert!(
+            rules(&rep).contains(&"sast/taint-command-exec"),
+            "без раннего выхода охраны нет, находка обязана остаться: {:?}",
+            rules(&rep)
+        );
+
+        // Контроль: сток без всякой проверки по-прежнему ловится.
+        let raw = concat!(
+            "def run():\n",
+            "    cmd = request.args.get('cmd')\n",
+            "    os.system(cmd)\n",
+        );
+        let t_raw = tmp(&[("raw.py", raw)]);
+        let rep = scan_taint(&t_raw.ctx(), &RunInput::default()).unwrap();
+        assert!(
+            rules(&rep).contains(&"sast/taint-command-exec"),
+            "непроверенное значение остаётся инъекцией: {:?}",
+            rules(&rep)
+        );
+    }
+
+    /// T-08: запуск программы без оболочки (`spawnSync`/`execFile` с массивом аргументов)
+    /// инъекцией команд не является и вердикт блокировать не должен. Оболочка, включённая
+    /// явно параметром `shell: true`, по-прежнему флагуется.
+    #[test]
+    fn spawn_без_оболочки_не_считается_инъекцией() {
+        let safe = "function run(bin, args) {\n  const r = spawnSync(bin, args, { stdio: 'inherit' });\n  return r;\n}\n";
+        let t_safe = tmp(&[("a.js", safe)]);
+        let rep = scan(&t_safe.ctx(), &RunInput::default()).unwrap();
+        assert!(
+            !rules(&rep).contains(&"sast/dynamic-exec"),
+            "spawnSync без оболочки безопасен: {:?}",
+            rules(&rep)
+        );
+
+        let unsafe_shell = "function run(cmd) {\n  const r = spawnSync(cmd, [], { shell: true });\n  return r;\n}\n";
+        let t_unsafe = tmp(&[("b.js", unsafe_shell)]);
+        let rep2 = scan(&t_unsafe.ctx(), &RunInput::default()).unwrap();
+        assert!(
+            rules(&rep2).contains(&"sast/dynamic-exec"),
+            "shell: true возвращает оболочку, находка обязана быть: {:?}",
+            rules(&rep2)
+        );
+
+        let shell_always = "def r(cmd):\n    return os.popen(cmd)\n";
+        let t_shell = tmp(&[("c.py", shell_always)]);
+        let rep3 = scan(&t_shell.ctx(), &RunInput::default()).unwrap();
+        assert!(
+            rules(&rep3).contains(&"sast/dynamic-exec"),
+            "popen разбирает команду оболочкой всегда: {:?}",
+            rules(&rep3)
+        );
+    }
     use super::*;
     use ailc_contracts::RunInput;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use ailc_testkit::TempTree;
 
-    static CNT: AtomicU32 = AtomicU32::new(0);
-
-    /// Временный проект с файлами для прогона публичных функций движка.
-    fn tmp(files: &[(&str, &str)]) -> Ctx {
-        let n = CNT.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("ailc-sast-{}-{}", std::process::id(), n));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+    /// Временное дерево с набором файлов для прогона публичных функций движка.
+    ///
+    /// Помощник сохранён (в отличие от прямого вызова `TempTree::new`), поскольку он
+    /// записывает сразу перечень файлов фикстуры, чего одна лишь конструкция дерева не
+    /// делает. Возвращается именно дерево, а не контекст проверки: контекст берётся
+    /// вызовом `ctx()`, а дерево обязано жить до конца теста, иначе уборка при разрушении
+    /// объекта удалила бы каталог ещё до прогона сканера.
+    fn tmp(files: &[(&str, &str)]) -> TempTree {
+        let t = TempTree::new("sast");
         for (rel, content) in files {
-            let p = dir.join(rel);
-            if let Some(parent) = p.parent() {
-                std::fs::create_dir_all(parent).unwrap();
-            }
-            std::fs::write(p, content).unwrap();
+            t.write(rel, content);
         }
-        Ctx::new(dir)
+        t
     }
 
     fn rules(rep: &SastReport) -> Vec<&str> {
@@ -3005,7 +4526,7 @@ mod tests {
     #[test]
     fn t16_named_argument_value_not_label() {
         // Kotlin: exec(command = call.parameters["c"]) — значение, а не метка, заражено.
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "K.kt",
             concat!(
                 "fun vuln(call: ApplicationCall) {\n",
@@ -3014,6 +4535,7 @@ mod tests {
                 "}\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
         assert!(
             rules(&rep).contains(&"sast/taint-command-exec"),
@@ -3025,7 +4547,7 @@ mod tests {
     // ── T07: yaml.full_load/unsafe_load и алиасы как небезопасная десериализация ──
     #[test]
     fn t07_yaml_full_load_detected() {
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "a.py",
             concat!(
                 "import yaml\n",
@@ -3039,6 +4561,7 @@ mod tests {
                 "    yaml.load(d, Loader=yaml.SafeLoader)\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan(&ctx, &RunInput::default()).unwrap();
         let de = rep
             .findings
@@ -3046,7 +4569,8 @@ mod tests {
             .filter(|f| f.rule == "sast/unsafe-deserialize")
             .count();
         assert_eq!(
-            de, 2,
+            de,
+            2,
             "full_load и unsafe_load флагуются; safe_load и SafeLoader — нет: {:?}",
             rules(&rep)
         );
@@ -3055,7 +4579,7 @@ mod tests {
     // ── T06: контекстный санитайзер — basename НЕ снимает заражение для команды ──
     #[test]
     fn t06_basename_does_not_clear_command_sink() {
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "a.py",
             concat!(
                 "import os\n",
@@ -3067,6 +4591,7 @@ mod tests {
                 "    os.system(n)\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
         let cmd = rep
             .findings
@@ -3074,7 +4599,8 @@ mod tests {
             .filter(|f| f.rule == "sast/taint-command-exec")
             .count();
         assert_eq!(
-            cmd, 1,
+            cmd,
+            1,
             "basename (path) не очищает команду — находка; int (numeric) очищает — нет: {:?}",
             rules(&rep)
         );
@@ -3084,7 +4610,7 @@ mod tests {
     // ── T05: квалифицированный путь self.x хранит заражение ──
     #[test]
     fn t05_qualified_path_field_tracks_taint() {
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "a.py",
             concat!(
                 "import os\n",
@@ -3094,6 +4620,7 @@ mod tests {
                 "        os.system(self.cmd)\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
         assert!(
             rules(&rep).contains(&"sast/taint-command-exec"),
@@ -3105,7 +4632,7 @@ mod tests {
     // ── T05: мутирующий метод append заражает ресивер ──
     #[test]
     fn t05_mutating_append_taints_receiver() {
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "a.py",
             concat!(
                 "import os\n",
@@ -3115,6 +4642,7 @@ mod tests {
                 "    os.system(parts)\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
         assert!(
             rules(&rep).contains(&"sast/taint-command-exec"),
@@ -3126,7 +4654,7 @@ mod tests {
     // ── T11: SQL-инъекция через f-string распознаётся; склейка констант — нет ──
     #[test]
     fn t11_fstring_sql_and_constant_concat() {
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "a.py",
             concat!(
                 "def vuln(cur):\n",
@@ -3136,6 +4664,7 @@ mod tests {
                 "    cur.execute(\"SELECT \" + \"1\")\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan(&ctx, &RunInput::default()).unwrap();
         let sql = rep
             .findings
@@ -3143,7 +4672,8 @@ mod tests {
             .filter(|f| f.rule == "sast/sql-injection")
             .count();
         assert_eq!(
-            sql, 1,
+            sql,
+            1,
             "f-string с динамикой — находка; склейка двух констант — нет: {:?}",
             rules(&rep)
         );
@@ -3152,7 +4682,7 @@ mod tests {
     // ── T11: Go Context-вариант проверяет позицию запроса (не первый аргумент) ──
     #[test]
     fn t11_go_querycontext_query_position() {
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "h.go",
             concat!(
                 "package main\n",
@@ -3165,8 +4695,13 @@ mod tests {
                 "}\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
-        let sql = rep.findings.iter().filter(|f| f.rule == "sast/taint-sql").count();
+        let sql = rep
+            .findings
+            .iter()
+            .filter(|f| f.rule == "sast/taint-sql")
+            .count();
         assert_eq!(
             sql, 1,
             "QueryContext(ctx, q) — находка на позиции запроса; параметризованный (bind после запроса) — нет: {:?}",
@@ -3177,47 +4712,66 @@ mod tests {
     // ── T08: use-after-free и double-free в C ──
     #[test]
     fn t08_use_after_free_and_double_free() {
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "m.c",
             concat!(
                 "void vuln() {\n",
                 "    char* p = malloc(10);\n",
                 "    free(p);\n",
-                "    strlen(p);\n",   // use-after-free
-                "    free(p);\n",    // double-free
+                "    strlen(p);\n", // use-after-free
+                "    free(p);\n",   // double-free
                 "}\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
-        assert!(rules(&rep).contains(&"sast/use-after-free"), "UAF: {:?}", rules(&rep));
-        assert!(rules(&rep).contains(&"sast/double-free"), "double-free: {:?}", rules(&rep));
+        assert!(
+            rules(&rep).contains(&"sast/use-after-free"),
+            "UAF: {:?}",
+            rules(&rep)
+        );
+        assert!(
+            rules(&rep).contains(&"sast/double-free"),
+            "double-free: {:?}",
+            rules(&rep)
+        );
     }
 
     // ── T08: malloc с заражённым размером и memcpy ──
     #[test]
     fn t08_tainted_alloc_size_and_memcpy() {
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "m.c",
             concat!(
                 "void vuln() {\n",
                 "    char* n = getenv(\"N\");\n",
-                "    char* buf = malloc(n);\n",   // заражённый размер
-                "    memcpy(dst, n, 10);\n",     // заражённый источник копирования
+                "    char* buf = malloc(n);\n", // заражённый размер
+                "    memcpy(dst, n, 10);\n",    // заражённый источник копирования
                 "}\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
-        assert!(rules(&rep).contains(&"sast/taint-alloc-size"), "alloc-size: {:?}", rules(&rep));
-        assert!(rules(&rep).contains(&"sast/taint-buffer"), "memcpy buffer: {:?}", rules(&rep));
+        assert!(
+            rules(&rep).contains(&"sast/taint-alloc-size"),
+            "alloc-size: {:?}",
+            rules(&rep)
+        );
+        assert!(
+            rules(&rep).contains(&"sast/taint-buffer"),
+            "memcpy buffer: {:?}",
+            rules(&rep)
+        );
     }
 
     // ── T08: format-string из заражённого источника ──
     #[test]
     fn t08_format_string_sink() {
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "m.c",
             "void vuln() {\n    char* s = getenv(\"X\");\n    printf(s);\n}\n",
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
         assert!(
             rules(&rep).contains(&"sast/taint-format-string"),
@@ -3229,7 +4783,7 @@ mod tests {
     // ── T09: межпроцедурный обратный поток через параметр функции ──
     #[test]
     fn t09_interprocedural_param_to_sink() {
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "a.py",
             concat!(
                 "import os\n",
@@ -3241,6 +4795,7 @@ mod tests {
                 "    run('ls -la')\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
         let ip = rep
             .findings
@@ -3248,7 +4803,8 @@ mod tests {
             .filter(|f| f.rule == "sast/taint-interproc")
             .count();
         assert_eq!(
-            ip, 1,
+            ip,
+            1,
             "run(заражённый) — находка обратного потока; run('ls') — нет: {:?}",
             rules(&rep)
         );
@@ -3268,7 +4824,7 @@ mod tests {
     // ── T12: переприсваивание в одной ветке не снимает заражение после if ──
     #[test]
     fn t12_branch_join_keeps_taint() {
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "a.py",
             concat!(
                 "import os\n",
@@ -3279,10 +4835,466 @@ mod tests {
                 "    os.system(cmd)\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
         assert!(
             rules(&rep).contains(&"sast/taint-command-exec"),
             "реассайн только в ветке if не должен гасить заражение (join): {:?}",
+            rules(&rep)
+        );
+    }
+
+    // ── Сток открытия файла: путь в получателе, содержимое в аргументе ──
+
+    /// РЕГРЕССИЯ. Проверка ЗАРАЖЁННОГО ПУТИ-ПОЛУЧАТЕЛЯ была реализована только во
+    /// вспомогательном проходе, но не в том единственном месте, которое сообщает находку.
+    /// Поэтому переход по каталогам через путь в получателе не докладывался вообще.
+    #[test]
+    fn заражённый_путь_получатель_даёт_находку() {
+        let t = tmp(&[
+            (
+                "a.py",
+                "from pathlib import Path\ndef load():\n    p = Path(request.args.get('n'))\n    return p.read_text()\n",
+            ),
+            (
+                "b.py",
+                "from pathlib import Path\ndef save():\n    p = Path(request.args.get('n'))\n    p.write_text(\"данные\")\n",
+            ),
+        ]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert_eq!(
+            rep.findings
+                .iter()
+                .filter(|f| f.rule == "sast/taint-path")
+                .count(),
+            2,
+            "и чтение, и запись по заражённому пути находятся: {:?}",
+            rules(&rep)
+        );
+    }
+
+    /// Обратная сторона. У методов записи путь стоит в ПОЛУЧАТЕЛЕ, а аргумент несёт
+    /// СОДЕРЖИМОЕ, поэтому заражённое содержимое при КОНСТАНТНОМ пути переходом по каталогам
+    /// не является. Обнаружено прогоном ailc на собственном коде: сценарий обновления снимка
+    /// базы уязвимостей пишет загруженные данные в константный путь и докладывался как
+    /// находка важности HIGH.
+    #[test]
+    fn заражённое_содержимое_при_константном_пути_не_находка() {
+        let t = tmp(&[(
+            "fp.py",
+            concat!(
+                "from pathlib import Path\n",
+                "OUT = Path(\"assets\") / \"snapshot.tsv\"\n",
+                "def save():\n",
+                "    data = urlopen(\"https://example.org/d\").read().decode()\n",
+                "    OUT.write_text(data, encoding=\"utf-8\")\n",
+            ),
+        )]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert!(
+            !rules(&rep).contains(&"sast/taint-path"),
+            "содержимое не является путём: {:?}",
+            rules(&rep)
+        );
+    }
+
+    // ── Присваивание снимает метку, дополняющее сохраняет ──
+
+    /// РЕГРЕССИЯ. В грамматике Go простое и дополняющее присваивание описаны ОДНИМ узлом, и он
+    /// был помечен как дополняющее, поэтому переприсваивание в Go не снимало метку НИКОГДА.
+    /// Заведомо корректный код (значение перезаписано безопасной константой) давал критичную
+    /// находку.
+    #[test]
+    fn присваивание_в_go_снимает_метку() {
+        let t = tmp(&[(
+            "safe.go",
+            concat!(
+                "package main\n",
+                "import (\"net/http\"; \"os/exec\")\n",
+                "func h(r *http.Request) {\n",
+                "\tname := r.FormValue(\"n\")\n",
+                "\tname = \"безопасная-константа\"\n",
+                "\texec.Command(\"sh\", \"-c\", name).Run()\n",
+                "}\n",
+            ),
+        )]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert!(
+            !rules(&rep).contains(&"sast/taint-command-exec"),
+            "перезапись константой снимает заражение: {:?}",
+            rules(&rep)
+        );
+    }
+
+    /// Обратная сторона: ДОПОЛНЯЮЩЕЕ присваивание сохраняет прежнее значение как часть нового,
+    /// поэтому метку снимать нельзя. И настоящий поток без перезаписи обязан находиться.
+    #[test]
+    fn дополняющее_присваивание_в_go_сохраняет_метку() {
+        let t = tmp(&[
+            (
+                "aug.go",
+                concat!(
+                    "package main\n",
+                    "import (\"net/http\"; \"os/exec\")\n",
+                    "func h3(r *http.Request) {\n",
+                    "\tname := r.FormValue(\"n\")\n",
+                    "\tname += \"-суффикс\"\n",
+                    "\texec.Command(\"sh\", \"-c\", name).Run()\n",
+                    "}\n",
+                ),
+            ),
+            (
+                "vuln.go",
+                concat!(
+                    "package main\n",
+                    "import (\"net/http\"; \"os/exec\")\n",
+                    "func h2(r *http.Request) {\n",
+                    "\tname := r.FormValue(\"n\")\n",
+                    "\texec.Command(\"sh\", \"-c\", name).Run()\n",
+                    "}\n",
+                ),
+            ),
+        ]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert_eq!(
+            rep.findings
+                .iter()
+                .filter(|f| f.rule == "sast/taint-command-exec")
+                .count(),
+            2,
+            "дополняющее присваивание и прямой поток дают находки: {:?}",
+            rules(&rep)
+        );
+    }
+
+    // ── Межпроцедурные сводки: форма вызова обязана совпадать с формой объявления ──
+
+    /// РЕГРЕССИЯ. Свободная функция, объявленная в одном файле, не имеет права делать стоком
+    /// одноимённый МЕТОД несвязанного класса в другом файле. Прежде сводки ключевались голым
+    /// именем и объединялись по всему набору файлов языка, поэтому `def run(cmd): os.system(cmd)`
+    /// делал находкой вызов `s.run(...)` у планировщика, который лишь кладёт задачу в очередь.
+    #[test]
+    fn свободная_функция_не_становится_стоком_одноимённого_метода() {
+        let t = tmp(&[
+            (
+                "helper.py",
+                "import os\ndef run(cmd):\n    os.system(cmd)\n",
+            ),
+            (
+                "unrelated.py",
+                concat!(
+                    "class Scheduler:\n",
+                    "    def run(self, task):\n",
+                    "        self.queue.append(task)\n",
+                    "\n",
+                    "def handler(request):\n",
+                    "    s = Scheduler()\n",
+                    "    s.run(request.args.get('label'))\n",
+                ),
+            ),
+        ]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert!(
+            !rules(&rep).contains(&"sast/taint-interproc"),
+            "ложная связь по одноимённой функции устранена: {:?}",
+            rules(&rep)
+        );
+    }
+
+    /// РЕГРЕССИЯ. Метод класса, возвращающий недоверенные данные, не имеет права заражать
+    /// одноимённое обращение к чужому объекту. Прежде `def get(self)` делал заражённым любое
+    /// `d.get(...)`, включая обращение к обычному словарю.
+    #[test]
+    fn метод_источник_не_заражает_чужой_объект() {
+        let t = tmp(&[(
+            "api.py",
+            concat!(
+                "import os\n",
+                "class Api:\n",
+                "    def get(self):\n",
+                "        return request.args.get('x')\n",
+                "\n",
+                "def h(d):\n",
+                "    val = d.get('key')\n",
+                "    os.system(val)\n",
+            ),
+        )]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert!(
+            !rules(&rep).contains(&"sast/taint-command-exec"),
+            "обращение к обычному словарю не заражается: {:?}",
+            rules(&rep)
+        );
+    }
+
+    /// Ужесточение не имеет права съесть НАСТОЯЩИЕ межпроцедурные потоки: вызов свободной
+    /// функции голым именем и вызов собственного метода через `self` остаются прослеженными.
+    #[test]
+    fn настоящие_межпроцедурные_потоки_сохраняются() {
+        let t = tmp(&[
+            (
+                "a.py",
+                concat!(
+                    "import os\n",
+                    "def run_cmd(cmd):\n",
+                    "    os.system(cmd)\n",
+                    "def handler():\n",
+                    "    c = request.args.get('c')\n",
+                    "    run_cmd(c)\n",
+                ),
+            ),
+            (
+                "b.py",
+                concat!(
+                    "import os\n",
+                    "class Api:\n",
+                    "    def read_input(self):\n",
+                    "        return request.args.get('x')\n",
+                    "    def handle(self):\n",
+                    "        v = self.read_input()\n",
+                    "        os.system(v)\n",
+                ),
+            ),
+        ]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert!(
+            rules(&rep).contains(&"sast/taint-interproc"),
+            "поток через свободную функцию сохранён: {:?}",
+            rules(&rep)
+        );
+        assert!(
+            rules(&rep).contains(&"sast/taint-command-exec"),
+            "поток через собственный метод (self) сохранён: {:?}",
+            rules(&rep)
+        );
+    }
+
+    // ── Алиасы импорта разворачиваются перед классификацией стока ──
+
+    /// РЕГРЕССИЯ. Классификация стока опирается на текст вызываемого, поэтому без разбора
+    /// алиасов находилось только каноническое написание. Господствующая в Node идиома
+    /// (модуль в переменной либо деструктуризация) не находилась вовсе, то есть проверка
+    /// команд там работала едва ли наполовину.
+    #[test]
+    fn алиас_модуля_и_деструктуризация_js() {
+        let t = tmp(&[
+            (
+                "a.js",
+                "const cp = require('child_process');\nfunction h(req) { const c = req.query.c; cp.exec(c); }\n",
+            ),
+            (
+                "b.js",
+                "const { exec } = require('child_process');\nfunction h(req) { const c = req.query.c; exec(c); }\n",
+            ),
+        ]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert_eq!(
+            rep.findings
+                .iter()
+                .filter(|f| f.rule == "sast/taint-command-exec")
+                .count(),
+            2,
+            "обе идиомы обязаны находиться: {:?}",
+            rules(&rep)
+        );
+    }
+
+    /// То же для Python: переименование при импорте и алиас модуля.
+    #[test]
+    fn алиас_импорта_python() {
+        let t = tmp(&[
+            (
+                "c.py",
+                "from os import system as sh\ndef h():\n    c = request.args.get('c')\n    sh(c)\n",
+            ),
+            (
+                "d.py",
+                "import subprocess as sp\ndef h():\n    c = request.args.get('c')\n    sp.run(c, shell=True)\n",
+            ),
+        ]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert_eq!(
+            rep.findings
+                .iter()
+                .filter(|f| f.rule == "sast/taint-command-exec")
+                .count(),
+            2,
+            "переименование и алиас модуля обязаны разворачиваться: {:?}",
+            rules(&rep)
+        );
+    }
+
+    /// Разворот алиасов не имеет права порождать находки на своём месте: одноимённая
+    /// СОБСТВЕННАЯ функция проекта, не связанная с опасным модулем, стоком не является.
+    #[test]
+    fn одноимённая_своя_функция_не_становится_стоком() {
+        let t = tmp(&[(
+            "e.js",
+            concat!(
+                "const cp = require('./my-helpers');\n",
+                "function h(req) { const c = req.query.c; cp.exec(c); }\n",
+            ),
+        )]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert!(
+            !rules(&rep).contains(&"sast/taint-command-exec"),
+            "локальный модуль не является исполнением команды: {:?}",
+            rules(&rep)
+        );
+    }
+
+    /// Разбор форм импорта: отображение локального имени в каноническое.
+    #[test]
+    fn разбор_алиасов_импорта() {
+        let js = collect_import_aliases(
+            "const cp = require('child_process');\nconst { exec, spawn } = require('child_process');\nimport * as fsx from 'fs';\n",
+            "javascript",
+        );
+        assert_eq!(js.get("cp").map(String::as_str), Some("child_process"));
+        assert_eq!(
+            js.get("exec").map(String::as_str),
+            Some("child_process.exec")
+        );
+        assert_eq!(
+            js.get("spawn").map(String::as_str),
+            Some("child_process.spawn")
+        );
+        assert_eq!(js.get("fsx").map(String::as_str), Some("fs"));
+
+        let py = collect_import_aliases(
+            "import subprocess as sp\nfrom os import system as sh\nfrom subprocess import run\n",
+            "python",
+        );
+        assert_eq!(py.get("sp").map(String::as_str), Some("subprocess"));
+        assert_eq!(py.get("sh").map(String::as_str), Some("os.system"));
+        assert_eq!(py.get("run").map(String::as_str), Some("subprocess.run"));
+
+        let go = collect_import_aliases("import ex \"os/exec\"\n", "go");
+        assert_eq!(go.get("ex").map(String::as_str), Some("exec"));
+    }
+
+    /// Подстановка вне области действия алиасов оставляет имя как есть.
+    #[test]
+    fn подстановка_без_алиасов_ничего_не_меняет() {
+        assert_eq!(expand_alias("child_process.exec"), "child_process.exec");
+        let mut m = HashMap::new();
+        m.insert("cp".to_string(), "child_process".to_string());
+        with_import_aliases(m, || {
+            assert_eq!(expand_alias("cp.exec"), "child_process.exec");
+            assert_eq!(expand_alias("cp"), "child_process");
+            assert_eq!(expand_alias("other.exec"), "other.exec");
+        });
+        // После выхода из области действия состояние снято.
+        assert_eq!(expand_alias("cp.exec"), "cp.exec");
+    }
+
+    // ── Замыкания наследуют поток объемлющей области ──
+
+    /// РЕГРЕССИЯ. Замыкание лексически захватывает переменные объемлющей функции, поэтому
+    /// начинать его анализ с ПУСТОГО множества помеченных значений означает не анализировать
+    /// его вовсе. Прежде так и было для всех выраженческих форм, и это обнуляло проверку
+    /// основной массы кода на Node и React: обработчик события и колбэк там почти всегда
+    /// стрелочная функция.
+    #[test]
+    fn поток_входит_в_стрелочную_функцию() {
+        let t = tmp(&[(
+            "a.js",
+            concat!(
+                "const child_process = require('child_process');\n",
+                "function handler(req) {\n",
+                "  const c = req.query.c;\n",
+                "  setTimeout(() => { child_process.exec(c); }, 100);\n",
+                "}\n",
+            ),
+        )]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert!(
+            rules(&rep).contains(&"sast/taint-command-exec"),
+            "поток в стрелочную функцию обязан отслеживаться: {:?}",
+            rules(&rep)
+        );
+    }
+
+    /// Литерал функции в горутине Go это то же замыкание.
+    #[test]
+    fn поток_входит_в_литерал_функции_go() {
+        let t = tmp(&[(
+            "b.go",
+            concat!(
+                "package main\n",
+                "import (\"net/http\"; \"os/exec\")\n",
+                "func h(r *http.Request) {\n",
+                "\tname := r.FormValue(\"n\")\n",
+                "\tgo func() {\n",
+                "\t\texec.Command(\"sh\", \"-c\", name).Run()\n",
+                "\t}()\n",
+                "}\n",
+            ),
+        )]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert!(
+            rules(&rep).contains(&"sast/taint-command-exec"),
+            "поток в литерал функции обязан отслеживаться: {:?}",
+            rules(&rep)
+        );
+    }
+
+    /// ОБЪЯВЛЕННАЯ функция замыканием не является: её локальные переменные не связаны с
+    /// локальными переменными вызывающего, и наследовать метки в неё было бы выдумыванием
+    /// потока. Передачу через аргументы описывают межпроцедурные сводки, а не наследование.
+    #[test]
+    fn объявленная_функция_не_наследует_поток() {
+        let t = tmp(&[(
+            "c.py",
+            concat!(
+                "import os\n",
+                "def outer():\n",
+                "    cmd = request.args.get('c')\n",
+                "    return cmd\n",
+                "def other(cmd):\n",
+                "    os.system('ls')\n",
+            ),
+        )]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert!(
+            !rules(&rep).contains(&"sast/taint-command-exec"),
+            "одноимённый параметр другой функции не заражается наследованием: {:?}",
+            rules(&rep)
+        );
+    }
+
+    /// Собственный ПАРАМЕТР замыкания перекрывает одноимённую переменную снаружи: внутри это
+    /// уже другое значение. Без учёта затенения наследование давало бы ложные срабатывания на
+    /// распространённой форме перебора коллекции.
+    #[test]
+    fn параметр_замыкания_затеняет_внешнюю_переменную() {
+        let t = tmp(&[(
+            "d.js",
+            concat!(
+                "function handler(req, safeItems) {\n",
+                "  const c = req.query.c;\n",
+                "  return safeItems.map(c => eval(c));\n",
+                "}\n",
+            ),
+        )]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert!(
+            !rules(&rep).contains(&"sast/taint-command-exec"),
+            "затенение параметром обязано сниматься с наследуемых меток: {:?}",
             rules(&rep)
         );
     }
@@ -3296,7 +5308,8 @@ mod tests {
             expr = format!("f({expr})");
         }
         let src = format!("import os\ndef v():\n    os.system({expr})\n");
-        let ctx = tmp(&[("a.py", src.as_str())]);
+        let t = tmp(&[("a.py", src.as_str())]);
+        let ctx = t.ctx();
         // Сам факт успешного возврата (без паники) — проверка лимита глубины.
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
         assert!(rep.files >= 1);
@@ -3305,10 +5318,11 @@ mod tests {
     // ── T14: taint-находка verified=false и с заполненным evidence ──
     #[test]
     fn t14_taint_finding_unverified_with_evidence() {
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "a.py",
             "import os\ndef v():\n    c = request.args.get('c')\n    os.system(c)\n",
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
         let f = rep
             .findings
@@ -3325,14 +5339,18 @@ mod tests {
     fn t14_structural_finding_verified_true() {
         // eval/exec выведены в потоковый сток; для структурной верификации берём
         // десериализацию по полному имени (детерминированное правило scan).
-        let ctx = tmp(&[("a.py", "import pickle\ndef v(x):\n    pickle.loads(x)\n")]);
+        let t = tmp(&[("a.py", "import pickle\ndef v(x):\n    pickle.loads(x)\n")]);
+        let ctx = t.ctx();
         let rep = scan(&ctx, &RunInput::default()).unwrap();
         let f = rep
             .findings
             .iter()
             .find(|f| f.rule == "sast/unsafe-deserialize")
             .expect("находка есть");
-        assert!(f.verified, "структурное правило детерминировано, verified=true");
+        assert!(
+            f.verified,
+            "структурное правило детерминировано, verified=true"
+        );
     }
 
     // ── T15: счётчики пропусков растут на нечитаемом/непарсящемся вводе ──
@@ -3340,10 +5358,11 @@ mod tests {
     fn t15_skip_counters_track_coverage() {
         // .py разбирается; .xyz — исходноподобного нет, источник на python-файле + язык
         // вне taint-профиля считается skipped_lang.
-        let ctx = tmp(&[
+        let t = tmp(&[
             ("ok.py", "def v(x):\n    eval(x)\n"),
             ("weird.zig", "pub fn main() void {}\n"),
         ]);
+        let ctx = t.ctx();
         let rep = scan(&ctx, &RunInput::default()).unwrap();
         assert!(rep.files >= 1, "python-файл разобран");
         assert!(
@@ -3358,7 +5377,10 @@ mod tests {
         // классификация python eval: точное full=="eval" заменено на leaf-проверку.
         // eval/exec теперь отдельный потоковый сток кодовой инъекции (CWE-94), не команда.
         let cmd = classify_sink("python", "builtins.eval", "eval");
-        assert!(cmd.is_some(), "builtins.eval должен классифицироваться как сток");
+        assert!(
+            cmd.is_some(),
+            "builtins.eval должен классифицироваться как сток"
+        );
         assert_eq!(cmd.unwrap().0, "sast/taint-dynamic-exec");
     }
 
@@ -3366,7 +5388,7 @@ mod tests {
     #[test]
     fn xpath_injection_flow() {
         // lxml etree.XPath(query) с заражённым выражением — XPath-инъекция (CWE-643).
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "x.py",
             concat!(
                 "import lxml.etree\n",
@@ -3376,14 +5398,19 @@ mod tests {
                 "    lxml.etree.XPath(q)\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
-        assert!(rules(&rep).contains(&"sast/taint-xpath"), "xpath-сток: {:?}", rules(&rep));
+        assert!(
+            rules(&rep).contains(&"sast/taint-xpath"),
+            "xpath-сток: {:?}",
+            rules(&rep)
+        );
     }
 
     #[test]
     fn xpath_safe_constant_not_flagged() {
         // Ввод перезаписан константой до стока — заражение снято, находки быть не должно.
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "x.py",
             concat!(
                 "import lxml.etree\n",
@@ -3393,14 +5420,19 @@ mod tests {
                 "    lxml.etree.XPath(bar)\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
-        assert!(!rules(&rep).contains(&"sast/taint-xpath"), "константа не XPath: {:?}", rules(&rep));
+        assert!(
+            !rules(&rep).contains(&"sast/taint-xpath"),
+            "константа не XPath: {:?}",
+            rules(&rep)
+        );
     }
 
     #[test]
     fn ldap_injection_flow() {
         // ldap3 conn.search(base, filter) с заражённым фильтром — LDAP-инъекция (CWE-90).
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "l.py",
             concat!(
                 "def v(conn):\n",
@@ -3409,14 +5441,19 @@ mod tests {
                 "    conn.search(base, flt)\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
-        assert!(rules(&rep).contains(&"sast/taint-ldap"), "ldap-сток: {:?}", rules(&rep));
+        assert!(
+            rules(&rep).contains(&"sast/taint-ldap"),
+            "ldap-сток: {:?}",
+            rules(&rep)
+        );
     }
 
     #[test]
     fn re_search_is_not_ldap() {
         // re.search(pattern, tainted) НЕ должен считаться LDAP-стоком (исключение по re.).
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "r.py",
             concat!(
                 "import re\n",
@@ -3425,14 +5462,19 @@ mod tests {
                 "    re.search('x', bar)\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
-        assert!(!rules(&rep).contains(&"sast/taint-ldap"), "re.search не LDAP: {:?}", rules(&rep));
+        assert!(
+            !rules(&rep).contains(&"sast/taint-ldap"),
+            "re.search не LDAP: {:?}",
+            rules(&rep)
+        );
     }
 
     #[test]
     fn open_redirect_flow() {
         // flask.redirect(bar) с заражённым адресом — открытый редирект (CWE-601).
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "o.py",
             concat!(
                 "import flask\n",
@@ -3441,6 +5483,7 @@ mod tests {
                 "    return flask.redirect(bar)\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
         assert!(
             rules(&rep).contains(&"sast/taint-open-redirect"),
@@ -3452,7 +5495,7 @@ mod tests {
     #[test]
     fn server_xss_return_flow() {
         // Возврат заражённой строки как тела ответа — серверный XSS (CWE-79).
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "s.py",
             concat!(
                 "def v():\n",
@@ -3460,14 +5503,19 @@ mod tests {
                 "    return 'hello ' + bar\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
-        assert!(rules(&rep).contains(&"sast/taint-xss"), "xss-сток: {:?}", rules(&rep));
+        assert!(
+            rules(&rep).contains(&"sast/taint-xss"),
+            "xss-сток: {:?}",
+            rules(&rep)
+        );
     }
 
     #[test]
     fn server_xss_escaped_not_flagged() {
         // HTML-экранирование вывода снимает заражение XSS-стока (класс Html).
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "s.py",
             concat!(
                 "import html\n",
@@ -3477,14 +5525,19 @@ mod tests {
                 "    return safe\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
-        assert!(!rules(&rep).contains(&"sast/taint-xss"), "экранированный вывод чист: {:?}", rules(&rep));
+        assert!(
+            !rules(&rep).contains(&"sast/taint-xss"),
+            "экранированный вывод чист: {:?}",
+            rules(&rep)
+        );
     }
 
     #[test]
     fn trust_boundary_session_write() {
         // Запись недоверенного ключа в flask.session — нарушение границы доверия (CWE-501).
-        let ctx = tmp(&[(
+        let t = tmp(&[(
             "t.py",
             concat!(
                 "import flask\n",
@@ -3493,6 +5546,7 @@ mod tests {
                 "    flask.session[bar] = '1'\n",
             ),
         )]);
+        let ctx = t.ctx();
         let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
         assert!(
             rules(&rep).contains(&"sast/taint-trust-boundary"),
@@ -3504,22 +5558,235 @@ mod tests {
     #[test]
     fn dynamic_exec_flow_gated() {
         // eval(bar) с потоком — кодовая инъекция; eval('const') без потока — молчание.
-        let vuln = tmp(&[(
+        let t_vuln = tmp(&[(
             "e.py",
             "def v():\n    bar = request.args.get('q')\n    eval(bar)\n",
         )]);
+        let vuln = t_vuln.ctx();
         let rep = scan_taint(&vuln, &RunInput::default()).unwrap();
         assert!(
             rules(&rep).contains(&"sast/taint-dynamic-exec"),
             "eval с потоком: {:?}",
             rules(&rep)
         );
-        let safe = tmp(&[("e.py", "def v():\n    eval('1 + 1')\n")]);
+        let t_safe = tmp(&[("e.py", "def v():\n    eval('1 + 1')\n")]);
+        let safe = t_safe.ctx();
         let rep2 = scan_taint(&safe, &RunInput::default()).unwrap();
         assert!(
             !rules(&rep2).contains(&"sast/taint-dynamic-exec"),
             "eval константы без потока не сток: {:?}",
             rules(&rep2)
+        );
+    }
+
+    // ── Цикл проходится до неподвижной точки (двухпроходный сбор меток) ──
+
+    /// Сток стоит в теле цикла ТЕКСТУАЛЬНО РАНЬШЕ заражающего присваивания, поэтому на
+    /// второй итерации получает недоверенное значение. Однопроходный обход, соответствующий
+    /// ровно одной итерации, такую форму пропускал целиком.
+    #[test]
+    fn цикл_находит_сток_до_заражающего_присваивания() {
+        let t = tmp(&[(
+            "loop.py",
+            concat!(
+                "import os\n",
+                "def run():\n",
+                "    for i in range(2):\n",
+                "        os.system(cmd)\n",
+                "        cmd = request.args.get('c')\n",
+            ),
+        )]);
+        let ctx = t.ctx();
+        let rep = scan_taint(&ctx, &RunInput::default()).unwrap();
+        assert!(
+            rules(&rep).contains(&"sast/taint-command-exec"),
+            "внедрение команды на второй итерации цикла: {:?}",
+            rules(&rep)
+        );
+
+        // Та же форма в цикле while и в цикле JavaScript: повторный проход не должен
+        // зависеть от конкретной грамматики цикла.
+        let t_js = tmp(&[(
+            "loop.js",
+            concat!(
+                "function run(req) {\n",
+                "  let cmd = 'ls';\n",
+                "  while (next()) {\n",
+                "    child_process.exec(cmd);\n",
+                "    cmd = req.query.c;\n",
+                "  }\n",
+                "}\n",
+            ),
+        )]);
+        let js = t_js.ctx();
+        let rep_js = scan_taint(&js, &RunInput::default()).unwrap();
+        assert!(
+            rules(&rep_js).contains(&"sast/taint-command-exec"),
+            "цикл while в JavaScript обходится так же: {:?}",
+            rules(&rep_js)
+        );
+    }
+
+    /// Обратная проверка к повторному проходу цикла: сам по себе цикл заражения не
+    /// создаёт. Значение, которое тело цикла и получает из недоверенного источника, и
+    /// сразу же экранирует, остаётся безопасным, а константа не заражается вовсе. Без
+    /// этого исправление дефекта обмена местами превратилось бы в поток ложных
+    /// срабатываний на всяком коде, обрабатывающем данные в цикле.
+    #[test]
+    fn цикл_не_порождает_ложного_заражения() {
+        let t_sanitized = tmp(&[(
+            "ok.py",
+            concat!(
+                "import os, shlex\n",
+                "def run():\n",
+                "    cmd = 'ls'\n",
+                "    for i in range(2):\n",
+                "        os.system(cmd)\n",
+                "        cmd = shlex.quote(request.args.get('c'))\n",
+            ),
+        )]);
+        let sanitized = t_sanitized.ctx();
+        let rep = scan_taint(&sanitized, &RunInput::default()).unwrap();
+        assert!(
+            !rules(&rep).contains(&"sast/taint-command-exec"),
+            "экранированное в теле цикла значение безопасно: {:?}",
+            rules(&rep)
+        );
+
+        let t_literal = tmp(&[(
+            "lit.py",
+            concat!(
+                "import os\n",
+                "def run(rows):\n",
+                "    for row in rows:\n",
+                "        os.system(cmd)\n",
+                "        cmd = 'ls -la'\n",
+            ),
+        )]);
+        let literal = t_literal.ctx();
+        let rep2 = scan_taint(&literal, &RunInput::default()).unwrap();
+        assert!(
+            !rules(&rep2).contains(&"sast/taint-command-exec"),
+            "присваивание литерала в цикле источником не является: {:?}",
+            rules(&rep2)
+        );
+    }
+
+    // ── Журналирование опознаётся по сегменту имени, а не по подстроке ──
+
+    /// Имя вызова, лишь СОДЕРЖАЩЕЕ буквосочетание «log», журналированием не является.
+    /// Прежняя подстрочная проверка объявляла записью в журнал `catalog.append(...)`,
+    /// `login(...)`, `dialog(...)` и `blog.publish(...)`, из-за чего правило о
+    /// персональных данных в журналах срабатывало на коде, ничего не журналирующем.
+    #[test]
+    fn журналом_считается_только_целый_сегмент_имени() {
+        let t = tmp(&[(
+            "svc.py",
+            concat!(
+                "def save(user, u, ctx):\n",
+                "    catalog.append(user.passport)\n",
+                "    login(u.passport)\n",
+                "    dialog(user.snils)\n",
+                "    blog.publish(user.inn)\n",
+            ),
+        )]);
+        let ctx = t.ctx();
+        let rep = scan_pii_logs(&ctx, &RunInput::default()).unwrap();
+        assert!(
+            rep.findings.is_empty(),
+            "ни один из вызовов не является журналированием: {:?}",
+            rep.findings.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// Обратная проверка к сегментному сопоставлению: настоящее журналирование во всех
+    /// распространённых формах по-прежнему опознаётся, иначе строгость превратилась бы в
+    /// молчание правила.
+    #[test]
+    fn настоящее_журналирование_по_прежнему_опознаётся() {
+        for (file, code) in [
+            ("a.py", "def f(u):\n    logger.info(u.passport)\n"),
+            ("b.py", "def f(u):\n    logging.warning(u.snils)\n"),
+            ("c.py", "def f(u):\n    print(u.passport)\n"),
+            ("d.js", "function f(u) { console.error(u.passport); }\n"),
+            (
+                "e.go",
+                "func f(u User) {\n\tlog.Printf(\"%v\", u.Passport)\n}\n",
+            ),
+            ("g.go", "func f(u User) {\n\tslog.Info(\"x\", u.Snils)\n}\n"),
+            ("h.go", "func f(u User) {\n\tzap.L().Info(u.Passport)\n}\n"),
+            ("i.py", "def f(u):\n    audit_log(u.passport)\n"),
+        ] {
+            let t = tmp(&[(file, code)]);
+            let ctx = t.ctx();
+            let rep = scan_pii_logs(&ctx, &RunInput::default()).unwrap();
+            assert!(
+                !rep.findings.is_empty(),
+                "{file}: журналирование персональных данных должно находиться"
+            );
+        }
+    }
+
+    // ── Маскирование обязано быть действием над значением, а не словом в тексте ──
+
+    /// Слово с отрицающей приставкой маскированием не является. Прежняя подстрочная
+    /// проверка глушила находку по вхождению «mask» в любом месте текста аргументов,
+    /// поэтому `extra={"unmasked": True}`, прямо сообщающее об ОТСУТСТВИИ маскирования,
+    /// подавляло ровно то нарушение, ради которого правило существует.
+    #[test]
+    fn отрицающая_приставка_не_считается_маскированием() {
+        let t = tmp(&[(
+            "svc.py",
+            concat!(
+                "def f(user):\n",
+                "    logger.info(\"passport=%s\", user.passport, extra={\"unmasked\": True})\n",
+            ),
+        )]);
+        let ctx = t.ctx();
+        let rep = scan_pii_logs(&ctx, &RunInput::default()).unwrap();
+        assert_eq!(
+            rep.findings.len(),
+            1,
+            "слово unmasked означает обратное маскированию: {:?}",
+            rep.findings.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+
+        // Раздельное отрицание отсекается так же, как слитное.
+        let t_ctx2 = tmp(&[(
+            "svc2.py",
+            "def f(user):\n    logger.info(user.passport, not_masked=True)\n",
+        )]);
+        let ctx2 = t_ctx2.ctx();
+        let rep2 = scan_pii_logs(&ctx2, &RunInput::default()).unwrap();
+        assert_eq!(
+            rep2.findings.len(),
+            1,
+            "not_masked маскированием не является: {:?}",
+            rep2.findings.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// Обратная проверка к структурному признаку маскирования: вызов маскировщика и
+    /// обращение к замаскированному полю по-прежнему снимают находку, ради чего AST-правило
+    /// и вводилось в дополнение к построчному регулярному выражению.
+    #[test]
+    fn настоящее_маскирование_глушит_находку() {
+        let t = tmp(&[(
+            "svc.py",
+            concat!(
+                "def f(user):\n",
+                "    logger.info(mask(user.passport))\n",
+                "    logger.info(user.passport.redact())\n",
+                "    logger.info(anonymize(user.snils))\n",
+                "    logger.info(user.masked_passport)\n",
+            ),
+        )]);
+        let ctx = t.ctx();
+        let rep = scan_pii_logs(&ctx, &RunInput::default()).unwrap();
+        assert!(
+            rep.findings.is_empty(),
+            "замаскированное значение находкой не является: {:?}",
+            rep.findings.iter().map(|f| &f.message).collect::<Vec<_>>()
         );
     }
 }

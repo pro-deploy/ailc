@@ -27,7 +27,13 @@ impl Fixer {
             steps.push(step(
                 ctx,
                 "cargo",
-                &["clippy", "--fix", "--allow-dirty", "--allow-no-vcs", "--workspace"],
+                &[
+                    "clippy",
+                    "--fix",
+                    "--allow-dirty",
+                    "--allow-no-vcs",
+                    "--workspace",
+                ],
             ));
         }
         if has("go.mod") {

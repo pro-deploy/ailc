@@ -1,0 +1,24 @@
+{
+  "category": "security",
+  "description": "Офлайновый оркестратор качества и безопасности кода — 88 возможностей (SAST · taint-анализ · OSV · секреты · web/API · AI-безопасность · комплаенс РФ), экспонированных как навыки. Один бинарь, без внешних сервисов; находки верифицируются состязательным проходом.",
+  "keywords": [
+    "security",
+    "sast",
+    "taint-analysis",
+    "dependency-audit",
+    "secrets",
+    "compliance",
+    "devsecops",
+    "code-quality",
+    "offline",
+    "mcp"
+  ],
+  "mcp": {
+    "args": [
+      "serve"
+    ],
+    "command": "ailc"
+  },
+  "name": "ailc",
+  "version": "0.6.0"
+}

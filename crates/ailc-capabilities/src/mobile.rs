@@ -382,12 +382,18 @@ fn detect_stacks(root: &Path) -> Vec<StackPlan> {
             let analyzers = if is_expo {
                 vec![("npx".to_string(), vec!["expo-doctor".to_string()])]
             } else {
-                vec![("npx".to_string(), vec!["eslint".to_string(), ".".to_string()])]
+                vec![(
+                    "npx".to_string(),
+                    vec!["eslint".to_string(), ".".to_string()],
+                )]
             };
             stacks.push(StackPlan {
                 label,
                 cwd: root.to_path_buf(),
-                build: Some(("npm".to_string(), vec!["test".to_string(), "--silent".to_string()])),
+                build: Some((
+                    "npm".to_string(),
+                    vec!["test".to_string(), "--silent".to_string()],
+                )),
                 manual: None,
                 analyzers,
             });
@@ -668,8 +674,8 @@ fn manifest_has_unverified_deeplink(content: &str) -> bool {
 
         let has_view = block.contains("android.intent.action.view");
         // Схема http или https в значении атрибута android:scheme.
-        let has_http_scheme = block.contains("android:scheme=\"http\"")
-            || block.contains("android:scheme=\"https\"");
+        let has_http_scheme =
+            block.contains("android:scheme=\"http\"") || block.contains("android:scheme=\"https\"");
         // autoVerify задаётся в ОТКРЫВАЮЩЕМ теге фильтра.
         let has_autoverify = open_tag.contains("android:autoverify=\"true\"");
 
@@ -896,28 +902,8 @@ pub fn register(reg: &mut Registry) {
 mod tests {
     // `super::*` уже вносит RunInput, Ctx, Path, PathBuf и прочие типы модуля.
     use super::*;
+    use ailc_testkit::TempTree;
     use std::fs;
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    static CNT: AtomicU32 = AtomicU32::new(0);
-
-    /// Уникальная пустая временная папка для файловых фикстур (без внешних зависимостей).
-    fn tmp() -> PathBuf {
-        let n = CNT.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("ailc-mobile-{}-{}", std::process::id(), n));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    /// Записать файл по относительному пути внутри корня, создав родительские каталоги.
-    fn write(dir: &Path, rel: &str, content: &str) {
-        let p = dir.join(rel);
-        if let Some(parent) = p.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(p, content).unwrap();
-    }
 
     /// Прогнать статический мобильный сканер по корню.
     fn scan(root: &Path) -> CapabilityOutput {
@@ -940,9 +926,8 @@ mod tests {
 
     #[test]
     fn android_exported_без_разрешения_ловится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "app/src/main/AndroidManifest.xml",
             r#"<manifest>
   <application>
@@ -950,7 +935,7 @@ mod tests {
   </application>
 </manifest>"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(
             has_rule(&out, "mobile-exported-no-permission"),
             "экспорт без permission должен сработать: {:?}",
@@ -961,13 +946,11 @@ mod tests {
     #[test]
     fn android_exported_с_разрешением_не_ловится() {
         // Негатив: тот же экспорт, но с android:permission не является находкой.
-        let dir = tmp();
-        write(
-            &dir,
-            "app/src/main/AndroidManifest.xml",
+        let t = TempTree::new("mobile");
+        t.write("app/src/main/AndroidManifest.xml",
             r#"<activity android:name=".Admin" android:exported="true" android:permission="com.app.SECURE"/>"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(
             !has_rule(&out, "mobile-exported-no-permission"),
             "экспорт с permission не должен считаться дырой"
@@ -977,73 +960,66 @@ mod tests {
     #[test]
     fn android_exported_false_не_ловится() {
         // Негатив: exported="false" безопасен.
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "AndroidManifest.xml",
             r#"<activity android:name=".A" android:exported="false"/>"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(!has_rule(&out, "mobile-exported-no-permission"));
     }
 
     #[test]
     fn android_cleartext_traffic_ловится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "AndroidManifest.xml",
             r#"<application android:usesCleartextTraffic="true"></application>"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(has_rule(&out, "mobile-cleartext-traffic"));
     }
 
     #[test]
     fn android_cleartext_permitted_в_nsc_ловится() {
-        let dir = tmp();
-        write(
-            &dir,
-            "res/xml/network_security_config.xml",
+        let t = TempTree::new("mobile");
+        t.write("res/xml/network_security_config.xml",
             r#"<domain-config cleartextTrafficPermitted="true"><domain>api.example.com</domain></domain-config>"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(has_rule(&out, "mobile-cleartext-permitted"));
     }
 
     #[test]
     fn android_debuggable_ловится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "AndroidManifest.xml",
             r#"<application android:debuggable="true"/>"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(has_rule(&out, "mobile-debuggable"));
     }
 
     #[test]
     fn android_allow_backup_ловится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "AndroidManifest.xml",
             r#"<application android:allowBackup="true"/>"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(has_rule(&out, "mobile-allow-backup"));
     }
 
     #[test]
     fn android_allow_backup_false_не_ловится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "AndroidManifest.xml",
             r#"<application android:allowBackup="false"/>"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(!has_rule(&out, "mobile-allow-backup"));
     }
 
@@ -1051,9 +1027,8 @@ mod tests {
 
     #[test]
     fn ios_ats_arbitrary_loads_ловится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "Info.plist",
             r#"<plist><dict>
   <key>NSAppTransportSecurity</key>
@@ -1063,7 +1038,7 @@ mod tests {
   </dict>
 </dict></plist>"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(
             has_rule(&out, "mobile-ats-arbitrary-loads"),
             "глобальный NSAllowsArbitraryLoads должен сработать"
@@ -1073,29 +1048,27 @@ mod tests {
     #[test]
     fn ios_ats_false_не_ловится() {
         // Негатив: NSAllowsArbitraryLoads = false безопасен.
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "Info.plist",
             r#"<key>NSAllowsArbitraryLoads</key>
 <false/>"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(!has_rule(&out, "mobile-ats-arbitrary-loads"));
     }
 
     #[test]
     fn ios_ats_media_и_insecure_http_ловятся() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "Info.plist",
             r#"<key>NSAllowsArbitraryLoadsForMedia</key>
 <true/>
 <key>NSExceptionAllowsInsecureHTTPLoads</key>
 <true/>"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(has_rule(&out, "mobile-ats-arbitrary-media"));
         assert!(has_rule(&out, "mobile-ats-insecure-http"));
     }
@@ -1160,10 +1133,9 @@ mod tests {
     fn android_deeplink_находится_через_verify() {
         // Сквозной путь: verify/mobile для Android-стека должен выдать находку
         // диплинка из статического разбора манифеста.
-        let dir = tmp();
-        write(&dir, "build.gradle", "// app\n");
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write("build.gradle", "// app\n");
+        t.write(
             "app/src/main/AndroidManifest.xml",
             r#"<manifest><application><activity>
   <intent-filter>
@@ -1173,7 +1145,7 @@ mod tests {
 </activity></application></manifest>"#,
         );
         let out = MobileVerify::new()
-            .run(&Ctx::new(&dir), &RunInput::default())
+            .run(&Ctx::new(t.path()), &RunInput::default())
             .unwrap();
         assert!(
             out.findings
@@ -1186,27 +1158,25 @@ mod tests {
 
     #[test]
     fn assetlinks_wildcard_отпечаток_ловится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "public/.well-known/assetlinks.json",
             r#"[{"relation":["delegate_permission/common.handle_all_urls"],
   "target":{"namespace":"android_app","package_name":"com.app",
   "sha256_cert_fingerprints":["*"]}}]"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(has_rule(&out, "mobile-assetlinks-wildcard-fingerprint"));
     }
 
     #[test]
     fn apple_app_site_association_wildcard_пути_ловится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             ".well-known/apple-app-site-association.json",
             r#"{"applinks":{"apps":[],"details":[{"appID":"TEAM.com.app","paths":["*"]}]}}"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(
             has_rule(&out, "mobile-aasa-wildcard-paths"),
             "AASA с paths [*] должен сработать: {:?}",
@@ -1218,15 +1188,14 @@ mod tests {
 
     #[test]
     fn firebase_cloud_messaging_key_ловится() {
-        let dir = tmp();
+        let t = TempTree::new("mobile");
         // Синтетический ключ формы AAAA…:APA91b… достаточной длины.
         let body = "a".repeat(140);
-        write(
-            &dir,
+        t.write(
             "google-services-fcm.gradle",
             &format!("server_key = AAAA1234567:APA91b{body}"),
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(
             has_rule(&out, "mobile-firebase-cloud-messaging-key"),
             "серверный ключ FCM должен сработать"
@@ -1235,28 +1204,26 @@ mod tests {
 
     #[test]
     fn mapbox_secret_token_ловится() {
-        let dir = tmp();
+        let t = TempTree::new("mobile");
         let part = "Q".repeat(30);
-        write(
-            &dir,
+        t.write(
             "config.properties",
             &format!("MAPBOX_DOWNLOADS_TOKEN=sk.eyJ{part}.{part}"),
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(has_rule(&out, "mobile-mapbox-secret-token"));
     }
 
     #[test]
     fn mapbox_public_token_не_ловится_как_secret() {
         // Негатив: публичный токен pk. не должен срабатывать как секретный sk.
-        let dir = tmp();
+        let t = TempTree::new("mobile");
         let part = "Q".repeat(30);
-        write(
-            &dir,
+        t.write(
             "config.properties",
             &format!("MAPBOX_TOKEN=pk.eyJ{part}.{part}"),
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(
             !has_rule(&out, "mobile-mapbox-secret-token"),
             "публичный pk. не является секретным токеном"
@@ -1267,13 +1234,12 @@ mod tests {
 
     #[test]
     fn token_в_sharedprefs_ловится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "src/main/kotlin/Auth.kt",
             r#"prefs.edit().putString("auth_token", token).apply()"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(
             has_rule(&out, "mobile-token-in-sharedprefs"),
             "хранение токена в SharedPreferences должно сработать"
@@ -1283,25 +1249,23 @@ mod tests {
     #[test]
     fn обычная_настройка_в_sharedprefs_не_ловится() {
         // Негатив: сохранение нейтральной настройки (theme) не является находкой.
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "src/main/java/Settings.java",
             r#"prefs.edit().putString("theme", "dark").apply();"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(!has_rule(&out, "mobile-token-in-sharedprefs"));
     }
 
     #[test]
     fn token_в_userdefaults_ловится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "Sources/Auth.swift",
             r#"UserDefaults.standard.set(accessToken, forKey: "access_token")"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(
             has_rule(&out, "mobile-token-in-userdefaults"),
             "хранение токена в UserDefaults должно сработать: {:?}",
@@ -1311,13 +1275,12 @@ mod tests {
 
     #[test]
     fn обычная_настройка_в_userdefaults_не_ловится() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "Sources/Prefs.swift",
             r#"UserDefaults.standard.set(true, forKey: "onboardingShown")"#,
         );
-        let out = scan(&dir);
+        let out = scan(t.path());
         assert!(!has_rule(&out, "mobile-token-in-userdefaults"));
     }
 
@@ -1326,10 +1289,10 @@ mod tests {
         // Проверяем именно охват: правило хранилища применяется к .kt, а секрет-формы
         // к мобильным конфигам. Здесь убеждаемся, что mobile-secret-форма работает в
         // .properties (вне SOURCE_CODE), то есть охват расширен корректно.
-        let dir = tmp();
+        let t = TempTree::new("mobile");
         let part = "Q".repeat(30);
-        write(&dir, "secrets.properties", &format!("token=sk.eyJ{part}.{part}"));
-        let out = scan(&dir);
+        t.write("secrets.properties", &format!("token=sk.eyJ{part}.{part}"));
+        let out = scan(t.path());
         assert!(has_rule(&out, "mobile-mapbox-secret-token"));
     }
 
@@ -1370,7 +1333,10 @@ mod tests {
         assert!(!MOBILE_RULE_IDS.is_empty());
         let mut seen = std::collections::HashSet::new();
         for id in MOBILE_RULE_IDS {
-            assert!(seen.insert(*id), "идентификатор правила «{id}» продублирован");
+            assert!(
+                seen.insert(*id),
+                "идентификатор правила «{id}» продублирован"
+            );
         }
     }
 
@@ -1378,9 +1344,9 @@ mod tests {
 
     #[test]
     fn prefer_wrapper_выбирает_gradlew_при_наличии() {
-        let dir = tmp();
-        write(&dir, "gradlew", "#!/bin/sh\n");
-        let bin = prefer_wrapper(&dir, "gradlew", "gradle");
+        let t = TempTree::new("mobile");
+        t.write("gradlew", "#!/bin/sh\n");
+        let bin = prefer_wrapper(t.path(), "gradlew", "gradle");
         assert!(
             bin.ends_with("gradlew"),
             "при наличии ./gradlew должен выбираться он, получено: {bin}"
@@ -1393,17 +1359,17 @@ mod tests {
 
     #[test]
     fn prefer_wrapper_откатывается_на_системный() {
-        let dir = tmp();
+        let t = TempTree::new("mobile");
         // Обёртки нет: остаётся системный gradle.
-        let bin = prefer_wrapper(&dir, "gradlew", "gradle");
+        let bin = prefer_wrapper(t.path(), "gradlew", "gradle");
         assert_eq!(bin, "gradle", "без обёртки откат на системный бинарь");
     }
 
     #[test]
     fn prefer_wrapper_видит_bat_на_любой_платформе() {
-        let dir = tmp();
-        write(&dir, "mvnw.bat", "@echo off\n");
-        let bin = prefer_wrapper(&dir, "mvnw", "mvn");
+        let t = TempTree::new("mobile");
+        t.write("mvnw.bat", "@echo off\n");
+        let bin = prefer_wrapper(t.path(), "mvnw", "mvn");
         assert!(
             bin.ends_with("mvnw.bat"),
             "обёртка .bat должна распознаваться, получено: {bin}"
@@ -1414,9 +1380,9 @@ mod tests {
 
     #[test]
     fn flutter_распознаётся_как_стек() {
-        let dir = tmp();
-        write(&dir, "pubspec.yaml", "name: app\nflutter:\n  sdk: flutter\n");
-        let stacks = detect_stacks(&dir);
+        let t = TempTree::new("mobile");
+        t.write("pubspec.yaml", "name: app\nflutter:\n  sdk: flutter\n");
+        let stacks = detect_stacks(t.path());
         assert!(
             stacks.iter().any(|s| s.label == "Flutter"),
             "Flutter должен распознаваться, стеки: {:?}",
@@ -1426,22 +1392,24 @@ mod tests {
 
     #[test]
     fn чистый_dart_отличается_от_flutter() {
-        let dir = tmp();
-        write(&dir, "pubspec.yaml", "name: pure_dart_lib\nenvironment:\n  sdk: '>=3.0.0'\n");
-        let stacks = detect_stacks(&dir);
+        let t = TempTree::new("mobile");
+        t.write(
+            "pubspec.yaml",
+            "name: pure_dart_lib\nenvironment:\n  sdk: '>=3.0.0'\n",
+        );
+        let stacks = detect_stacks(t.path());
         assert!(stacks.iter().any(|s| s.label == "Dart"));
         assert!(!stacks.iter().any(|s| s.label == "Flutter"));
     }
 
     #[test]
     fn react_native_распознаётся_по_package_json() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "package.json",
             r#"{"name":"app","dependencies":{"react-native":"0.74.0"}}"#,
         );
-        let stacks = detect_stacks(&dir);
+        let stacks = detect_stacks(t.path());
         assert!(
             stacks.iter().any(|s| s.label == "React Native"),
             "RN должен распознаваться: {:?}",
@@ -1451,13 +1419,12 @@ mod tests {
 
     #[test]
     fn expo_распознаётся_отдельно_от_react_native() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "package.json",
             r#"{"name":"app","dependencies":{"expo":"51.0.0","react-native":"0.74.0"}}"#,
         );
-        let stacks = detect_stacks(&dir);
+        let stacks = detect_stacks(t.path());
         assert!(stacks.iter().any(|s| s.label == "React Native (Expo)"));
     }
 
@@ -1465,11 +1432,11 @@ mod tests {
     fn гибрид_flutter_плюс_нативный_ios_даёт_два_стека() {
         // Flutter в корне плюс отдельный нативный iOS-проект (НЕ подпапка ios/ внутри
         // Flutter, а самостоятельный xcodeproj в корне) должны дать два верификатора.
-        let dir = tmp();
-        write(&dir, "pubspec.yaml", "name: app\nflutter:\n  sdk: flutter\n");
+        let t = TempTree::new("mobile");
+        t.write("pubspec.yaml", "name: app\nflutter:\n  sdk: flutter\n");
         // Создаём xcodeproj в КОРНЕ (самостоятельный iOS-стек, не Flutter-обёртка).
-        fs::create_dir_all(dir.join("App.xcodeproj")).unwrap();
-        let stacks = detect_stacks(&dir);
+        fs::create_dir_all(t.path().join("App.xcodeproj")).unwrap();
+        let stacks = detect_stacks(t.path());
         let labels: Vec<&str> = stacks.iter().map(|s| s.label.as_str()).collect();
         assert!(labels.contains(&"Flutter"), "ожидался Flutter: {labels:?}");
         assert!(
@@ -1481,14 +1448,13 @@ mod tests {
     #[test]
     fn нативный_android_подпроект_rn_распознаётся() {
         // React Native в корне (package.json) плюс нативная подпапка android/ с gradle.
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "package.json",
             r#"{"name":"app","dependencies":{"react-native":"0.74.0"}}"#,
         );
-        write(&dir, "android/build.gradle", "// android root gradle\n");
-        let stacks = detect_stacks(&dir);
+        t.write("android/build.gradle", "// android root gradle\n");
+        let stacks = detect_stacks(t.path());
         let labels: Vec<&str> = stacks.iter().map(|s| s.label.as_str()).collect();
         assert!(labels.contains(&"React Native"), "{labels:?}");
         assert!(
@@ -1501,10 +1467,10 @@ mod tests {
     fn flutter_не_дублирует_android_подпроект() {
         // У Flutter подпапка android/ собирается через flutter test, поэтому
         // отдельный нативный Android-верификатор для неё НЕ добавляется (нет дубля).
-        let dir = tmp();
-        write(&dir, "pubspec.yaml", "name: app\nflutter:\n  sdk: flutter\n");
-        write(&dir, "android/build.gradle", "// flutter android wrapper\n");
-        let stacks = detect_stacks(&dir);
+        let t = TempTree::new("mobile");
+        t.write("pubspec.yaml", "name: app\nflutter:\n  sdk: flutter\n");
+        t.write("android/build.gradle", "// flutter android wrapper\n");
+        let stacks = detect_stacks(t.path());
         assert!(
             !stacks
                 .iter()
@@ -1515,10 +1481,10 @@ mod tests {
 
     #[test]
     fn android_в_корне_предпочитает_gradlew() {
-        let dir = tmp();
-        write(&dir, "build.gradle", "// app\n");
-        write(&dir, "gradlew", "#!/bin/sh\n");
-        let stacks = detect_stacks(&dir);
+        let t = TempTree::new("mobile");
+        t.write("build.gradle", "// app\n");
+        t.write("gradlew", "#!/bin/sh\n");
+        let stacks = detect_stacks(t.path());
         let android = stacks
             .iter()
             .find(|s| s.label == "Android (Gradle)")
@@ -1532,9 +1498,9 @@ mod tests {
 
     #[test]
     fn ios_xcode_в_корне_выносит_ручную_заметку() {
-        let dir = tmp();
-        fs::create_dir_all(dir.join("App.xcworkspace")).unwrap();
-        let stacks = detect_stacks(&dir);
+        let t = TempTree::new("mobile");
+        fs::create_dir_all(t.path().join("App.xcworkspace")).unwrap();
+        let stacks = detect_stacks(t.path());
         let ios = stacks
             .iter()
             .find(|s| s.label.starts_with("iOS"))
@@ -1545,12 +1511,15 @@ mod tests {
 
     #[test]
     fn нераспознанный_проект_даёт_явный_пропуск() {
-        let dir = tmp();
-        write(&dir, "README.md", "просто текст\n");
+        let t = TempTree::new("mobile");
+        t.write("README.md", "просто текст\n");
         let out = MobileVerify::new()
-            .run(&Ctx::new(&dir), &RunInput::default())
+            .run(&Ctx::new(t.path()), &RunInput::default())
             .unwrap();
-        assert!(out.skipped.is_some(), "нераспознанный проект должен дать skipped");
+        assert!(
+            out.skipped.is_some(),
+            "нераспознанный проект должен дать skipped"
+        );
         assert!(out.findings.is_empty());
     }
 
@@ -1560,10 +1529,9 @@ mod tests {
     fn ios_verify_статически_находит_ats_без_тулчейна() {
         // iOS-проект с небезопасным Info.plist: сборку запустить нельзя (нет схемы),
         // но статический разбор обязан дать находку даже без xcodebuild.
-        let dir = tmp();
-        fs::create_dir_all(dir.join("App.xcodeproj")).unwrap();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        fs::create_dir_all(t.path().join("App.xcodeproj")).unwrap();
+        t.write(
             "Info.plist",
             r#"<plist><dict>
   <key>NSAllowsArbitraryLoads</key>
@@ -1571,7 +1539,7 @@ mod tests {
 </dict></plist>"#,
         );
         let out = MobileVerify::new()
-            .run(&Ctx::new(&dir), &RunInput::default())
+            .run(&Ctx::new(t.path()), &RunInput::default())
             .unwrap();
         assert!(
             out.findings
@@ -1584,29 +1552,27 @@ mod tests {
 
     #[test]
     fn ios_entitlements_get_task_allow_находится() {
-        let dir = tmp();
-        let findings = analyze_ios_plist_entitlements({
-            write(
-                &dir,
-                "App.entitlements",
-                r#"<plist><dict>
+        let t = TempTree::new("mobile");
+        t.write(
+            "App.entitlements",
+            r#"<plist><dict>
   <key>get-task-allow</key>
   <true/>
 </dict></plist>"#,
-            );
-            &dir
-        });
+        );
+        let findings = analyze_ios_plist_entitlements(t.path());
         assert!(
-            findings.iter().any(|f| f.rule == "mobile-ios-get-task-allow"),
+            findings
+                .iter()
+                .any(|f| f.rule == "mobile-ios-get-task-allow"),
             "get-task-allow должен находиться: {findings:?}"
         );
     }
 
     #[test]
     fn ios_безопасный_plist_не_даёт_находок() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("mobile");
+        t.write(
             "Info.plist",
             r#"<plist><dict>
   <key>CFBundleName</key>
@@ -1615,7 +1581,7 @@ mod tests {
   <false/>
 </dict></plist>"#,
         );
-        let findings = analyze_ios_plist_entitlements(&dir);
+        let findings = analyze_ios_plist_entitlements(t.path());
         assert!(findings.is_empty(), "безопасный plist чист: {findings:?}");
     }
 

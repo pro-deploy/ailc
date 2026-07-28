@@ -71,9 +71,7 @@ impl Capability for DiagramView {
         for line in mermaid.lines() {
             out.records.push(line.to_string());
         }
-        out.summary = format!(
-            "code.intel/diagram: {modules} модулей, {edges} рёбер"
-        );
+        out.summary = format!("code.intel/diagram: {modules} модулей, {edges} рёбер");
         Ok(out)
     }
 }
@@ -131,12 +129,10 @@ impl Capability for DiagramDoc {
         // Оборачиваем граф в блок Mermaid, чтобы просмотрщик документации его отрисовал.
         let content = format!("```mermaid\n{}\n```", mermaid.trim_end());
 
-        let (path, action) =
-            Generator::write_block(ctx, "docs/ДИАГРАММА.md", "deps", &content)?;
+        let (path, action) = Generator::write_block(ctx, "docs/ДИАГРАММА.md", "deps", &content)?;
         out.artifacts.push(path.clone());
-        out.summary = format!(
-            "generate/diagram: {path} ({action}) — {modules} модулей, {edges} рёбер"
-        );
+        out.summary =
+            format!("generate/diagram: {path} ({action}) — {modules} модулей, {edges} рёбер");
         Ok(out)
     }
 }

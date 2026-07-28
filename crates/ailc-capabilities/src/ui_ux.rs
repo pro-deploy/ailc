@@ -58,7 +58,9 @@ const MAX_LINE_LEN: usize = 2_000;
 /// (JSX и TSX), одно-файловые компоненты Vue, Svelte и Astro. По ним работают
 /// правила атрибутов разметки (alt, программная подпись поля, интерактив на
 /// неинтерактивном теге) и правило области просмотра.
-const MARKUP_EXTS: &[&str] = &["html", "htm", "xhtml", "jsx", "tsx", "vue", "svelte", "astro"];
+const MARKUP_EXTS: &[&str] = &[
+    "html", "htm", "xhtml", "jsx", "tsx", "vue", "svelte", "astro",
+];
 
 /// Расширения файлов каскадных таблиц стилей и их препроцессоров. По ним работают
 /// правила, опирающиеся на текст объявлений: предпочитаемая цветовая схема, видимость
@@ -92,43 +94,53 @@ fn file_ext(path: &std::path::Path) -> String {
 /// поэтому правило корректно ловит и однострочный, и многострочный тег. Отрицательный
 /// просмотр не используется (его нет в крейте regex версии 1): отсутствие атрибутов
 /// проверяется явной логикой по тексту найденного тега.
-fn tag_re(cell: &'static OnceLock<Regex>, names_alt: &str) -> &'static Regex {
+fn tag_re(cell: &'static OnceLock<Option<Regex>>, names_alt: &str) -> Option<&'static Regex> {
+    // Несобравшийся встроенный паттерн выключает СВОЮ проверку, а не завершает процесс,
+    // обслуживающий чужой репозиторий (см. `ailc_core::re`).
     cell.get_or_init(|| {
         let pat = format!(r"(?is)<(?:{names_alt})\b[^>]*>");
-        Regex::new(&pat).expect("встроенный паттерн тега невалиден")
+        ailc_core::re::compile(&pat)
     })
+    .as_ref()
 }
 
 /// Найти все вхождения открывающего тега данным скомпилированным выражением и вернуть
 /// для каждого пару (полный текст тега, байтовое смещение начала).
-fn find_tags<'a>(text: &'a str, re: &Regex) -> Vec<(&'a str, usize)> {
-    re.find_iter(text).map(|m| (m.as_str(), m.start())).collect()
+fn find_tags<'a>(text: &'a str, re: Option<&Regex>) -> Vec<(&'a str, usize)> {
+    match re {
+        Some(re) => re
+            .find_iter(text)
+            .map(|m| (m.as_str(), m.start()))
+            .collect(),
+        // Выражение не скомпилировалось: проверка по этому тегу в прогоне не участвует.
+        None => Vec::new(),
+    }
 }
 
 /// Ленивые регулярные выражения тегов по семействам имён (по одному статическому
 /// слоту на каждое выражение, без общего кеша и без утечки в куче).
-fn re_img() -> &'static Regex {
-    static C: OnceLock<Regex> = OnceLock::new();
+fn re_img() -> Option<&'static Regex> {
+    static C: OnceLock<Option<Regex>> = OnceLock::new();
     tag_re(&C, "img|image")
 }
-fn re_field() -> &'static Regex {
-    static C: OnceLock<Regex> = OnceLock::new();
+fn re_field() -> Option<&'static Regex> {
+    static C: OnceLock<Option<Regex>> = OnceLock::new();
     tag_re(&C, "input|textarea|select")
 }
-fn re_box() -> &'static Regex {
-    static C: OnceLock<Regex> = OnceLock::new();
+fn re_box() -> Option<&'static Regex> {
+    static C: OnceLock<Option<Regex>> = OnceLock::new();
     tag_re(&C, "div|span")
 }
-fn re_html() -> &'static Regex {
-    static C: OnceLock<Regex> = OnceLock::new();
+fn re_html() -> Option<&'static Regex> {
+    static C: OnceLock<Option<Regex>> = OnceLock::new();
     tag_re(&C, "html")
 }
-fn re_meta() -> &'static Regex {
-    static C: OnceLock<Regex> = OnceLock::new();
+fn re_meta() -> Option<&'static Regex> {
+    static C: OnceLock<Option<Regex>> = OnceLock::new();
     tag_re(&C, "meta")
 }
-fn re_android_image() -> &'static Regex {
-    static C: OnceLock<Regex> = OnceLock::new();
+fn re_android_image() -> Option<&'static Regex> {
+    static C: OnceLock<Option<Regex>> = OnceLock::new();
     tag_re(&C, "ImageView|ImageButton")
 }
 
@@ -168,11 +180,10 @@ fn has_attr(tag_lower: &str, attr: &str) -> bool {
     while let Some(rel) = tag_lower[from..].find(attr) {
         let pos = from + rel;
         // Граница слева: начало, пробел или «<».
-        let left_ok = pos == 0
-            || {
-                let c = bytes[pos - 1];
-                c == b'<' || c == b'/' || c.is_ascii_whitespace()
-            };
+        let left_ok = pos == 0 || {
+            let c = bytes[pos - 1];
+            c == b'<' || c == b'/' || c.is_ascii_whitespace()
+        };
         // Граница справа: «=», пробел, «>», «/» или конец.
         let after = pos + alen;
         let right_ok = after >= bytes.len() || {
@@ -288,7 +299,8 @@ impl Capability for UiCapability {
                 "{source}: не найдено подходящих файлов разметки/стилей по указанному пути"
             ));
         }
-        out.metrics.push(("files_scanned".into(), files_scanned as f64));
+        out.metrics
+            .push(("files_scanned".into(), files_scanned as f64));
         out.metrics
             .push(("files_out_of_scope".into(), skips.total() as f64));
         out.metrics
@@ -373,7 +385,13 @@ fn is_dom_element(tag: &str) -> bool {
         .is_some_and(|c| c.is_ascii_lowercase())
 }
 
-fn analyze_a11y_markup(content: &str, _ext: &str, rel: &str, out: &mut CapabilityOutput, source: &str) {
+fn analyze_a11y_markup(
+    content: &str,
+    _ext: &str,
+    rel: &str,
+    out: &mut CapabilityOutput,
+    source: &str,
+) {
     // Изображение без alt. Атрибут alt с пустым значением считается корректным
     // приёмом для декоративных изображений и находку снимает (наличие имени alt
     // достаточно). Проверяем имя атрибута как целое слово, чтобы не спутать с хвостом
@@ -434,7 +452,14 @@ fn analyze_a11y_markup(content: &str, _ext: &str, rel: &str, out: &mut Capabilit
             || has_attr(&lower, "onkeyup");
         if !has_role && !has_keyboard {
             let line = line_of_offset(content, off);
-            emit(out, &CLICKABLE_NONSEMANTIC, rel, line, evidence_of(tag), source);
+            emit(
+                out,
+                &CLICKABLE_NONSEMANTIC,
+                rel,
+                line,
+                evidence_of(tag),
+                source,
+            );
         }
     }
 }
@@ -457,7 +482,13 @@ const VIEWPORT_ZOOM_BLOCKED: UiRule = UiRule {
 /// html: только для него осмысленно требовать метатег области просмотра (фрагменты
 /// компонентов корневого документа не образуют). Блокировка масштабирования
 /// проверяется по содержимому метатега viewport, где бы он ни встретился.
-fn analyze_responsive(content: &str, _ext: &str, rel: &str, out: &mut CapabilityOutput, source: &str) {
+fn analyze_responsive(
+    content: &str,
+    _ext: &str,
+    rel: &str,
+    out: &mut CapabilityOutput,
+    source: &str,
+) {
     // Метатеги собираем один раз: используются и для признака наличия viewport, и для
     // проверки блокировки масштабирования.
     let metas = find_tags(content, re_meta());
@@ -466,11 +497,20 @@ fn analyze_responsive(content: &str, _ext: &str, rel: &str, out: &mut Capability
     // тег <html. Метатег viewport ищем по совокупности «meta» и подстроки «viewport».
     let html_tags = find_tags(content, re_html());
     if let Some((_, html_off)) = html_tags.first() {
-        let has_viewport = metas.iter().any(|(tag, _)| tag.to_ascii_lowercase().contains("viewport"));
+        let has_viewport = metas
+            .iter()
+            .any(|(tag, _)| tag.to_ascii_lowercase().contains("viewport"));
         if !has_viewport {
             // Заземляем на строку тега html (точка, с которой человек начнёт правку).
             let line = line_of_offset(content, *html_off);
-            emit(out, &VIEWPORT_MISSING, rel, line, "<html> без метатега viewport".to_string(), source);
+            emit(
+                out,
+                &VIEWPORT_MISSING,
+                rel,
+                line,
+                "<html> без метатега viewport".to_string(),
+                source,
+            );
         }
     }
 
@@ -489,7 +529,14 @@ fn analyze_responsive(content: &str, _ext: &str, rel: &str, out: &mut Capability
             || maximum_scale_is_one(&t);
         if blocks_zoom {
             let line = line_of_offset(content, off);
-            emit(out, &VIEWPORT_ZOOM_BLOCKED, rel, line, evidence_of(tag), source);
+            emit(
+                out,
+                &VIEWPORT_ZOOM_BLOCKED,
+                rel,
+                line,
+                evidence_of(tag),
+                source,
+            );
         }
     }
 }
@@ -534,23 +581,29 @@ const NO_PREFERS_COLOR_SCHEME: UiRule = UiRule {
 /// background-color или color со значением в форме шестнадцатеричного цвета. Без
 /// отрицательного просмотра; «во всём файле нет prefers-color-scheme» проверяется
 /// отдельной строковой проверкой по полному тексту.
-fn explicit_color_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
+fn explicit_color_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?i)\b(?:background(?:-color)?|color)\s*:\s*#[0-9a-f]{3,8}\b")
-            .expect("встроенный паттерн цветового объявления невалиден")
+        ailc_core::re::compile(r"(?i)\b(?:background(?:-color)?|color)\s*:\s*#[0-9a-f]{3,8}\b")
     })
+    .as_ref()
 }
 
 /// Анализатор поддержки тёмной темы. Если файл стилей задаёт фон или цвет текста
 /// явным шестнадцатеричным значением, но во всём файле нет ни одного медиазапроса
 /// prefers-color-scheme, эмитируется одна находка на строку первого такого
 /// объявления (не по объявлению на строку, чтобы не зашумлять отчёт).
-fn analyze_dark_theme(content: &str, _ext: &str, rel: &str, out: &mut CapabilityOutput, source: &str) {
+fn analyze_dark_theme(
+    content: &str,
+    _ext: &str,
+    rel: &str,
+    out: &mut CapabilityOutput,
+    source: &str,
+) {
     if contains_ci(content, "prefers-color-scheme") {
         return;
     }
-    if let Some(m) = explicit_color_re().find(content) {
+    if let Some(m) = explicit_color_re().and_then(|re| re.find(content)) {
         let line = line_of_offset(content, m.start());
         let frag = m.as_str().to_string();
         emit(out, &NO_PREFERS_COLOR_SCHEME, rel, line, frag, source);
@@ -567,24 +620,28 @@ const FOCUS_OUTLINE_REMOVED: UiRule = UiRule {
 
 /// Регулярное выражение снятия контура фокуса: outline со значением none или нулём
 /// (с необязательной единицей px). Чистый положительный паттерн.
-fn outline_removed_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)\boutline\s*:\s*(?:none|0(?:px)?)\b")
-            .expect("встроенный паттерн снятия контура невалиден")
-    })
+fn outline_removed_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| ailc_core::re::compile(r"(?i)\boutline\s*:\s*(?:none|0(?:px)?)\b"))
+        .as_ref()
 }
 
 /// Анализатор видимости фокуса. Если стиль убирает контур фокуса, но во всём файле
 /// нет селектора :focus (включая :focus-visible), видимый фокус не восстановлен, и
 /// эмитируется находка на строку снятия контура.
-fn analyze_focus_visible(content: &str, _ext: &str, rel: &str, out: &mut CapabilityOutput, source: &str) {
+fn analyze_focus_visible(
+    content: &str,
+    _ext: &str,
+    rel: &str,
+    out: &mut CapabilityOutput,
+    source: &str,
+) {
     if contains_ci(content, ":focus") {
         // Любой селектор :focus или :focus-visible в файле снимает находку: видимый
         // фокус где-то восстановлен.
         return;
     }
-    if let Some(m) = outline_removed_re().find(content) {
+    if let Some(m) = outline_removed_re().and_then(|re| re.find(content)) {
         let line = line_of_offset(content, m.start());
         let frag = m.as_str().to_string();
         emit(out, &FOCUS_OUTLINE_REMOVED, rel, line, frag, source);
@@ -614,62 +671,96 @@ const TOUCH_SMALL_IOS: UiRule = UiRule {
 /// Регулярное выражение размера в вебе: свойство width/height/min-width/min-height со
 /// значением в пикселях. Значение захватывается группой 1 для числового сравнения в
 /// коде (диапазон проверяется явно, без зависимости от форм числа в регулярке).
-fn web_size_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
+fn web_size_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?i)\b(?:min-)?(?:width|height)\s*:\s*([0-9]+(?:\.[0-9]+)?)px\b")
-            .expect("встроенный паттерн размера в вебе невалиден")
+        ailc_core::re::compile(r"(?i)\b(?:min-)?(?:width|height)\s*:\s*([0-9]+(?:\.[0-9]+)?)px\b")
     })
+    .as_ref()
 }
 
 /// Регулярное выражение размера Android: атрибут layout_width/layout_height со
 /// значением в независимых пикселях (dp). Значение в группе 1.
-fn android_size_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
+fn android_size_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r#"(?i)android:(?:layout_)?(?:width|height)\s*=\s*["']([0-9]+(?:\.[0-9]+)?)dp["']"#)
-            .expect("встроенный паттерн размера Android невалиден")
+        ailc_core::re::compile(
+            r#"(?i)android:(?:layout_)?(?:width|height)\s*=\s*["']([0-9]+(?:\.[0-9]+)?)dp["']"#,
+        )
     })
+    .as_ref()
 }
 
 /// Регулярное выражение размера iOS: width/height со значением в пунктах в
 /// конструкции кадра (CGSize/CGRect/frame). Значение в группе 1.
-fn ios_size_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
+fn ios_size_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?i)\b(?:width|height)\s*:\s*([0-9]+(?:\.[0-9]+)?)\b")
-            .expect("встроенный паттерн размера iOS невалиден")
+        ailc_core::re::compile(r"(?i)\b(?:width|height)\s*:\s*([0-9]+(?:\.[0-9]+)?)\b")
     })
+    .as_ref()
 }
 
 /// Анализатор размеров целей нажатия. Минимумы взяты из рекомендаций платформ и
 /// критериев WCAG: 44 пикселя/пункта для веба и iOS, 48 независимых пикселей для
 /// Android. Значение порога не считается нарушением (строго меньше порога).
-fn analyze_touch_target(content: &str, ext: &str, rel: &str, out: &mut CapabilityOutput, source: &str) {
+fn analyze_touch_target(
+    content: &str,
+    ext: &str,
+    rel: &str,
+    out: &mut CapabilityOutput,
+    source: &str,
+) {
     if STYLE_EXTS.contains(&ext) {
-        for caps in web_size_re().captures_iter(content) {
-            let whole = caps.get(0).expect("группа 0 всегда присутствует");
+        for caps in web_size_re()
+            .into_iter()
+            .flat_map(|re| re.captures_iter(content))
+        {
+            let Some(whole) = caps.get(0) else { continue };
             let val: f64 = caps[1].parse().unwrap_or(f64::MAX);
             if val > 0.0 && val < 44.0 {
                 let line = line_of_offset(content, whole.start());
-                emit(out, &TOUCH_SMALL_WEB, rel, line, whole.as_str().to_string(), source);
+                emit(
+                    out,
+                    &TOUCH_SMALL_WEB,
+                    rel,
+                    line,
+                    whole.as_str().to_string(),
+                    source,
+                );
             }
         }
     } else if ANDROID_XML_EXTS.contains(&ext) {
-        for caps in android_size_re().captures_iter(content) {
-            let whole = caps.get(0).expect("группа 0 всегда присутствует");
+        for caps in android_size_re()
+            .into_iter()
+            .flat_map(|re| re.captures_iter(content))
+        {
+            let Some(whole) = caps.get(0) else { continue };
             let val: f64 = caps[1].parse().unwrap_or(f64::MAX);
             if val > 0.0 && val < 48.0 {
                 let line = line_of_offset(content, whole.start());
-                emit(out, &TOUCH_SMALL_ANDROID, rel, line, whole.as_str().to_string(), source);
+                emit(
+                    out,
+                    &TOUCH_SMALL_ANDROID,
+                    rel,
+                    line,
+                    whole.as_str().to_string(),
+                    source,
+                );
             }
         }
     } else if IOS_EXTS.contains(&ext) {
         // Для iOS требуем контекст кадра в той же строке, чтобы не ловить любые
         // width/height из произвольной геометрии: рядом должно быть CGSize/CGRect/frame.
-        for caps in ios_size_re().captures_iter(content) {
-            let whole = caps.get(0).expect("группа 0 всегда присутствует");
-            let line_start = content[..whole.start()].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        for caps in ios_size_re()
+            .into_iter()
+            .flat_map(|re| re.captures_iter(content))
+        {
+            let Some(whole) = caps.get(0) else { continue };
+            let line_start = content[..whole.start()]
+                .rfind('\n')
+                .map(|i| i + 1)
+                .unwrap_or(0);
             let line_end = content[whole.start()..]
                 .find('\n')
                 .map(|i| whole.start() + i)
@@ -682,7 +773,14 @@ fn analyze_touch_target(content: &str, ext: &str, rel: &str, out: &mut Capabilit
             let val: f64 = caps[1].parse().unwrap_or(f64::MAX);
             if val > 0.0 && val < 44.0 {
                 let line = line_of_offset(content, whole.start());
-                emit(out, &TOUCH_SMALL_IOS, rel, line, line_text.trim().chars().take(120).collect(), source);
+                emit(
+                    out,
+                    &TOUCH_SMALL_IOS,
+                    rel,
+                    line,
+                    line_text.trim().chars().take(120).collect(),
+                    source,
+                );
             }
         }
     }
@@ -710,12 +808,10 @@ const IOS_A11Y_DISABLED: UiRule = UiRule {
 
 /// Регулярное выражение явного отключения доступности iOS: isAccessibilityElement,
 /// присвоенный false (Swift) или NO (Objective-C).
-fn ios_a11y_off_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)isAccessibilityElement\s*=\s*(?:false|NO)\b")
-            .expect("встроенный паттерн отключения доступности iOS невалиден")
-    })
+fn ios_a11y_off_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| ailc_core::re::compile(r"(?i)isAccessibilityElement\s*=\s*(?:false|NO)\b"))
+        .as_ref()
 }
 
 /// Регулярное выражение вызова конструктора виджета Image во Flutter, включая
@@ -724,19 +820,25 @@ fn ios_a11y_off_re() -> &'static Regex {
 /// конца строки или до закрывающей скобки верхнего уровня эвристически: берём от
 /// имени Image до ближайшей закрывающей скобки на той же или соседних строках через
 /// оконный разбор в анализаторе, а здесь только находим начало вызова.
-fn flutter_image_start_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
+fn flutter_image_start_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"\bImage\s*(?:\.\s*(?:asset|network|file|memory))?\s*\(")
-            .expect("встроенный паттерн вызова Image невалиден")
+        ailc_core::re::compile(r"\bImage\s*(?:\.\s*(?:asset|network|file|memory))?\s*\(")
     })
+    .as_ref()
 }
 
 /// Анализатор нативной доступности. Для Android разбирает теги изображений XML-макета
 /// и требует contentDescription. Для Flutter находит вызов конструктора Image и в
 /// окне его аргументов требует semanticLabel либо обёртку Semantics, либо явное
 /// исключение из дерева доступности. Для iOS ловит явное отключение доступности.
-fn analyze_native_a11y(content: &str, ext: &str, rel: &str, out: &mut CapabilityOutput, source: &str) {
+fn analyze_native_a11y(
+    content: &str,
+    ext: &str,
+    rel: &str,
+    out: &mut CapabilityOutput,
+    source: &str,
+) {
     if ANDROID_XML_EXTS.contains(&ext) {
         for (tag, off) in find_tags(content, re_android_image()) {
             let lower = tag.to_ascii_lowercase();
@@ -748,20 +850,31 @@ fn analyze_native_a11y(content: &str, ext: &str, rel: &str, out: &mut Capability
                 || lower.contains("importantforaccessibility='no'");
             if !has_desc {
                 let line = line_of_offset(content, off);
-                emit(out, &ANDROID_IMAGE_NO_DESC, rel, line, evidence_of(tag), source);
+                emit(
+                    out,
+                    &ANDROID_IMAGE_NO_DESC,
+                    rel,
+                    line,
+                    evidence_of(tag),
+                    source,
+                );
             }
         }
     } else if FLUTTER_EXTS.contains(&ext) {
-        for m in flutter_image_start_re().find_iter(content) {
+        for m in flutter_image_start_re()
+            .into_iter()
+            .flat_map(|re| re.find_iter(content))
+        {
             // Окно аргументов: от начала вызова до конца сбалансированной скобки или,
             // если баланс не сошёлся в разумных пределах, до 600 символов вперёд. Этого
             // достаточно, чтобы увидеть именованные аргументы конструктора Image.
             let start = m.start();
-            let window_end = balanced_paren_end(content, m.end() - 1).unwrap_or((start + 600).min(content.len()));
+            let window_end = balanced_paren_end(content, m.end() - 1)
+                .unwrap_or((start + 600).min(content.len()));
             let window = &content[start..window_end];
             let lower = window.to_ascii_lowercase();
-            let has_semantics = lower.contains("semanticlabel")
-                || lower.contains("excludefromsemantics");
+            let has_semantics =
+                lower.contains("semanticlabel") || lower.contains("excludefromsemantics");
             // Обёртка Semantics(label: ...) вокруг Image: ищем слово Semantics в
             // небольшом окне ПЕРЕД вызовом Image (родительский виджет идёт раньше).
             let before_start = start.saturating_sub(200);
@@ -769,13 +882,30 @@ fn analyze_native_a11y(content: &str, ext: &str, rel: &str, out: &mut Capability
             let wrapped = before.contains("semantics(");
             if !has_semantics && !wrapped {
                 let line = line_of_offset(content, start);
-                emit(out, &FLUTTER_IMAGE_NO_SEMANTICS, rel, line, evidence_of(window), source);
+                emit(
+                    out,
+                    &FLUTTER_IMAGE_NO_SEMANTICS,
+                    rel,
+                    line,
+                    evidence_of(window),
+                    source,
+                );
             }
         }
     } else if IOS_EXTS.contains(&ext) {
-        for m in ios_a11y_off_re().find_iter(content) {
+        for m in ios_a11y_off_re()
+            .into_iter()
+            .flat_map(|re| re.find_iter(content))
+        {
             let line = line_of_offset(content, m.start());
-            emit(out, &IOS_A11Y_DISABLED, rel, line, m.as_str().to_string(), source);
+            emit(
+                out,
+                &IOS_A11Y_DISABLED,
+                rel,
+                line,
+                m.as_str().to_string(),
+                source,
+            );
         }
     }
 }
@@ -858,14 +988,14 @@ pub fn register(reg: &mut Registry) {
 /// XML-макеты Android плюс исходники iOS).
 const TOUCH_EXTS: &[&str] = &[
     "css", "scss", "sass", "less", "styl", // веб-стили
-    "xml", // макеты Android
+    "xml",  // макеты Android
     "swift", "m", "mm", // исходники iOS
 ];
 
 /// Объединённый набор расширений для правил нативной доступности (XML-макеты Android
 /// плюс Dart для Flutter плюс исходники iOS).
 const NATIVE_A11Y_EXTS: &[&str] = &[
-    "xml", // макеты Android
+    "xml",  // макеты Android
     "dart", // Flutter
     "swift", "m", "mm", // исходники iOS
 ];
@@ -873,28 +1003,8 @@ const NATIVE_A11Y_EXTS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    static CNT: AtomicU32 = AtomicU32::new(0);
-
-    /// Уникальная пустая временная папка для файловых фикстур (без внешних зависимостей).
-    fn tmp() -> PathBuf {
-        let n = CNT.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("ailc-uiux-{}-{}", std::process::id(), n));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    /// Записать файл по относительному пути внутри корня, создав родительские каталоги.
-    fn write(dir: &Path, rel: &str, content: &str) {
-        let p = dir.join(rel);
-        if let Some(parent) = p.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(p, content).unwrap();
-    }
+    use ailc_testkit::TempTree;
+    use std::path::Path;
 
     /// Прогнать анализатор capability с данным идентификатором по корню. Берём
     /// конкретный анализатор через построение той же capability, что и в register.
@@ -923,7 +1033,11 @@ mod tests {
     fn find_tags_ловит_однострочный_и_многострочный_тег() {
         let html = "<img src=\"a\">\n<img\n  src=\"b\"\n  alt=\"b\"\n>\n";
         let tags = find_tags(html, re_img());
-        assert_eq!(tags.len(), 2, "оба тега img должны найтись, в т.ч. многострочный");
+        assert_eq!(
+            tags.len(),
+            2,
+            "оба тега img должны найтись, в т.ч. многострочный"
+        );
     }
 
     #[test]
@@ -950,18 +1064,30 @@ mod tests {
         let s = "Image.asset('a', semanticLabel: f(x))rest";
         let open = s.find('(').unwrap();
         let end = balanced_paren_end(s, open).unwrap();
-        assert_eq!(&s[end..], "rest", "окно завершается на парной закрывающей скобке");
+        assert_eq!(
+            &s[end..],
+            "rest",
+            "окно завершается на парной закрывающей скобке"
+        );
     }
 
     // ───────────────────────── a11y-markup: alt у изображения ─────────────────────────
 
     #[test]
     fn img_без_alt_срабатывает() {
-        let dir = tmp();
-        write(&dir, "page.html", "<div><img src=\"logo.png\"></div>\n");
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-img-without-alt"), 1, "img без alt должен сработать");
-        assert_eq!(out.findings[0].location.as_ref().unwrap().line, 1, "честная строка");
+        let t = TempTree::new("uiux");
+        t.write("page.html", "<div><img src=\"logo.png\"></div>\n");
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-img-without-alt"),
+            1,
+            "img без alt должен сработать"
+        );
+        assert_eq!(
+            out.findings[0].location.as_ref().unwrap().line,
+            1,
+            "честная строка"
+        );
     }
 
     #[test]
@@ -969,13 +1095,11 @@ mod tests {
         // Строчное имя это DOM-элемент (его a11y проверяем), заглавное это React-компонент
         // (shadcn <Input>/<Select>, Next.js <Image>): его подпись задаётся композицией и из
         // тега не видна, проверять нельзя. Это убирает массовые ложные срабатывания.
-        let dir = tmp();
-        write(
-            &dir,
-            "form.tsx",
+        let t = TempTree::new("uiux");
+        t.write("form.tsx",
             "<input type=\"text\" />\n<Input value={x} />\n<Select onValueChange={f} />\n<Image src={s} />\n",
         );
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
         assert_eq!(
             count_rule(&out, "ui-input-without-label"),
             1,
@@ -995,442 +1119,605 @@ mod tests {
 
     #[test]
     fn img_с_alt_не_срабатывает() {
-        let dir = tmp();
-        write(&dir, "page.html", "<img src=\"logo.png\" alt=\"логотип компании\">\n");
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-img-without-alt"), 0, "img с alt не должен срабатывать");
+        let t = TempTree::new("uiux");
+        t.write(
+            "page.html",
+            "<img src=\"logo.png\" alt=\"логотип компании\">\n",
+        );
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-img-without-alt"),
+            0,
+            "img с alt не должен срабатывать"
+        );
     }
 
     #[test]
     fn img_с_пустым_alt_декоративный_не_срабатывает() {
-        let dir = tmp();
-        write(&dir, "page.html", "<img src=\"bg.png\" alt=\"\">\n");
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-img-without-alt"), 0, "пустой alt валиден для декора");
+        let t = TempTree::new("uiux");
+        t.write("page.html", "<img src=\"bg.png\" alt=\"\">\n");
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-img-without-alt"),
+            0,
+            "пустой alt валиден для декора"
+        );
     }
 
     #[test]
     fn img_jsx_не_путается_с_соседним_тегом() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("uiux");
+        t.write(
             "Card.tsx",
             "<><img src=\"a.png\" alt=\"первая\" /><img src=\"b.png\" /></>\n",
         );
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-img-without-alt"), 1, "ровно второй img без alt");
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-img-without-alt"),
+            1,
+            "ровно второй img без alt"
+        );
     }
 
     #[test]
     fn img_многострочный_без_alt_срабатывает() {
         // Тег разнесён на несколько строк, alt отсутствует: должно сработать.
-        let dir = tmp();
-        write(&dir, "page.html", "<img\n  src=\"logo.png\"\n  width=\"40\"\n>\n");
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-img-without-alt"), 1, "многострочный img без alt");
+        let t = TempTree::new("uiux");
+        t.write("page.html", "<img\n  src=\"logo.png\"\n  width=\"40\"\n>\n");
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-img-without-alt"),
+            1,
+            "многострочный img без alt"
+        );
     }
 
     // ───────────────────────── a11y-markup: подпись поля ввода ─────────────────────────
 
     #[test]
     fn input_без_подписи_срабатывает() {
-        let dir = tmp();
-        write(&dir, "form.html", "<form><input type=\"text\" name=\"q\"></form>\n");
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-input-without-label"), 1, "поле без подписи срабатывает");
+        let t = TempTree::new("uiux");
+        t.write(
+            "form.html",
+            "<form><input type=\"text\" name=\"q\"></form>\n",
+        );
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-input-without-label"),
+            1,
+            "поле без подписи срабатывает"
+        );
     }
 
     #[test]
     fn input_с_aria_label_не_срабатывает() {
-        let dir = tmp();
-        write(&dir, "form.html", "<input type=\"text\" aria-label=\"поиск\">\n");
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-input-without-label"), 0, "aria-label снимает находку");
+        let t = TempTree::new("uiux");
+        t.write("form.html", "<input type=\"text\" aria-label=\"поиск\">\n");
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-input-without-label"),
+            0,
+            "aria-label снимает находку"
+        );
     }
 
     #[test]
     fn input_с_id_для_внешнего_label_не_срабатывает() {
-        let dir = tmp();
-        write(&dir, "form.html", "<label for=\"q\">Поиск</label><input id=\"q\" type=\"text\">\n");
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-input-without-label"), 0, "id допускает внешний label");
+        let t = TempTree::new("uiux");
+        t.write(
+            "form.html",
+            "<label for=\"q\">Поиск</label><input id=\"q\" type=\"text\">\n",
+        );
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-input-without-label"),
+            0,
+            "id допускает внешний label"
+        );
     }
 
     #[test]
     fn input_тип_кнопка_не_срабатывает() {
-        let dir = tmp();
-        write(&dir, "form.html", "<input type=\"submit\" value=\"Отправить\">\n");
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-input-without-label"), 0, "кнопка не требует label");
+        let t = TempTree::new("uiux");
+        t.write("form.html", "<input type=\"submit\" value=\"Отправить\">\n");
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-input-without-label"),
+            0,
+            "кнопка не требует label"
+        );
     }
 
     #[test]
     fn input_скрытый_не_срабатывает() {
-        let dir = tmp();
-        write(&dir, "form.html", "<input type=\"hidden\" name=\"csrf\" value=\"x\">\n");
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-input-without-label"), 0, "скрытое поле не требует label");
+        let t = TempTree::new("uiux");
+        t.write(
+            "form.html",
+            "<input type=\"hidden\" name=\"csrf\" value=\"x\">\n",
+        );
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-input-without-label"),
+            0,
+            "скрытое поле не требует label"
+        );
     }
 
     // ───────────────────────── a11y-markup: интерактив на неинтерактивном теге ─────────────────────────
 
     #[test]
     fn div_onclick_без_роли_срабатывает() {
-        let dir = tmp();
-        write(&dir, "App.jsx", "<div onClick={open}>Открыть</div>\n");
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-clickable-nonsemantic"), 1, "div+onClick без role");
+        let t = TempTree::new("uiux");
+        t.write("App.jsx", "<div onClick={open}>Открыть</div>\n");
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-clickable-nonsemantic"),
+            1,
+            "div+onClick без role"
+        );
     }
 
     #[test]
     fn div_onclick_с_ролью_и_клавиатурой_не_срабатывает() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("uiux");
+        t.write(
             "App.jsx",
             "<div role=\"button\" tabIndex={0} onClick={open} onKeyDown={open}>Открыть</div>\n",
         );
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-clickable-nonsemantic"), 0, "role и onKeyDown снимают");
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-clickable-nonsemantic"),
+            0,
+            "role и onKeyDown снимают"
+        );
     }
 
     #[test]
     fn кнопка_с_onclick_не_срабатывает() {
-        let dir = tmp();
-        write(&dir, "App.jsx", "<button onClick={open}>Открыть</button>\n");
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-clickable-nonsemantic"), 0, "button не неинтерактивен");
+        let t = TempTree::new("uiux");
+        t.write("App.jsx", "<button onClick={open}>Открыть</button>\n");
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-clickable-nonsemantic"),
+            0,
+            "button не неинтерактивен"
+        );
     }
 
     // ───────────────────────── responsive: viewport ─────────────────────────
 
     #[test]
     fn html_без_viewport_срабатывает() {
-        let dir = tmp();
-        write(&dir, "index.html", "<html><head><title>Т</title></head><body></body></html>\n");
-        let out = run_analyzer(analyze_responsive, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-viewport-missing"), 1, "корневой html без viewport");
+        let t = TempTree::new("uiux");
+        t.write(
+            "index.html",
+            "<html><head><title>Т</title></head><body></body></html>\n",
+        );
+        let out = run_analyzer(analyze_responsive, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-viewport-missing"),
+            1,
+            "корневой html без viewport"
+        );
     }
 
     #[test]
     fn html_с_viewport_не_срабатывает() {
-        let dir = tmp();
-        write(
-            &dir,
-            "index.html",
+        let t = TempTree::new("uiux");
+        t.write("index.html",
             "<html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head></html>\n",
         );
-        let out = run_analyzer(analyze_responsive, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-viewport-missing"), 0, "viewport присутствует");
+        let out = run_analyzer(analyze_responsive, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-viewport-missing"),
+            0,
+            "viewport присутствует"
+        );
     }
 
     #[test]
     fn фрагмент_без_html_не_требует_viewport() {
         // Компонент без корневого тега html не образует документ, требовать viewport
         // от него нельзя, иначе массовое ложное срабатывание на каждом компоненте.
-        let dir = tmp();
-        write(&dir, "Card.tsx", "export const Card = () => <div>карточка</div>;\n");
-        let out = run_analyzer(analyze_responsive, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-viewport-missing"), 0, "фрагмент не документ");
+        let t = TempTree::new("uiux");
+        t.write(
+            "Card.tsx",
+            "export const Card = () => <div>карточка</div>;\n",
+        );
+        let out = run_analyzer(analyze_responsive, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-viewport-missing"),
+            0,
+            "фрагмент не документ"
+        );
     }
 
     #[test]
     fn viewport_user_scalable_no_срабатывает() {
-        let dir = tmp();
-        write(
-            &dir,
-            "index.html",
+        let t = TempTree::new("uiux");
+        t.write("index.html",
             "<html><meta name=\"viewport\" content=\"width=device-width, user-scalable=no\"></html>\n",
         );
-        let out = run_analyzer(analyze_responsive, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-viewport-zoom-blocked"), 1, "user-scalable=no срабатывает");
+        let out = run_analyzer(analyze_responsive, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-viewport-zoom-blocked"),
+            1,
+            "user-scalable=no срабатывает"
+        );
     }
 
     #[test]
     fn viewport_maximum_scale_1_срабатывает() {
-        let dir = tmp();
-        write(
-            &dir,
-            "index.html",
+        let t = TempTree::new("uiux");
+        t.write("index.html",
             "<html><meta name=\"viewport\" content=\"width=device-width, maximum-scale=1.0\"></html>\n",
         );
-        let out = run_analyzer(analyze_responsive, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-viewport-zoom-blocked"), 1, "maximum-scale=1 срабатывает");
+        let out = run_analyzer(analyze_responsive, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-viewport-zoom-blocked"),
+            1,
+            "maximum-scale=1 срабатывает"
+        );
     }
 
     #[test]
     fn viewport_initial_scale_1_не_срабатывает() {
         // initial-scale=1 это норма и не должна путаться с maximum-scale=1.
-        let dir = tmp();
-        write(
-            &dir,
-            "index.html",
+        let t = TempTree::new("uiux");
+        t.write("index.html",
             "<html><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></html>\n",
         );
-        let out = run_analyzer(analyze_responsive, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-viewport-zoom-blocked"), 0, "initial-scale=1 это норма");
+        let out = run_analyzer(analyze_responsive, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-viewport-zoom-blocked"),
+            0,
+            "initial-scale=1 это норма"
+        );
     }
 
     // ───────────────────────── dark-theme ─────────────────────────
 
     #[test]
     fn явные_цвета_без_prefers_color_scheme_срабатывают() {
-        let dir = tmp();
-        write(&dir, "theme.css", "body { background: #ffffff; color: #111111; }\n");
-        let out = run_analyzer(analyze_dark_theme, STYLE_EXTS, &dir);
-        assert!(has_rule(&out, "ui-no-prefers-color-scheme"), "явные цвета без тёмной темы");
+        let t = TempTree::new("uiux");
+        t.write(
+            "theme.css",
+            "body { background: #ffffff; color: #111111; }\n",
+        );
+        let out = run_analyzer(analyze_dark_theme, STYLE_EXTS, t.path());
+        assert!(
+            has_rule(&out, "ui-no-prefers-color-scheme"),
+            "явные цвета без тёмной темы"
+        );
     }
 
     #[test]
     fn явные_цвета_с_prefers_color_scheme_не_срабатывают() {
-        let dir = tmp();
-        write(
-            &dir,
-            "theme.css",
+        let t = TempTree::new("uiux");
+        t.write("theme.css",
             "body { background: #fff; color: #111; }\n@media (prefers-color-scheme: dark) { body { background: #000; } }\n",
         );
-        let out = run_analyzer(analyze_dark_theme, STYLE_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-no-prefers-color-scheme"), 0, "prefers-color-scheme снимает");
+        let out = run_analyzer(analyze_dark_theme, STYLE_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-no-prefers-color-scheme"),
+            0,
+            "prefers-color-scheme снимает"
+        );
     }
 
     #[test]
     fn стиль_без_явных_цветов_не_срабатывает() {
-        let dir = tmp();
-        write(&dir, "layout.css", ".row { display: flex; gap: 8px; }\n");
-        let out = run_analyzer(analyze_dark_theme, STYLE_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-no-prefers-color-scheme"), 0, "нет явных цветов");
+        let t = TempTree::new("uiux");
+        t.write("layout.css", ".row { display: flex; gap: 8px; }\n");
+        let out = run_analyzer(analyze_dark_theme, STYLE_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-no-prefers-color-scheme"),
+            0,
+            "нет явных цветов"
+        );
     }
 
     #[test]
     fn dark_theme_одна_находка_на_файл() {
         // Несколько цветовых объявлений в файле дают одну находку, а не по одной на
         // каждое объявление: правило про отсутствие тёмной темы в файле, а не про цвет.
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("uiux");
+        t.write(
             "t.css",
             "a { color: #111; }\nb { color: #222; }\nc { background: #333; }\n",
         );
-        let out = run_analyzer(analyze_dark_theme, STYLE_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-no-prefers-color-scheme"), 1, "одна находка на файл");
+        let out = run_analyzer(analyze_dark_theme, STYLE_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-no-prefers-color-scheme"),
+            1,
+            "одна находка на файл"
+        );
     }
 
     // ───────────────────────── focus-visible ─────────────────────────
 
     #[test]
     fn outline_none_без_focus_срабатывает() {
-        let dir = tmp();
-        write(&dir, "buttons.css", "button { outline: none; }\n");
-        let out = run_analyzer(analyze_focus_visible, STYLE_EXTS, &dir);
-        assert!(has_rule(&out, "ui-focus-outline-removed"), "outline:none без :focus");
+        let t = TempTree::new("uiux");
+        t.write("buttons.css", "button { outline: none; }\n");
+        let out = run_analyzer(analyze_focus_visible, STYLE_EXTS, t.path());
+        assert!(
+            has_rule(&out, "ui-focus-outline-removed"),
+            "outline:none без :focus"
+        );
     }
 
     #[test]
     fn outline_none_с_focus_visible_не_срабатывает() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("uiux");
+        t.write(
             "buttons.css",
             "button { outline: none; }\nbutton:focus-visible { outline: 2px solid #0a84ff; }\n",
         );
-        let out = run_analyzer(analyze_focus_visible, STYLE_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-focus-outline-removed"), 0, ":focus-visible восстанавливает");
+        let out = run_analyzer(analyze_focus_visible, STYLE_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-focus-outline-removed"),
+            0,
+            ":focus-visible восстанавливает"
+        );
     }
 
     #[test]
     fn стиль_без_снятия_контура_не_срабатывает() {
-        let dir = tmp();
-        write(&dir, "buttons.css", "button { color: #111; padding: 8px; }\n");
-        let out = run_analyzer(analyze_focus_visible, STYLE_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-focus-outline-removed"), 0, "контур не снят");
+        let t = TempTree::new("uiux");
+        t.write("buttons.css", "button { color: #111; padding: 8px; }\n");
+        let out = run_analyzer(analyze_focus_visible, STYLE_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-focus-outline-removed"),
+            0,
+            "контур не снят"
+        );
     }
 
     // ───────────────────────── touch-target ─────────────────────────
 
     #[test]
     fn web_маленькая_кнопка_срабатывает() {
-        let dir = tmp();
-        write(&dir, "btn.css", ".icon { width: 24px; height: 24px; }\n");
-        let out = run_analyzer(analyze_touch_target, TOUCH_EXTS, &dir);
-        assert!(has_rule(&out, "ui-touch-target-small-web"), "24px ниже минимума");
+        let t = TempTree::new("uiux");
+        t.write("btn.css", ".icon { width: 24px; height: 24px; }\n");
+        let out = run_analyzer(analyze_touch_target, TOUCH_EXTS, t.path());
+        assert!(
+            has_rule(&out, "ui-touch-target-small-web"),
+            "24px ниже минимума"
+        );
     }
 
     #[test]
     fn web_достаточная_кнопка_не_срабатывает() {
-        let dir = tmp();
-        write(&dir, "btn.css", ".icon { width: 48px; height: 48px; }\n");
-        let out = run_analyzer(analyze_touch_target, TOUCH_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-touch-target-small-web"), 0, "48px достаточно");
+        let t = TempTree::new("uiux");
+        t.write("btn.css", ".icon { width: 48px; height: 48px; }\n");
+        let out = run_analyzer(analyze_touch_target, TOUCH_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-touch-target-small-web"),
+            0,
+            "48px достаточно"
+        );
     }
 
     #[test]
     fn web_граница_44px_не_срабатывает() {
-        let dir = tmp();
-        write(&dir, "btn.css", ".icon { width: 44px; }\n");
-        let out = run_analyzer(analyze_touch_target, TOUCH_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-touch-target-small-web"), 0, "44px это порог");
+        let t = TempTree::new("uiux");
+        t.write("btn.css", ".icon { width: 44px; }\n");
+        let out = run_analyzer(analyze_touch_target, TOUCH_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-touch-target-small-web"),
+            0,
+            "44px это порог"
+        );
     }
 
     #[test]
     fn android_маленькая_цель_срабатывает() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("uiux");
+        t.write(
             "res/layout/main.xml",
             "<Button android:layout_width=\"32dp\" android:layout_height=\"32dp\" />\n",
         );
-        let out = run_analyzer(analyze_touch_target, TOUCH_EXTS, &dir);
-        assert!(has_rule(&out, "ui-touch-target-small-android"), "32dp ниже 48dp");
+        let out = run_analyzer(analyze_touch_target, TOUCH_EXTS, t.path());
+        assert!(
+            has_rule(&out, "ui-touch-target-small-android"),
+            "32dp ниже 48dp"
+        );
     }
 
     #[test]
     fn android_достаточная_цель_не_срабатывает() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("uiux");
+        t.write(
             "res/layout/main.xml",
             "<Button android:layout_width=\"48dp\" android:layout_height=\"48dp\" />\n",
         );
-        let out = run_analyzer(analyze_touch_target, TOUCH_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-touch-target-small-android"), 0, "48dp достаточно");
+        let out = run_analyzer(analyze_touch_target, TOUCH_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-touch-target-small-android"),
+            0,
+            "48dp достаточно"
+        );
     }
 
     #[test]
     fn ios_маленький_кадр_срабатывает() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("uiux");
+        t.write(
             "View.swift",
             "let frame = CGRect(x: 0, y: 0, width: 20, height: 20)\n",
         );
-        let out = run_analyzer(analyze_touch_target, TOUCH_EXTS, &dir);
-        assert!(has_rule(&out, "ui-touch-target-small-ios"), "кадр 20pt ниже минимума");
+        let out = run_analyzer(analyze_touch_target, TOUCH_EXTS, t.path());
+        assert!(
+            has_rule(&out, "ui-touch-target-small-ios"),
+            "кадр 20pt ниже минимума"
+        );
     }
 
     #[test]
     fn ios_размер_вне_контекста_кадра_не_срабатывает() {
         // width/height без CGSize/CGRect/frame в строке это не размер цели нажатия.
-        let dir = tmp();
-        write(&dir, "Model.swift", "let width: Int = 10\n");
-        let out = run_analyzer(analyze_touch_target, TOUCH_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-touch-target-small-ios"), 0, "не контекст кадра");
+        let t = TempTree::new("uiux");
+        t.write("Model.swift", "let width: Int = 10\n");
+        let out = run_analyzer(analyze_touch_target, TOUCH_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-touch-target-small-ios"),
+            0,
+            "не контекст кадра"
+        );
     }
 
     // ───────────────────────── native-a11y ─────────────────────────
 
     #[test]
     fn android_image_без_contentdescription_срабатывает() {
-        let dir = tmp();
-        write(
-            &dir,
-            "res/layout/row.xml",
+        let t = TempTree::new("uiux");
+        t.write("res/layout/row.xml",
             "<ImageView\n    android:layout_width=\"48dp\"\n    android:layout_height=\"48dp\"\n    android:src=\"@drawable/ic\" />\n",
         );
-        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, &dir);
-        assert!(has_rule(&out, "ui-android-image-no-contentdescription"), "нет contentDescription");
+        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, t.path());
+        assert!(
+            has_rule(&out, "ui-android-image-no-contentdescription"),
+            "нет contentDescription"
+        );
     }
 
     #[test]
     fn android_image_с_contentdescription_не_срабатывает() {
-        let dir = tmp();
-        write(
-            &dir,
-            "res/layout/row.xml",
+        let t = TempTree::new("uiux");
+        t.write("res/layout/row.xml",
             "<ImageView\n    android:layout_width=\"48dp\"\n    android:contentDescription=\"@string/avatar\"\n    android:src=\"@drawable/ic\" />\n",
         );
-        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-android-image-no-contentdescription"), 0, "есть описание");
+        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-android-image-no-contentdescription"),
+            0,
+            "есть описание"
+        );
     }
 
     #[test]
     fn android_image_декоративный_не_срабатывает() {
         // Явное исключение из дерева доступности это осознанный выбор для декора.
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("uiux");
+        t.write(
             "res/layout/row.xml",
             "<ImageView android:src=\"@drawable/bg\" android:importantForAccessibility=\"no\" />\n",
         );
-        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-android-image-no-contentdescription"), 0, "декор исключён");
+        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-android-image-no-contentdescription"),
+            0,
+            "декор исключён"
+        );
     }
 
     #[test]
     fn flutter_image_без_semantics_срабатывает() {
-        let dir = tmp();
-        write(&dir, "lib/card.dart", "Widget build() => Image.asset('assets/logo.png');\n");
-        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, &dir);
-        assert!(has_rule(&out, "ui-flutter-image-no-semantics"), "Image.asset без semanticLabel");
+        let t = TempTree::new("uiux");
+        t.write(
+            "lib/card.dart",
+            "Widget build() => Image.asset('assets/logo.png');\n",
+        );
+        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, t.path());
+        assert!(
+            has_rule(&out, "ui-flutter-image-no-semantics"),
+            "Image.asset без semanticLabel"
+        );
     }
 
     #[test]
     fn flutter_image_с_semantic_label_не_срабатывает() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("uiux");
+        t.write(
             "lib/card.dart",
             "Widget build() => Image.asset('assets/logo.png', semanticLabel: 'логотип');\n",
         );
-        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-flutter-image-no-semantics"), 0, "semanticLabel снимает");
+        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-flutter-image-no-semantics"),
+            0,
+            "semanticLabel снимает"
+        );
     }
 
     #[test]
     fn flutter_image_в_обёртке_semantics_не_срабатывает() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("uiux");
+        t.write(
             "lib/card.dart",
             "Widget build() => Semantics(label: 'логотип', child: Image.asset('a.png'));\n",
         );
-        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-flutter-image-no-semantics"), 0, "обёртка Semantics снимает");
+        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-flutter-image-no-semantics"),
+            0,
+            "обёртка Semantics снимает"
+        );
     }
 
     #[test]
     fn flutter_image_excludefromsemantics_не_срабатывает() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("uiux");
+        t.write(
             "lib/card.dart",
             "Widget build() => Image.asset('assets/bg.png', excludeFromSemantics: true);\n",
         );
-        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-flutter-image-no-semantics"), 0, "excludeFromSemantics снимает");
+        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-flutter-image-no-semantics"),
+            0,
+            "excludeFromSemantics снимает"
+        );
     }
 
     #[test]
     fn ios_accessibility_disabled_срабатывает() {
-        let dir = tmp();
-        write(&dir, "View.swift", "button.isAccessibilityElement = false\n");
-        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-ios-accessibility-disabled"), 1, "отключение доступности");
+        let t = TempTree::new("uiux");
+        t.write("View.swift", "button.isAccessibilityElement = false\n");
+        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-ios-accessibility-disabled"),
+            1,
+            "отключение доступности"
+        );
     }
 
     #[test]
     fn ios_accessibility_enabled_не_срабатывает() {
-        let dir = tmp();
-        write(&dir, "View.swift", "button.isAccessibilityElement = true\n");
-        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-ios-accessibility-disabled"), 0, "доступность включена");
+        let t = TempTree::new("uiux");
+        t.write("View.swift", "button.isAccessibilityElement = true\n");
+        let out = run_analyzer(analyze_native_a11y, NATIVE_A11Y_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-ios-accessibility-disabled"),
+            0,
+            "доступность включена"
+        );
     }
 
     // ───────────────────────── инвариант пропуска и тест-файлы ─────────────────────────
 
     #[test]
     fn пустой_корень_даёт_явный_пропуск() {
-        let dir = tmp();
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert!(out.skipped.is_some(), "ноль файлов это явный пропуск, не успех");
+        let t = TempTree::new("uiux");
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert!(
+            out.skipped.is_some(),
+            "ноль файлов это явный пропуск, не успех"
+        );
     }
 
     #[test]
     fn тест_файлы_не_анализируются() {
         // Фикстура с заведомым нарушением в тест-файле не должна давать находку.
-        let dir = tmp();
-        write(&dir, "Button.test.tsx", "<img src=\"x.png\">\n");
-        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, &dir);
-        assert_eq!(count_rule(&out, "ui-img-without-alt"), 0, "тест-файлы вне охвата");
+        let t = TempTree::new("uiux");
+        t.write("Button.test.tsx", "<img src=\"x.png\">\n");
+        let out = run_analyzer(analyze_a11y_markup, MARKUP_EXTS, t.path());
+        assert_eq!(
+            count_rule(&out, "ui-img-without-alt"),
+            0,
+            "тест-файлы вне охвата"
+        );
     }
 
     // ───────────────────────── полнота перечня идентификаторов правил ─────────────────────────
@@ -1458,9 +1745,16 @@ mod tests {
             IOS_A11Y_DISABLED.id,
         ];
         let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
-        assert_eq!(unique.len(), ids.len(), "идентификаторы правил должны быть уникальны");
+        assert_eq!(
+            unique.len(),
+            ids.len(),
+            "идентификаторы правил должны быть уникальны"
+        );
         assert_eq!(ids.len(), 13, "слой объявляет ровно 13 правил");
         // Все идентификаторы в едином пространстве имён quality.ui/* по префиксу ui-.
-        assert!(ids.iter().all(|id| id.starts_with("ui-")), "единый префикс ui-");
+        assert!(
+            ids.iter().all(|id| id.starts_with("ui-")),
+            "единый префикс ui-"
+        );
     }
 }

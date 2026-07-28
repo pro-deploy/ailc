@@ -66,8 +66,13 @@ impl AgentOrchestrator {
                     fams.push(f);
                 }
             }
+            // Строгость фолбэка определяется ДЕТЕРМИНИРОВАННО по намерению, а не берётся
+            // из пустого плана: при сбое sampling `plan` равен `AgentPlan::default()`, и
+            // его `strict == false` терял бы строгий режим ровно на сдаче/релизе, то есть
+            // там, где он важнее всего.
+            let strict = plan.strict || strict_intent(intent);
             let mut ledger =
-                Orchestrator::deterministic_gate(reg, ctx, input, intent, &fams, plan.strict);
+                Orchestrator::deterministic_gate(reg, ctx, input, intent, &fams, strict);
             ledger.rounds.push(format!(
                 "⚠ LLM не дал план — детерминированный безопасный набор по паспорту ({})",
                 prof.summary()
@@ -97,25 +102,35 @@ impl AgentOrchestrator {
                 ("deliver/branch-name", "имя ветки"),
             ];
             let mut made: Vec<String> = Vec::new();
+            let mut failed: Vec<String> = Vec::new();
             for (id, label) in chain {
                 let Some(cap) = reg.get(id) else { continue };
                 let di = RunInput {
                     target: None,
                     query: Some(intent.to_string()),
                 };
-                if let Ok(out) = cap.run(ctx, &di) {
-                    extra_artifacts.extend(out.artifacts.iter().cloned());
-                    let detail = out
-                        .artifacts
-                        .first()
-                        .cloned()
-                        .or_else(|| out.records.first().cloned())
-                        .unwrap_or_else(|| out.summary.clone());
-                    made.push(format!("{label}: {detail}"));
+                // Сбой capability НЕ глотается: он фиксируется в журнале раундов, чтобы
+                // отсутствие спеки/задачи/ветки не выглядело так, будто их не заказывали
+                // (инвариант «нет молчаливых пропусков»).
+                match cap.run(ctx, &di) {
+                    Ok(out) => {
+                        extra_artifacts.extend(out.artifacts.iter().cloned());
+                        let detail = out
+                            .artifacts
+                            .first()
+                            .cloned()
+                            .or_else(|| out.records.first().cloned())
+                            .unwrap_or_else(|| out.summary.clone());
+                        made.push(format!("{label}: {detail}"));
+                    }
+                    Err(e) => failed.push(format!("{label} ({id}): {e}")),
                 }
             }
             if !made.is_empty() {
                 rounds.push(format!("чертежи до кода — {}", made.join(" · ")));
+            }
+            if !failed.is_empty() {
+                rounds.push(format!("⚠ чертежи до кода, сбои — {}", failed.join(" · ")));
             }
         }
         let mut dry = 0usize;
@@ -178,7 +193,10 @@ impl AgentOrchestrator {
             }
         }
 
-        let (collected, confirmed, refuted) = last.expect("budget>=1 → хотя бы один раунд");
+        // Бюджет не меньше единицы, поэтому раунд всегда состоялся. Если по какой-то
+        // причине его нет, честнее вернуть пустой вердикт, чем оборвать сеанс.
+        let (collected, confirmed, refuted): (CollectedRun, Vec<Finding>, usize) =
+            last.unwrap_or_default();
 
         // ── ФИНАЛЬНЫЙ ПРОХОД СДАЧИ ── на строгом намерении (сдача/релиз) сервер сам
         // приводит документы в порядок (идемпотентные авто-блоки из кода) и дописывает
@@ -187,15 +205,28 @@ impl AgentOrchestrator {
         // иначе детерминированная формулировка. Вердикт гейта это не меняет.
         if plan.strict {
             let mut refreshed: Vec<&str> = Vec::new();
+            let mut refresh_failed: Vec<String> = Vec::new();
             for id in ["generate/docs", "generate/spec", "generate/c4"] {
                 if let Some(cap) = reg.get(id) {
-                    if cap.run(ctx, input).is_ok() {
-                        refreshed.push(id);
+                    // Сбой генератора фиксируется в журнале, а не глотается: на сдаче
+                    // человек обязан видеть, что документы НЕ обновились и почему.
+                    match cap.run(ctx, input) {
+                        Ok(_) => refreshed.push(id),
+                        Err(e) => refresh_failed.push(format!("{id}: {e}")),
                     }
                 }
             }
             if !refreshed.is_empty() {
-                rounds.push(format!("сдача: документы обновлены из кода ({})", refreshed.join(", ")));
+                rounds.push(format!(
+                    "сдача: документы обновлены из кода ({})",
+                    refreshed.join(", ")
+                ));
+            }
+            if !refresh_failed.is_empty() {
+                rounds.push(format!(
+                    "⚠ сдача: документы НЕ обновились — {}",
+                    refresh_failed.join(" · ")
+                ));
             }
             let broke: Vec<&Finding> = confirmed
                 .iter()
@@ -215,10 +246,18 @@ impl AgentOrchestrator {
                     )
                     .unwrap_or(context);
                 if let Some(adr) = reg.get("generate/adr") {
-                    let di = RunInput { target: None, query: Some(text) };
-                    if let Ok(out) = adr.run(ctx, &di) {
-                        extra_artifacts.extend(out.artifacts.iter().cloned());
-                        rounds.push(format!("ретро-ADR: контракт изменился — {}", out.summary));
+                    let di = RunInput {
+                        target: None,
+                        query: Some(text),
+                    };
+                    match adr.run(ctx, &di) {
+                        Ok(out) => {
+                            extra_artifacts.extend(out.artifacts.iter().cloned());
+                            rounds.push(format!("ретро-ADR: контракт изменился — {}", out.summary));
+                        }
+                        // Сбой фиксируется явно: слом контракта без записи решения не
+                        // должен выглядеть так, будто ADR и не требовался.
+                        Err(e) => rounds.push(format!("⚠ ретро-ADR не создан: {e}")),
                     }
                 }
             }
@@ -238,6 +277,7 @@ impl AgentOrchestrator {
                 confirmed,
                 checks_run: collected.checks_run,
                 checks_skipped: collected.checks_skipped,
+                tools_failed: collected.tools_failed,
                 artifacts,
                 refuted,
                 strict: plan.strict,
@@ -271,10 +311,11 @@ fn plan_prompt(reg: &Registry, ctx: &Ctx, intent: &str) -> String {
     for m in reg.manifests() {
         p.push_str(&format!("- {}: {}\n", m.id, m.when_to_use));
     }
-    p.push_str(&format!("\nКонтекст проекта: {}\n", project_context(&ctx.root)));
-    p.push_str(
-        "\nНамерение пользователя: «",
-    );
+    p.push_str(&format!(
+        "\nКонтекст проекта: {}\n",
+        project_context(&ctx.root)
+    ));
+    p.push_str("\nНамерение пользователя: «");
     p.push_str(intent);
     p.push_str(
         "»\n\nВерни ТОЛЬКО JSON-объект плана: \
@@ -328,7 +369,10 @@ fn reflect_prompt(
             .as_ref()
             .map(|l| format!(" {}:{}", l.file, l.line))
             .unwrap_or_default();
-        p.push_str(&format!("- [{}] {} — {}{}\n", f.severity, f.rule, f.message, loc));
+        p.push_str(&format!(
+            "- [{}] {} — {}{}\n",
+            f.severity, f.rule, f.message, loc
+        ));
     }
     if confirmed.is_empty() {
         p.push_str("(находок нет)\n");
@@ -371,13 +415,105 @@ fn parse_reflect(resp: &str) -> Reflect {
     }
 }
 
-/// Достать первый JSON-объект `{ … }` из ответа модели (терпимо к обрамлению/прозе).
+/// Строгое ли намерение («сдача»): детерминированная эвристика по простым маркерам
+/// сдачи/релиза/выката. Используется ТОЛЬКО фолбэком при сбое sampling или невалидном
+/// ответе плана: штатно строгость решает нейросеть на фазе PLAN. Без этой эвристики
+/// фолбэк терял строгий режим ровно на сдаче, где он важнее всего.
+fn strict_intent(intent: &str) -> bool {
+    let s = intent.to_lowercase();
+    const MARKERS: &[&str] = &[
+        "сдач",
+        "сдать",
+        "сдаю",
+        "релиз",
+        "выкат",
+        "выклад",
+        "прод",
+        "мерж",
+        "слить",
+        "release",
+        "ship",
+        "deploy",
+        "merge",
+        "prod",
+    ];
+    MARKERS.iter().any(|m| s.contains(m))
+}
+
+/// Достать первый ПОЛНЫЙ JSON-объект `{ … }` из ответа модели (терпимо к обрамлению и
+/// прозе ДО и ПОСЛЕ объекта). Поиск балансный: счётчик фигурных скобок с учётом строковых
+/// литералов и экранирования. Прежний срез «от первого `{` до последнего `}`» ломался на
+/// прозе после объекта, если в ней встречалась закрывающая скобка: в срез попадал мусор, и
+/// валидный план не разбирался.
 fn extract_object(s: &str) -> Option<&str> {
-    let a = s.find('{')?;
-    let b = s.rfind('}')?;
-    if b > a {
-        Some(&s[a..=b])
-    } else {
-        None
+    let start = s.find('{')?;
+    let bytes = s.as_bytes();
+    let mut depth = 0usize;
+    let mut in_str = false;
+    let mut escaped = false;
+    for (i, &c) in bytes.iter().enumerate().skip(start) {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            b'"' => in_str = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&s[start..=i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_object_балансный_поиск_терпит_прозу_после_объекта() {
+        // Проза после объекта содержит закрывающую скобку: прежний срез до ПОСЛЕДНЕЙ `}`
+        // захватывал мусор, и план не разбирался.
+        let resp = r#"Вот план: {"steps":[{"id":"a","why":"b"}],"strict":true} (см. блок {выше})"#;
+        let json = extract_object(resp).expect("объект найден");
+        assert_eq!(json, r#"{"steps":[{"id":"a","why":"b"}],"strict":true}"#);
+        assert!(serde_json::from_str::<serde_json::Value>(json).is_ok());
+    }
+
+    #[test]
+    fn extract_object_учитывает_скобки_в_строковых_литералах() {
+        let resp = r#"{"note":"скобка } в строке","x":1} хвост"#;
+        let json = extract_object(resp).expect("объект найден");
+        assert_eq!(json, r#"{"note":"скобка } в строке","x":1}"#);
+        // Экранированная кавычка внутри строки не сбивает разбор.
+        let resp2 = r#"{"a":"\"}","b":2} и ещё"#;
+        assert_eq!(extract_object(resp2), Some(r#"{"a":"\"}","b":2}"#));
+    }
+
+    #[test]
+    fn extract_object_незакрытый_объект_не_извлекается() {
+        assert_eq!(extract_object(r#"{"a": 1"#), None);
+        assert_eq!(extract_object("проза без объекта"), None);
+    }
+
+    #[test]
+    fn strict_intent_распознаёт_маркеры_сдачи() {
+        assert!(strict_intent("проверь всё перед сдачей"));
+        assert!(strict_intent("готовим релиз 1.2"));
+        assert!(strict_intent("можно мержить в прод?"));
+        assert!(strict_intent("ready to ship / deploy"));
+        assert!(!strict_intent("посмотри качество кода"));
+        assert!(!strict_intent("найди запахи в модуле"));
     }
 }

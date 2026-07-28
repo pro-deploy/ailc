@@ -156,7 +156,7 @@ impl fmt::Display for Confidence {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Location {
     pub file: String,
     pub line: u32,
@@ -164,7 +164,7 @@ pub struct Location {
 
 /// Находка. `verified` и `evidence` — несущая стена анти-гейминга:
 /// очки начисляются только за находку, пережившую verify и заземлённую на file:line.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
     pub rule: String,
     pub severity: Severity,
@@ -259,151 +259,326 @@ impl RuleConfidence {
 /// зависимости). PATTERN (переходит в Medium-сигнал, осознанно): паттерн-совпадения
 /// OWASP/web/AI-безопасности и структурные проверки governance, которые являются
 /// настоящим сигналом, но не уникальным токеном.
+/// Классы достоверности как ДАННЫЕ модульного уровня, а не локальные константы внутри
+/// функции. Подняты сюда, чтобы их можно было ПЕРЕЧИСЛИТЬ (см. `classified_rule_ids`) и тем
+/// проверить согласованность карты с кодом в обе стороны: нет ни правил без класса, ни
+/// записей о правилах, которых код не излучает.
+const PRECISE: &[&str] = &[
+    // Секреты с надёжной формой токена.
+    "aws-access-key",
+    "aws-secret-key",
+    "private-key",
+    "github-token",
+    "stripe-key",
+    "gitlab-token",
+    "slack-token",
+    "sendgrid-key",
+    "npm-token",
+    "azure-account-key",
+    "google-api-key",
+    "llm-api-key",
+    "generic-secret",
+    "twilio-sid",
+    "jwt",
+    // Заземлённые прогоны инструментов.
+    "tests-failing",
+    "vulnerable-dependency",
+    "vulnerable-deps",
+    // Возраст вшитого снимка базы уязвимостей: дата снимка известна точно, поэтому
+    // достоверность точная, а не эвристическая.
+    "osv-snapshot-stale",
+    // Неполнота охвата из-за отказа доступа: факт заземлён на перечень непрочитанных
+    // элементов дерева, догадок здесь нет.
+    "scan-coverage-incomplete",
+    "coverage-failed",
+    "desktop-build-fail",
+    "mobile-build-fail",
+    "symbol-not-found",
+    "api-break",
+    // SAST по AST / taint-анализу.
+    "sast/dynamic-exec",
+    "sast/sql-injection",
+    "sast/unsafe-deserialize",
+    "sast/taint-command-exec",
+    "sast/taint-sql",
+    "sast/taint-path",
+    "sast/taint-buffer",
+    // taint LLM: источник недоверенного ввода связан со стоком конкретной переменной.
+    "taint-llm-output-exec",
+    "taint-llm-output-raw-html",
+    "pdn-log-dynamic",
+    // Секреты со строгой формой токена: сама форма доказывает подлинность.
+    "digitalocean-token",
+    "gcp-private-key",
+    "sentry-dsn",
+    "mailgun-key",
+    "mapbox-secret-token",
+    "twilio-auth-token",
+    "firebase-fcm-key",
+    "db-uri-password",
+    // Заземлённые исходы прогонов инструментов.
+    "desktop-build-unverified",
+    "symbol-container-unconfirmed",
+];
+
+const PATTERN: &[&str] = &[
+    // OWASP Top 10 (security.scan/owasp): паттерн-совпадения.
+    "llm-sensitive-in-prompt",
+    "llm-excessive-agency",
+    "integer-overflow-alloc",
+    "null-deref-after-alloc",
+    "toctou-file-race",
+    "header-crlf-injection",
+    "session-id-in-url",
+    "rate-limit-disabled",
+    "stack-trace-exposed",
+    "directory-listing-enabled",
+    "unpinned-dependency-ref",
+    "weak-security-headers",
+    "nosql-injection",
+    "log-injection",
+    "weak-kdf-params",
+    "jwt-expiration-ignored",
+    "timing-unsafe-compare",
+    "static-iv",
+    "archive-path-traversal",
+    "world-writable-permissions",
+    "insecure-temp-file",
+    "missing-subresource-integrity",
+    "sql-injection",
+    "dangerous-exec",
+    "shell-injection",
+    "weak-hash",
+    "weak-pw-hash",
+    "debug-enabled",
+    "insecure-random",
+    "tls-verify-off",
+    "jwt-none",
+    "insecure-deser",
+    "xss-sink",
+    "ssrf",
+    "permissive-authz",
+    "cors-wildcard",
+    "pii-in-log",
+    // web_security.rs.
+    "ssrf-sink",
+    "open-redirect",
+    "path-traversal",
+    "ssti",
+    "xxe",
+    "insecure-deserialize",
+    "unsafe-yaml-load",
+    "tls-verify-disabled",
+    "insecure-cookie",
+    "csrf-disabled",
+    "jwt-none-alg",
+    "graphql-introspection",
+    "mass-assignment",
+    // security_extra.rs (XSS-стоки, контейнеры).
+    "raw-innerhtml",
+    "react-raw-html",
+    "vue-raw-html",
+    "document-write",
+    "html-string-concat",
+    "privileged-container",
+    "run-as-root",
+    "add-remote-url",
+    "from-latest-tag",
+    // ai_security.rs (LLM-цепочки).
+    "llm-prompt-untrusted-concat",
+    "llm-prompt-build-untrusted",
+    "llm-output-exec",
+    "llm-output-raw-html",
+    // verify/lint: линтер отработал и сообщил о замечаниях (заземлённый сигнал, но
+    // зависит от набора правил линтера, поэтому осознанный Medium, не Precise).
+    "lint",
+    // smell / корректность.
+    "swallowed-error",
+    "swallowed-rescue",
+    "empty-catch",
+    "empty-except",
+    "empty-function",
+    "unimplemented-stub",
+    // governance / архитектура / лицензии.
+    "constitution-forbid",
+    "constitution-require",
+    "layer-violation",
+    "import-cycle",
+    "copyleft-license",
+    // комплаенс: явное логирование персональных данных (точный признак поля).
+    "pdn-in-logs",
+    "pre-checked-consent",
+    // Конфигурация настольных оболочек (Electron/Tauri): значения флагов читаются из
+    // манифеста и кода сборки, это надёжный структурный признак, а не догадка.
+    "desktop/electron-context-isolation-off",
+    "desktop/electron-insecure-content",
+    "desktop/electron-loadurl-cleartext",
+    "desktop/electron-node-integration",
+    "desktop/electron-remote-module",
+    "desktop/electron-sandbox-off",
+    "desktop/electron-websecurity-off",
+    "desktop/tauri-allowlist-all",
+    "desktop/tauri-csp-null",
+    "desktop/tauri-remote-ipc",
+    "desktop/tauri-shell-execute",
+    "desktop/tauri-updater-cleartext",
+    "desktop/tauri-updater-no-pubkey",
+    // Мобильная конфигурация (манифест Android, plist iOS, файлы связывания ссылок).
+    "mobile-aasa-wildcard-paths",
+    "mobile-allow-backup",
+    "mobile-assetlinks-wildcard-fingerprint",
+    "mobile-ats-arbitrary-loads",
+    "mobile-ats-arbitrary-media",
+    "mobile-ats-insecure-http",
+    "mobile-cleartext-permitted",
+    "mobile-cleartext-traffic",
+    "mobile-debuggable",
+    "mobile-deeplink-no-autoverify",
+    "mobile-exported-no-permission",
+    "mobile-firebase-cloud-messaging-key",
+    "mobile-ios-get-task-allow",
+    "mobile-mapbox-secret-token",
+    "mobile-token-in-sharedprefs",
+    "mobile-token-in-userdefaults",
+    // Криптография и веб-формы OWASP, не попавшие в карту ранее.
+    "ecb-mode",
+    "weak-cipher",
+    "hardcoded-crypto-material",
+    "cors-reflect-origin",
+    "jwt-alg-confusion",
+    "ssrf-internal-host",
+    "xxe-parser-default",
+    "command-exec-runtime",
+    "sql-string-concat",
+    "insert-adjacent-html",
+    "raw-outerhtml",
+    "template-literal-html",
+    "angular-bypass-sanitizer",
+    // Дополнительные классы инъекций и небезопасного хранения. Признак требует реальной
+    // формы вызова вместе с признаком недоверенного ввода, поэтому это надёжный образец,
+    // но доказательством достижимости стока он не является.
+    "redos-nested-quantifier",
+    "prototype-pollution",
+    "xpath-injection",
+    "ldap-injection",
+    "unsafe-reflection",
+    "webhook-signature-unverified",
+    "token-in-localstorage",
+    "cookie-without-samesite",
+    // Командные сценарии. Признак распознаётся по форме записи команды, что надёжнее
+    // эвристики, но слабее уникального токена: та же запись бывает и безобидной.
+    "shell-unquoted-var",
+    "shell-eval-variable",
+    "shell-curl-pipe-shell",
+    "shell-insecure-download",
+    "shell-predictable-temp",
+    "shell-ignored-failure",
+    "shell-world-writable",
+    // Рабочие процессы непрерывной интеграции.
+    "ci-untrusted-input-in-run",
+    "ci-pull-request-target-checkout",
+    "ci-permissions-write-all",
+    "ci-action-unpinned",
+    "ci-secret-in-echo",
+    "ci-self-hosted-on-public",
+    // Инфраструктура как код на языке HCL (Terraform, OpenTofu). Признак объявлен
+    // литерально в описании ресурса, поэтому это надёжный образец, а не догадка, но и не
+    // уникальный токен: значение поля бывает переопределено на уровне модуля.
+    "tf-open-security-group",
+    "tf-public-bucket",
+    "tf-unencrypted-storage",
+    "tf-hardcoded-credentials",
+    "tf-no-versioning",
+    "tf-logging-disabled",
+    "tf-plaintext-state-backend",
+    "tf-iam-wildcard-action",
+    // Инфраструктура как код и образы контейнеров.
+    "allow-priv-escalation",
+    "cap-add-all",
+    "host-network",
+    "host-pid",
+    "dockerfile-curl-bash",
+    // Секреты по форме «ключевое слово плюс значение»: надёжнее эвристики, но слабее
+    // строгого токена, поэтому Pattern, а не Precise.
+    "generic-secret-long",
+    "generic-secret-unquoted",
+    "generic-secret-xml",
+    "generic-secret-plist",
+    "generic-passphrase",
+    // Персональные данные в журналах, многострочная форма (рядом с `pdn-in-logs`).
+    "pdn-in-logs-multiline",
+];
+
+const HEURISTIC: &[&str] = &[
+    // метрики/анти-паттерны.
+    "long-file",
+    "deep-nesting",
+    "god-file",
+    "high-complexity",
+    "panic-path",
+    // техдолг / инфо-PII / email.
+    "debt-marker",
+    "email-literal",
+    "ssn-us",
+    "credit-card",
+    // документация (совещательные).
+    "undocumented-api",
+    "doc-missing",
+    "doc-drift",
+    "dead-export",
+    // OSV: версия не сравнима автоматически, «проверьте вручную» (verified=false),
+    // поэтому совещательная находка низкой уверенности, не блокер.
+    "vulnerable-dependency-uncertain",
+    // РФ-комплаенс эвристики (география/трекеры/крипто-примитивы).
+    "foreign-tracker",
+    "foreign-crypto-primitive",
+    "foreign-db-host",
+    "foreign-region",
+    // docker: тег latest (стилевой признак, не уязвимость).
+    "image-latest-tag",
+    // Доступность интерфейса: советы по улучшению, а не доказанные дефекты. Согласовано
+    // с тем, что ось «Доступность UI» в вердикте мягкая.
+    "ui-img-without-alt",
+    "ui-input-without-label",
+    "ui-clickable-nonsemantic",
+    "ui-viewport-missing",
+    "ui-viewport-zoom-blocked",
+    "ui-no-prefers-color-scheme",
+    "ui-focus-outline-removed",
+    "ui-touch-target-small-web",
+    "ui-touch-target-small-android",
+    "ui-touch-target-small-ios",
+    "ui-android-image-no-contentdescription",
+    "ui-flutter-image-no-semantics",
+    "ui-ios-accessibility-disabled",
+    // Прямая ссылка на объект: признак эвристический, о чём прямо сказано в owasp.rs.
+    "idor-direct-ref",
+    // Прослеживаемость изменения к спеке: нудж, а не дефект.
+    "change-without-spec",
+];
+
+/// Все правила, у которых класс достоверности задан ЯВНО (перечислением). Правила, чей класс
+/// выводится по префиксу (`sast/`, `taint`), сюда не входят: их достоверность следует из
+/// устройства анализа, а не из списка, и «призраком» такая запись быть не может.
+#[must_use]
+pub fn classified_rule_ids() -> Vec<&'static str> {
+    let mut all: Vec<&'static str> =
+        Vec::with_capacity(PRECISE.len() + PATTERN.len() + HEURISTIC.len());
+    all.extend_from_slice(PRECISE);
+    all.extend_from_slice(PATTERN);
+    all.extend_from_slice(HEURISTIC);
+    all
+}
+
 pub fn rule_confidence(rule: &str) -> Option<RuleConfidence> {
     use RuleConfidence::{Heuristic, Pattern, Precise};
 
     // Точные сигнатуры/заземлённые проверки, минимум ложного: высокая уверенность.
-    const PRECISE: &[&str] = &[
-        // Секреты с надёжной формой токена.
-        "aws-access-key",
-        "aws-secret-key",
-        "private-key",
-        "github-token",
-        "stripe-key",
-        "gitlab-token",
-        "slack-token",
-        "sendgrid-key",
-        "npm-token",
-        "azure-account-key",
-        "google-api-key",
-        "llm-api-key",
-        "generic-secret",
-        "twilio-sid",
-        "jwt",
-        // Заземлённые прогоны инструментов.
-        "tests-failing",
-        "vulnerable-dependency",
-        "vulnerable-deps",
-        "coverage-failed",
-        "desktop-build-fail",
-        "mobile-build-fail",
-        "symbol-not-found",
-        "api-break",
-        // SAST по AST / taint-анализу.
-        "sast/dynamic-exec",
-        "sast/sql-injection",
-        "sast/unsafe-deserialize",
-        "sast/taint-command-exec",
-        "sast/taint-sql",
-        "sast/taint-path",
-        "sast/taint-buffer",
-        // taint LLM: источник недоверенного ввода связан со стоком конкретной переменной.
-        "taint-llm-output-exec",
-        "taint-llm-output-raw-html",
-        "pdn-log-dynamic",
-    ];
 
     // Надёжный паттерн/структура, но не уникальный токен: осознанный Medium-сигнал.
     // Раньше эти правила тихо проваливались в дефолт Medium; теперь это ЯВНО.
-    const PATTERN: &[&str] = &[
-        // OWASP Top 10 (security.scan/owasp): паттерн-совпадения.
-        "sql-injection",
-        "dangerous-exec",
-        "shell-injection",
-        "weak-crypto",
-        "weak-hash",
-        "weak-pw-hash",
-        "debug-enabled",
-        "insecure-random",
-        "tls-verify-off",
-        "jwt-none",
-        "insecure-deser",
-        "xss-sink",
-        "ssrf",
-        "permissive-authz",
-        "cors-wildcard",
-        "pii-in-log",
-        // web_security.rs.
-        "ssrf-sink",
-        "open-redirect",
-        "path-traversal",
-        "ssti",
-        "xxe",
-        "insecure-deserialize",
-        "unsafe-yaml-load",
-        "tls-verify-disabled",
-        "insecure-cookie",
-        "csrf-disabled",
-        "jwt-none-alg",
-        "graphql-introspection",
-        "mass-assignment",
-        // security_extra.rs (XSS-стоки, контейнеры).
-        "raw-innerhtml",
-        "react-raw-html",
-        "vue-raw-html",
-        "document-write",
-        "html-string-concat",
-        "privileged-container",
-        "run-as-root",
-        "add-remote-url",
-        "from-latest-tag",
-        // ai_security.rs (LLM-цепочки).
-        "llm-prompt-untrusted-concat",
-        "llm-prompt-build-untrusted",
-        "llm-output-exec",
-        "llm-output-raw-html",
-        // verify/lint: линтер отработал и сообщил о замечаниях (заземлённый сигнал, но
-        // зависит от набора правил линтера, поэтому осознанный Medium, не Precise).
-        "lint",
-        // smell / корректность.
-        "swallowed-error",
-        "swallowed-rescue",
-        "empty-catch",
-        "empty-except",
-        "empty-function",
-        "unimplemented-stub",
-        // governance / архитектура / лицензии.
-        "constitution-forbid",
-        "constitution-require",
-        "layer-violation",
-        "import-cycle",
-        "copyleft-license",
-        // комплаенс: явное логирование персональных данных (точный признак поля).
-        "pdn-in-logs",
-        "pre-checked-consent",
-    ];
 
     // Эвристики (строка/стиль/метрика/совет): низкая уверенность, шум, не блокер.
-    const HEURISTIC: &[&str] = &[
-        // метрики/анти-паттерны.
-        "long-file",
-        "deep-nesting",
-        "god-file",
-        "high-complexity",
-        "many-params",
-        "many-returns",
-        "panic-path",
-        // техдолг / инфо-PII / email.
-        "debt-marker",
-        "email-literal",
-        "ssn-us",
-        "credit-card",
-        // документация (совещательные).
-        "undocumented-api",
-        "doc-missing",
-        "doc-drift",
-        "dead-export",
-        // OSV: версия не сравнима автоматически, «проверьте вручную» (verified=false),
-        // поэтому совещательная находка низкой уверенности, не блокер.
-        "vulnerable-dependency-uncertain",
-        // РФ-комплаенс эвристики (география/трекеры/крипто-примитивы).
-        "foreign-tracker",
-        "foreign-crypto-primitive",
-        "foreign-db-host",
-        "foreign-region",
-        // docker: тег latest (стилевой признак, не уязвимость).
-        "image-latest-tag",
-    ];
 
     if PRECISE.contains(&rule) {
         Some(Precise)
@@ -533,7 +708,7 @@ pub fn looks_like_tool_failure(text: &str) -> bool {
         "panicked",
         "no such file or directory",
         "command not found",
-        "error[e", // диагностика rustc вида error[E0277]
+        "error[e",      // диагностика rustc вида error[E0277]
         "не отработал", // явная пометка сбоя инструмента из самих capability
     ];
     MARKERS.iter().any(|m| t.contains(m))
@@ -672,6 +847,11 @@ pub struct QualityLedger {
     pub rigor: f64,
     /// Сколько находок опроверг состязательный verify-проход (ложные отсеяны).
     pub refuted: usize,
+    /// Сколько находок отнесено к историческому долгу базовой линией `.ailc/baseline`.
+    /// Такие находки не блокируют сдачу и видны отдельной метрикой; уязвимости в долг
+    /// не попадают никогда. Поле присутствует и в адаптивном прогоне, и в Definition of
+    /// Done, чтобы оба пути давали согласованный вердикт по одному набору находок.
+    pub debt: usize,
     pub passed: bool,
     /// Статус прогона тестов для человека (None = не запускались в этом намерении).
     pub tests: Option<String>,
@@ -815,8 +995,14 @@ impl Default for PolicyPack {
 /// Вердикт гейта — граница ответственности. Структурный контракт (не проза):
 /// blocking vs warning, балл качества, и ЯВНЫЙ список пропущенных проверок
 /// (инвариант «нет молчаливых пропусков»).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct GateReport {
+    /// Вердикт «блокеров нет И все проверки состоялись». ВНИМАНИЕ: пустой список блокеров
+    /// сам по себе НЕДОСТАТОЧЕН. Если инструмент проверки упал (нет тулчейна, аварийное
+    /// завершение, таймаут), правильный ответ не «чисто», а «неизвестно», поэтому
+    /// непустой `tools_failed` тоже снимает вердикт. Прежде `passed` равнялся
+    /// `blocking.is_empty()`, из-за чего машина, где не собрался ни один внешний
+    /// инструмент, получала зелёный вердикт и балл 100 при одной сработавшей проверке.
     pub passed: bool,
     pub blocking: Vec<Finding>,
     pub warning: Vec<Finding>,
@@ -825,8 +1011,18 @@ pub struct GateReport {
     /// ведёт сигналом, а не тонет в стилевых находках на зрелом коде.
     pub advisories: Vec<Finding>,
     pub checks_run: Vec<String>,
+    /// ОСОЗНАННЫЕ пропуски: проверять нечего (нет подходящего стека, нет входных файлов).
+    /// Такой пропуск не снимает вердикт: отсутствие мобильного кода не является причиной
+    /// не выпускать серверный сервис.
     pub checks_skipped: Vec<(String, String)>, // (id, причина)
-    pub score: f64,                            // балл качества 0..100
+    /// СБОИ ИНСТРУМЕНТА: проверка должна была выполниться, но не смогла (аварийное
+    /// завершение, таймаут, отсутствующий тулчейн). Хранится ОТДЕЛЬНО от осознанных
+    /// пропусков, потому что различие меняет вердикт: «нечего проверять» это результат, а
+    /// «не смог проверить» это отсутствие результата. Прежде оба состояния лежали в
+    /// `checks_skipped` и различались лишь префиксом в тексте причины, который никто не
+    /// разбирал, поэтому в вычислении вердикта сбой был арифметически равен чистому прогону.
+    pub tools_failed: Vec<(String, String)>, // (id, причина)
+    pub score: f64, // балл качества 0..100
     pub metrics: Vec<(String, f64)>,
 }
 
@@ -857,10 +1053,31 @@ mod tests {
         "azure-account-key",
         "llm-api-key",
         // security.scan/owasp.
+        "llm-sensitive-in-prompt",
+        "llm-excessive-agency",
+        "integer-overflow-alloc",
+        "null-deref-after-alloc",
+        "toctou-file-race",
+        "header-crlf-injection",
+        "session-id-in-url",
+        "rate-limit-disabled",
+        "stack-trace-exposed",
+        "directory-listing-enabled",
+        "unpinned-dependency-ref",
+        "weak-security-headers",
+        "nosql-injection",
+        "log-injection",
+        "weak-kdf-params",
+        "jwt-expiration-ignored",
+        "timing-unsafe-compare",
+        "static-iv",
+        "archive-path-traversal",
+        "world-writable-permissions",
+        "insecure-temp-file",
+        "missing-subresource-integrity",
         "sql-injection",
         "dangerous-exec",
         "shell-injection",
-        "weak-crypto",
         "debug-enabled",
         "weak-hash",
         "weak-pw-hash",
@@ -920,8 +1137,6 @@ mod tests {
         "high-complexity",
         "deep-nesting",
         "god-file",
-        "many-params",
-        "many-returns",
         "dead-export",
         "import-cycle",
         // spec/документация.
@@ -940,6 +1155,8 @@ mod tests {
         "vulnerable-dependency",
         "vulnerable-dependency-uncertain",
         "vulnerable-deps",
+        "osv-snapshot-stale",
+        "scan-coverage-incomplete",
         "copyleft-license",
         "constitution-forbid",
         "constitution-require",
@@ -1007,7 +1224,10 @@ mod tests {
             "security.scan/owasp",
         );
         assert_eq!(owasp.confidence(), Confidence::Medium);
-        assert!(owasp.is_signal(), "паттерн-правило OWASP должно быть сигналом");
+        assert!(
+            owasp.is_signal(),
+            "паттерн-правило OWASP должно быть сигналом"
+        );
 
         // Precise переходит в High и является сигналом.
         assert_eq!(RuleConfidence::Precise.level(), Confidence::High);
@@ -1048,7 +1268,10 @@ mod tests {
             "security.scan/owasp",
         );
         assert_eq!(f.confidence(), Confidence::Medium);
-        assert!(f.is_signal(), "по умолчанию остаётся сигналом, ничего не теряем молча");
+        assert!(
+            f.is_signal(),
+            "по умолчанию остаётся сигналом, ничего не теряем молча"
+        );
     }
 
     /// `Finding::new` (аддитивный конструктор) и позиционный литерал дают одно и то же.
@@ -1088,7 +1311,10 @@ mod tests {
             "Configuration error: invalid clippy.toml",
             "cargo: command not found",
         ] {
-            assert!(looks_like_tool_failure(broken), "должно считаться сбоем: {broken}");
+            assert!(
+                looks_like_tool_failure(broken),
+                "должно считаться сбоем: {broken}"
+            );
         }
         for ok in [
             "test result: ok. 12 passed; 0 failed",

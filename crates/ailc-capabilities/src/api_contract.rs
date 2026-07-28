@@ -91,8 +91,12 @@ impl Capability for ApiBaseline {
         let body = api.iter().cloned().collect::<Vec<_>>().join("\n");
         Store::write(ctx, NS, BASELINE, &body)?;
         out.artifacts.push(format!(".ailc/{NS}/{BASELINE}"));
-        out.metrics.push(("public_symbols".into(), api.len() as f64));
-        out.summary = format!("generate/api-baseline: снимок {} публичных символов", api.len());
+        out.metrics
+            .push(("public_symbols".into(), api.len() as f64));
+        out.summary = format!(
+            "generate/api-baseline: снимок {} публичных символов",
+            api.len()
+        );
         Ok(out)
     }
 }
@@ -145,7 +149,11 @@ impl Capability for ApiBreak {
             }
         };
 
-        let old: BTreeSet<String> = baseline.lines().map(str::to_string).filter(|l| !l.trim().is_empty()).collect();
+        let old: BTreeSet<String> = baseline
+            .lines()
+            .map(str::to_string)
+            .filter(|l| !l.trim().is_empty())
+            .collect();
         let new = current_api(ctx, input)?;
 
         let removed: Vec<&String> = old.difference(&new).collect();
@@ -162,8 +170,10 @@ impl Capability for ApiBreak {
                 source: "verify/api-break".into(),
             });
         }
-        out.metrics.push(("api_removed".into(), removed.len() as f64));
-        out.metrics.push(("api_added".into(), new.difference(&old).count() as f64));
+        out.metrics
+            .push(("api_removed".into(), removed.len() as f64));
+        out.metrics
+            .push(("api_added".into(), new.difference(&old).count() as f64));
         out.summary = format!(
             "verify/api-break: удалено/переименовано {} публичных символов, добавлено {}",
             removed.len(),

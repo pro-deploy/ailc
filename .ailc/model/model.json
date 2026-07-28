@@ -1,0 +1,413 @@
+{
+  "schema_version": 2,
+  "identity": {
+    "name": {
+      "value": "ailc",
+      "engine": "filesystem",
+      "certainty": "heuristic"
+    },
+    "version": {
+      "value": "0.6.0",
+      "engine": "manifest.cargo",
+      "file": "Cargo.toml",
+      "certainty": "precise"
+    },
+    "license": {
+      "value": "Apache-2.0",
+      "engine": "manifest.cargo",
+      "file": "Cargo.toml",
+      "certainty": "precise"
+    },
+    "description": null,
+    "repository": null,
+    "authors": [],
+    "commit": {
+      "value": "38307a5ca91618eb976620e40fbe068125aa2b76",
+      "engine": "git",
+      "certainty": "precise"
+    }
+  },
+  "environment": {
+    "stacks": [
+      {
+        "value": "Rust",
+        "engine": "stack",
+        "certainty": "pattern"
+      }
+    ],
+    "languages": [],
+    "toolchains": [
+      {
+        "value": "Rust 1.93.1",
+        "engine": "toolchain",
+        "file": "rust-toolchain.toml",
+        "certainty": "precise"
+      }
+    ],
+    "manifests": [
+      {
+        "value": "Cargo.toml",
+        "engine": "manifest",
+        "file": "Cargo.toml",
+        "certainty": "precise"
+      }
+    ]
+  },
+  "structure": {
+    "modules": [],
+    "entry_points": [],
+    "dependencies": [],
+    "cycles": [],
+    "files": 0,
+    "lines": 0,
+    "public_symbols": 0,
+    "artifacts": [
+      {
+        "value": "библиотека ailc-capabilities",
+        "engine": "manifest.cargo",
+        "file": "crates/ailc-capabilities/Cargo.toml",
+        "certainty": "precise"
+      },
+      {
+        "value": "библиотека ailc-contracts",
+        "engine": "manifest.cargo",
+        "file": "crates/ailc-contracts/Cargo.toml",
+        "certainty": "precise"
+      },
+      {
+        "value": "библиотека ailc-core",
+        "engine": "manifest.cargo",
+        "file": "crates/ailc-core/Cargo.toml",
+        "certainty": "precise"
+      },
+      {
+        "value": "библиотека ailc-testkit",
+        "engine": "manifest.cargo",
+        "file": "crates/ailc-testkit/Cargo.toml",
+        "certainty": "precise"
+      },
+      {
+        "value": "исполняемый файл ailc",
+        "engine": "manifest.cargo",
+        "file": "crates/ailc/Cargo.toml",
+        "certainty": "precise"
+      }
+    ],
+    "api": []
+  },
+  "surface": {
+    "routes": [],
+    "env": [],
+    "services": [],
+    "data_models": [],
+    "migrations": [],
+    "api_schemas": [],
+    "cli_commands": [],
+    "cli_flags": [],
+    "config_params": []
+  },
+  "dependencies": [
+    {
+      "ecosystem": "crates.io",
+      "name": "adler2",
+      "version": "2.0.1"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "aho-corasick",
+      "version": "1.1.4"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "ailc",
+      "version": "0.6.0"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "ailc-capabilities",
+      "version": "0.6.0"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "ailc-contracts",
+      "version": "0.6.0"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "ailc-core",
+      "version": "0.6.0"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "ailc-testkit",
+      "version": "0.6.0"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "cc",
+      "version": "1.2.65"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "cfg-if",
+      "version": "1.0.4"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "crc32fast",
+      "version": "1.5.0"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "equivalent",
+      "version": "1.0.2"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "find-msvc-tools",
+      "version": "0.1.9"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "flate2",
+      "version": "1.1.9"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "hashbrown",
+      "version": "0.17.1"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "indexmap",
+      "version": "2.14.0"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "itoa",
+      "version": "1.0.18"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "memchr",
+      "version": "2.8.2"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "miniz_oxide",
+      "version": "0.8.9"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "proc-macro2",
+      "version": "1.0.106"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "quote",
+      "version": "1.0.46"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "regex",
+      "version": "1.12.4"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "regex-automata",
+      "version": "0.4.14"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "regex-syntax",
+      "version": "0.8.11"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "serde",
+      "version": "1.0.228"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "serde_core",
+      "version": "1.0.228"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "serde_derive",
+      "version": "1.0.228"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "serde_json",
+      "version": "1.0.150"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "serde_spanned",
+      "version": "0.6.9"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "shlex",
+      "version": "2.0.1"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "simd-adler32",
+      "version": "0.3.10"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "streaming-iterator",
+      "version": "0.1.9"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "syn",
+      "version": "2.0.118"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "toml",
+      "version": "0.8.23"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "toml_datetime",
+      "version": "0.6.11"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "toml_edit",
+      "version": "0.22.27"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "toml_write",
+      "version": "0.1.2"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter",
+      "version": "0.25.10"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-c",
+      "version": "0.23.4"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-c-sharp",
+      "version": "0.23.5"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-cpp",
+      "version": "0.23.4"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-dart",
+      "version": "0.2.0"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-go",
+      "version": "0.23.4"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-java",
+      "version": "0.23.5"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-javascript",
+      "version": "0.23.1"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-kotlin-ng",
+      "version": "1.1.0"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-language",
+      "version": "0.1.7"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-php",
+      "version": "0.23.11"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-python",
+      "version": "0.23.6"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-ruby",
+      "version": "0.23.1"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-rust",
+      "version": "0.23.3"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-scala",
+      "version": "0.23.4"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-swift",
+      "version": "0.7.3"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "tree-sitter-typescript",
+      "version": "0.23.2"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "unicode-ident",
+      "version": "1.0.24"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "winnow",
+      "version": "0.7.15"
+    },
+    {
+      "ecosystem": "crates.io",
+      "name": "zmij",
+      "version": "1.0.21"
+    }
+  ],
+  "deployment": {
+    "containers": [],
+    "ports": []
+  },
+  "gaps": [
+    {
+      "what": "интерфейс прикладного программирования",
+      "why": "ни маршрутов, ни контрактных схем, ни команд интерфейса командной строки в коде не обнаружено"
+    },
+    {
+      "what": "карта развёртывания",
+      "why": "описаний образов и композиций в проекте не найдено"
+    },
+    {
+      "what": "конфигурационные параметры",
+      "why": "файлов настроек известного вида в проекте не найдено"
+    },
+    {
+      "what": "правообладатель и разработчик",
+      "why": "манифест не объявляет авторов"
+    }
+  ]
+}

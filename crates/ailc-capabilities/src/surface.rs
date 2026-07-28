@@ -55,8 +55,10 @@ impl Capability for SurfaceCap {
 
         out.metrics.push(("routes".into(), s.routes.len() as f64));
         out.metrics.push(("env_vars".into(), s.env.len() as f64));
-        out.metrics.push(("services".into(), s.services.len() as f64));
-        out.metrics.push(("data_models".into(), s.models.len() as f64));
+        out.metrics
+            .push(("services".into(), s.services.len() as f64));
+        out.metrics
+            .push(("data_models".into(), s.models.len() as f64));
 
         let mut section = |title: &str, items: &[surface::SurfaceItem]| {
             if items.is_empty() {
@@ -64,7 +66,8 @@ impl Capability for SurfaceCap {
             }
             out.records.push(format!("— {title} —"));
             for it in items.iter().take(60) {
-                out.records.push(format!("{}  ({}:{})", it.value, it.file, it.line));
+                out.records
+                    .push(format!("{}  ({}:{})", it.value, it.file, it.line));
             }
             if items.len() > 60 {
                 out.records.push(format!("… ещё {}", items.len() - 60));

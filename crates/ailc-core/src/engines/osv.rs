@@ -34,19 +34,6 @@ struct Vuln {
     summary: String,
 }
 
-/// Метаданные снимка: дата сборки и заявленное число записей. Позволяют показать
-/// возраст базы в сводке и обнаружить рассинхронизацию заявленного и фактического
-/// числа записей.
-#[derive(Deserialize)]
-struct Snapshot {
-    #[serde(default)]
-    generated_at: Option<String>,
-    #[serde(default)]
-    count: Option<usize>,
-    #[serde(default)]
-    vulns: Vec<Vuln>,
-}
-
 /// Загруженная база уязвимостей вместе с признаком успешной загрузки. Признак
 /// `loaded=false` отличает реально пустой/битый снимок от снимка без записей по
 /// конкретной экосистеме: первое означает «база не работает», второе — «база чиста».
@@ -59,45 +46,90 @@ struct Database {
     vulns: Vec<Vuln>,
 }
 
-/// Разобрать встроенный снимок. Поддерживает ОБА формата: новый объектный
-/// (`{ "generated_at": .., "count": .., "vulns": [..] }`) и устаревший «голый массив»
-/// записей. При неудаче разбора возвращается `loaded=false`, чтобы потребитель явно
-/// сообщил «база не загружена», а не выдал тишину за «уязвимостей нет».
+/// Разобрать снимок базы из построчного формата TSV.
+///
+/// Формат намеренно простой: строки, начинающиеся с решётки, суть метаданные и
+/// пояснения, остальные несут по записи из семи полей, разделённых табуляцией
+/// (идентификатор, экосистема, пакет, введено, исправлено, важность, описание).
+/// Такой снимок вдвое компактнее эквивалентного JSON, даёт системе контроля версий
+/// построчные разности при регулярном обновлении и разбирается без выделения
+/// промежуточных структур.
+///
+/// При неудаче разбора возвращается `loaded=false`, чтобы потребитель явно сообщил
+/// «база не загружена», а не выдал тишину за «уязвимостей нет».
 fn load_db(raw: &str) -> Database {
-    // Новый объектный формат с метаданными.
-    if let Ok(snap) = serde_json::from_str::<Snapshot>(raw) {
-        if !snap.vulns.is_empty() {
-            return Database {
-                loaded: true,
-                generated_at: snap.generated_at,
-                count_declared: snap.count,
-                vulns: snap.vulns,
-            };
+    let mut generated_at = None;
+    let mut count_declared = None;
+    let mut vulns = Vec::new();
+
+    for line in raw.lines() {
+        if line.is_empty() {
+            continue;
         }
-    }
-    // Устаревший формат: голый массив записей без метаданных.
-    if let Ok(vulns) = serde_json::from_str::<Vec<Vuln>>(raw) {
-        if !vulns.is_empty() {
-            return Database {
-                loaded: true,
-                generated_at: None,
-                count_declared: None,
-                vulns,
-            };
+        if let Some(meta) = line.strip_prefix('#') {
+            // Строка метаданных: `# ailc-osv-snapshot\tgenerated_at=..\tcount=..`.
+            for field in meta.split('\t') {
+                if let Some(v) = field.trim().strip_prefix("generated_at=") {
+                    generated_at = Some(v.trim().to_string());
+                } else if let Some(v) = field.trim().strip_prefix("count=") {
+                    count_declared = v.trim().parse::<usize>().ok();
+                }
+            }
+            continue;
         }
+        let mut f = line.split('\t');
+        let (
+            Some(id),
+            Some(ecosystem),
+            Some(package),
+            Some(introduced),
+            Some(fixed),
+            Some(severity),
+        ) = (f.next(), f.next(), f.next(), f.next(), f.next(), f.next())
+        else {
+            continue; // повреждённая строка пропускается, а не рушит всю базу
+        };
+        let summary = f.next().unwrap_or("");
+        vulns.push(Vuln {
+            id: id.to_string(),
+            ecosystem: ecosystem.to_string(),
+            package: package.to_string(),
+            introduced: (!introduced.is_empty()).then(|| introduced.to_string()),
+            fixed: (!fixed.is_empty()).then(|| fixed.to_string()),
+            severity: severity.to_string(),
+            summary: summary.to_string(),
+        });
     }
-    // Снимок битый или пуст: честно признаём, что база не загружена.
+
     Database {
-        loaded: false,
-        generated_at: None,
-        count_declared: None,
-        vulns: Vec::new(),
+        loaded: !vulns.is_empty(),
+        generated_at,
+        count_declared,
+        vulns,
     }
+}
+
+/// Распакованный снимок. Хранится сжатым в бинаре (см. `build.rs`) и распаковывается
+/// однократно при первом обращении: девять с лишним мегабайт текста не должны лежать в
+/// образе процесса у тех, кто зависимости не проверяет.
+fn snapshot_text() -> &'static str {
+    static TEXT: OnceLock<String> = OnceLock::new();
+    TEXT.get_or_init(|| {
+        use std::io::Read;
+        static PACKED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/snapshot.tsv.gz"));
+        let mut out = String::new();
+        match flate2::read::GzDecoder::new(PACKED).read_to_string(&mut out) {
+            Ok(_) => out,
+            // Повреждение встроенного снимка даёт пустую базу, и потребитель честно
+            // сообщает «база не загружена»: молчаливое «уязвимостей нет» недопустимо.
+            Err(_) => String::new(),
+        }
+    })
 }
 
 fn db() -> &'static Database {
     static DB: OnceLock<Database> = OnceLock::new();
-    DB.get_or_init(|| load_db(include_str!("../../assets/osv/snapshot.json")))
+    DB.get_or_init(|| load_db(snapshot_text()))
 }
 
 /// Результат нативной проверки.
@@ -128,6 +160,10 @@ pub struct OsvReport {
     pub db_loaded: bool,
     /// Дата сборки снимка базы (если присутствует в метаданных), для показа возраста.
     pub db_generated_at: Option<String>,
+    /// Число записей во вшитом снимке базы. Сообщается человеку вместе с датой, чтобы
+    /// «уязвимых 0» читалось как «в снимке такого объёма совпадений нет», а не как
+    /// «зависимости проверены по полной базе OSV.dev».
+    pub db_entries: usize,
     /// Подозрительные записи самого снимка (например, без границ introduced и fixed):
     /// такие записи не применяются к версиям, но о них честно сообщается.
     pub suspicious_records: Vec<String>,
@@ -315,6 +351,47 @@ fn rel_display(root: &Path, path: &Path) -> String {
 /// от циклов по символическим ссылкам, оставаясь достаточной для типичных монорепо.
 const MAX_DEPTH: usize = 12;
 
+/// Предельный возраст встроенного снимка базы уязвимостей в сутках, после которого вердикт
+/// «уязвимых зависимостей нет» перестаёт быть содержательным и об этом сообщается явной
+/// находкой.
+///
+/// Снимок вшивается в бинарь на этапе сборки, механизма обновления во время работы нет, а
+/// сетевых зависимостей у крейта нет вовсе. Значит покрытие деградирует само, просто от
+/// времени: пользователь, поставивший выпуск полгода назад, получал зелёный отчёт по
+/// зависимостям на устаревшей базе, и НИЧТО в отчёте на это не указывало (дата снимка
+/// разбиралась и печаталась, но ни с чем не сравнивалась). Полгода выбрано как срок, за
+/// который в экосистемах успевает выйти достаточно новых уязвимостей, чтобы молчание базы
+/// стало вводящим в заблуждение.
+pub const SNAPSHOT_MAX_AGE_DAYS: i64 = 180;
+
+/// Число суток от даты вида `ГГГГ-ММ-ДД` до момента `now_unix` (секунды эпохи Unix).
+/// `None`, если дата не разбирается. Отрицательное значение означает дату в будущем
+/// (переведённые часы, собранный «наперёд» снимок) и трактуется вызывающим как свежая.
+#[must_use]
+pub fn snapshot_age_days(generated_at: &str, now_unix: i64) -> Option<i64> {
+    let mut it = generated_at.trim().split('-');
+    let y: i64 = it.next()?.parse().ok()?;
+    let m: i64 = it.next()?.parse().ok()?;
+    let d: i64 = it.next()?.parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    Some(now_unix.div_euclid(86_400) - days_from_civil(y, m, d))
+}
+
+/// Число суток от эпохи Unix до календарной даты по алгоритму Ховарда Хиннанта
+/// (`days_from_civil`): работает для всего диапазона пролептического григорианского
+/// календаря без таблиц и без внешних зависимостей.
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let mp = (m + 9) % 12; // март = 0
+    let doy = (153 * mp + 2) / 5 + d - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146_097 + doe - 719_468
+}
+
 /// Каталоги, которые никогда не обходим: артефакты сборки и кэши менеджеров пакетов.
 /// node_modules и target исключаются всегда, даже если в .gitignore их нет.
 fn is_excluded_dir(name: &str) -> bool {
@@ -479,7 +556,7 @@ pub fn scan(root: &Path) -> OsvReport {
     let deps = collected.deps;
     let checked = deps.len();
     let database = db();
-    let mut findings = Vec::new();
+    let mut findings: Vec<Finding> = Vec::new();
     let mut suspicious_records: Vec<String> = Vec::new();
     let mut suspicious_seen: BTreeSet<String> = BTreeSet::new();
 
@@ -494,6 +571,9 @@ pub fn scan(root: &Path) -> OsvReport {
         }
     }
 
+    // Индекс «пакет плюс номер уязвимости» в позицию находки: нужен для устранения
+    // повторов из разных источников без потери самой строгой оценки важности.
+    let mut by_vuln: std::collections::HashMap<(String, String), usize> = Default::default();
     for (eco, name, ver) in &deps {
         for v in &database.vulns {
             if !v.ecosystem.eq_ignore_ascii_case(eco) || !v.package.eq_ignore_ascii_case(name) {
@@ -501,7 +581,14 @@ pub fn scan(root: &Path) -> OsvReport {
             }
             match affected(ver, v) {
                 AffectMatch::Yes => {
-                    findings.push(Finding {
+                    // Одна и та же уязвимость приходит из нескольких источников (запись
+                    // экосистемы и запись GitHub Advisory), поэтому по паре «пакет плюс
+                    // номер уязвимости» оставляется ОДНА находка: та, у которой важность
+                    // выше, а при равной важности та, что нашлась первой. Иначе отчёт по
+                    // обычному проекту распухает вдвое из одинаковых строк, и человек
+                    // перестаёт их читать.
+                    let key = (name.to_string(), v.id.clone());
+                    let candidate = Finding {
                         rule: "vulnerable-dependency".into(),
                         severity: sev(&v.severity),
                         message: format!(
@@ -514,7 +601,15 @@ pub fn scan(root: &Path) -> OsvReport {
                         evidence: Some(format!("{eco}:{name}@{ver}")),
                         verified: true,
                         source: "security.scan/deps".into(),
-                    });
+                    };
+                    match by_vuln.get(&key) {
+                        Some(&idx) if findings[idx].severity >= candidate.severity => {}
+                        Some(&idx) => findings[idx] = candidate,
+                        None => {
+                            by_vuln.insert(key, findings.len());
+                            findings.push(candidate);
+                        }
+                    }
                 }
                 AffectMatch::Suspicious => {
                     // Запись снимка без обеих границ нельзя применять: иначе пакет
@@ -603,6 +698,7 @@ pub fn scan(root: &Path) -> OsvReport {
         unparsed_lockfiles: collected.unparsed_lockfiles,
         db_loaded: database.loaded,
         db_generated_at: database.generated_at.clone(),
+        db_entries: database.vulns.len(),
         suspicious_records,
         unverifiable: collected.unpinned,
     }
@@ -667,7 +763,13 @@ fn normalize_py_name(raw: &str) -> String {
     // Имя заканчивается перед первым из: '[', оператором сравнения, пробелом.
     let end = s
         .find(|c: char| {
-            c == '[' || c == '=' || c == '<' || c == '>' || c == '~' || c == '!' || c.is_whitespace()
+            c == '['
+                || c == '='
+                || c == '<'
+                || c == '>'
+                || c == '~'
+                || c == '!'
+                || c.is_whitespace()
         })
         .unwrap_or(s.len());
     s[..end].trim().to_lowercase()
@@ -718,7 +820,10 @@ fn parse_npm_lock(txt: &str) -> Parsed {
         return p;
     }
     // lockfile v1: { "dependencies": { "lodash": { "version": ".." } } }.
-    if let Some(d) = val.get("dependencies").and_then(serde_json::Value::as_object) {
+    if let Some(d) = val
+        .get("dependencies")
+        .and_then(serde_json::Value::as_object)
+    {
         collect_npm_v1(d, &mut p.deps);
     }
     p
@@ -733,7 +838,10 @@ fn collect_npm_v1(
         if let Some(v) = meta.get("version").and_then(serde_json::Value::as_str) {
             deps.push(("npm", name.to_lowercase(), v.to_string()));
         }
-        if let Some(nested) = meta.get("dependencies").and_then(serde_json::Value::as_object) {
+        if let Some(nested) = meta
+            .get("dependencies")
+            .and_then(serde_json::Value::as_object)
+        {
             collect_npm_v1(nested, deps);
         }
     }
@@ -821,7 +929,10 @@ fn parse_pnpm_lock(txt: &str) -> Parsed {
         // Ключи пакетов идут с отступом 2 и заканчиваются на ':'. Содержимое записи
         // (resolution, dependencies и т. п.) имеет отступ глубже и здесь не нужно.
         if indent == 2 && trimmed.ends_with(':') {
-            let key = trimmed.trim_end_matches(':').trim_matches('\'').trim_matches('"');
+            let key = trimmed
+                .trim_end_matches(':')
+                .trim_matches('\'')
+                .trim_matches('"');
             if let Some((name, ver)) = pnpm_split_key(key) {
                 p.deps.push(("npm", name, ver));
             }
@@ -954,7 +1065,8 @@ fn parse_podfile_lock(txt: &str) -> Parsed {
             if let Some((name, tail)) = rest.split_once(" (") {
                 let ver = tail.trim_end().trim_end_matches(':').trim_end_matches(')');
                 if ver.starts_with(|c: char| c.is_ascii_digit()) {
-                    p.deps.push(("CocoaPods", name.to_lowercase(), ver.to_string()));
+                    p.deps
+                        .push(("CocoaPods", name.to_lowercase(), ver.to_string()));
                 }
             }
         }
@@ -1433,6 +1545,48 @@ fn sev(s: &str) -> Severity {
 mod tests {
     use super::*;
 
+    // ───────── Возраст снимка базы ─────────
+
+    /// Дата снимка обязана СРАВНИВАТЬСЯ с текущей, а не только печататься. Прежде она
+    /// разбиралась и выводилась в сводку, но нигде не проверялась, поэтому вердикт «уязвимых
+    /// зависимостей нет» на полугодовой базе выглядел так же, как на свежей.
+    #[test]
+    fn возраст_снимка_считается_в_сутках() {
+        // 2026-07-26 плюс ровно 10 суток.
+        let base = days_from_civil(2026, 7, 26) * 86_400;
+        assert_eq!(
+            snapshot_age_days("2026-07-26", base + 10 * 86_400),
+            Some(10)
+        );
+        assert_eq!(snapshot_age_days("2026-07-26", base), Some(0));
+        // Переход через границу года и месяца считается верно.
+        assert_eq!(
+            snapshot_age_days("2025-12-31", days_from_civil(2026, 1, 1) * 86_400),
+            Some(1)
+        );
+        // Високосный год: 29 февраля существует, и следующий день это 1 марта.
+        assert_eq!(
+            snapshot_age_days("2024-02-29", days_from_civil(2024, 3, 1) * 86_400),
+            Some(1)
+        );
+        // Дата в будущем даёт отрицательный возраст, а не панику и не переполнение.
+        assert_eq!(snapshot_age_days("2026-07-26", base - 5 * 86_400), Some(-5));
+        // Неразбираемая дата не выдаётся за нулевой возраст: вызывающий обязан различать
+        // «снимок свежий» и «дату прочитать не удалось».
+        assert_eq!(snapshot_age_days("даты нет", base), None);
+        assert_eq!(snapshot_age_days("2026-13-01", base), None);
+        assert_eq!(snapshot_age_days("2026-07", base), None);
+    }
+
+    /// Обратная проверка алгоритма: известные опорные точки календаря.
+    #[test]
+    fn days_from_civil_на_опорных_датах() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0, "эпоха Unix");
+        assert_eq!(days_from_civil(1970, 1, 2), 1);
+        assert_eq!(days_from_civil(1969, 12, 31), -1);
+        assert_eq!(days_from_civil(2000, 3, 1), 11_017);
+    }
+
     // ───────── Снимок базы (T52, T56) ─────────
 
     #[test]
@@ -1446,28 +1600,65 @@ mod tests {
 
     #[test]
     fn snapshot_count_matches_declared() {
-        // Заявленное в метаданных число записей должно совпадать с фактическим.
-        let snap: Snapshot =
-            serde_json::from_str(include_str!("../../assets/osv/snapshot.json")).unwrap();
-        if let Some(count) = snap.count {
-            assert_eq!(count, snap.vulns.len(), "count в снимке рассинхронизирован");
+        // Заявленное в метаданных число записей должно совпадать с фактическим: иначе
+        // снимок повреждён или отредактирован вручную наполовину.
+        let d = db();
+        if let Some(count) = d.count_declared {
+            assert_eq!(count, d.vulns.len(), "count в снимке рассинхронизирован");
         }
     }
 
     #[test]
-    fn load_db_supports_bare_array() {
-        // Устаревший формат «голый массив» обязан поддерживаться для совместимости.
-        let raw = r#"[{"id":"X","ecosystem":"npm","package":"lodash","fixed":"1.0.0","severity":"HIGH","summary":"s"}]"#;
+    fn snapshot_is_substantial() {
+        // Снимок обязан быть НАСТОЯЩЕЙ выгрузкой OSV, а не горсткой примеров: иначе
+        // «уязвимых 0» создаёт ложное ощущение защищённости. Порог заведомо ниже
+        // фактического объёма и ловит подмену снимка заглушкой.
+        let d = db();
+        assert!(
+            d.vulns.len() > 20_000,
+            "снимок подозрительно мал ({} записей): пересоберите `python3 tools/update-osv.py`",
+            d.vulns.len()
+        );
+        let ecos: std::collections::BTreeSet<&str> =
+            d.vulns.iter().map(|v| v.ecosystem.as_str()).collect();
+        assert!(
+            ecos.len() >= 8,
+            "снимок покрывает слишком мало экосистем: {ecos:?}"
+        );
+    }
+
+    #[test]
+    fn load_db_разбирает_tsv_и_метаданные() {
+        let raw = "# ailc-osv-snapshot\tgenerated_at=2026-07-26\tcount=2\n\
+                   # поля: id\tecosystem\tpackage\tintroduced\tfixed\tseverity\tsummary\n\
+                   CVE-1\tnpm\tlodash\t0\t4.17.21\tHIGH\tинъекция команды\n\
+                   CVE-2\tcrates.io\ttime\t0.1.0\t0.2.23\tMEDIUM\tпаника\n";
         let d = load_db(raw);
         assert!(d.loaded);
-        assert_eq!(d.vulns.len(), 1);
+        assert_eq!(d.vulns.len(), 2);
+        assert_eq!(d.generated_at.as_deref(), Some("2026-07-26"));
+        assert_eq!(d.count_declared, Some(2));
+        assert_eq!(d.vulns[0].package, "lodash");
+        assert_eq!(d.vulns[0].fixed.as_deref(), Some("4.17.21"));
+        assert_eq!(d.vulns[1].introduced.as_deref(), Some("0.1.0"));
+    }
+
+    #[test]
+    fn load_db_битая_строка_не_рушит_базу() {
+        let raw = "мусор\nCVE-1\tnpm\tlodash\t0\t4.17.21\tHIGH\tописание\n";
+        let d = load_db(raw);
+        assert!(d.loaded);
+        assert_eq!(d.vulns.len(), 1, "повреждённая строка пропускается");
     }
 
     #[test]
     fn load_db_marks_broken_as_not_loaded() {
         // Битый JSON ведёт к db_loaded=false, а не к тихому пустому вектору.
         let d = load_db("{ это не json");
-        assert!(!d.loaded, "битый снимок должен помечаться как не загруженный");
+        assert!(
+            !d.loaded,
+            "битый снимок должен помечаться как не загруженный"
+        );
         assert!(d.vulns.is_empty());
         let d2 = load_db("[]");
         assert!(!d2.loaded, "пустой массив это не рабочая база");
@@ -1512,7 +1703,10 @@ mod tests {
         assert_eq!(cmp_semverish("2.15.0-rc1", "2.15.0"), Ordering::Less);
         assert_eq!(cmp_semverish("2.15.0", "2.15.0-rc1"), Ordering::Greater);
         assert_eq!(cmp_semverish("1.0.0-alpha", "1.0.0-beta"), Ordering::Less);
-        assert_eq!(cmp_semverish("1.0.0-alpha.1", "1.0.0-alpha.2"), Ordering::Less);
+        assert_eq!(
+            cmp_semverish("1.0.0-alpha.1", "1.0.0-alpha.2"),
+            Ordering::Less
+        );
     }
 
     #[test]
@@ -1660,7 +1854,10 @@ mod tests {
             }
         }"#;
         let p = parse_npm_lock(json);
-        assert!(p.deps.iter().any(|(_, n, v)| n == "lodash" && v == "4.17.20"));
+        assert!(p
+            .deps
+            .iter()
+            .any(|(_, n, v)| n == "lodash" && v == "4.17.20"));
     }
 
     #[test]
@@ -1702,16 +1899,22 @@ mod tests {
         // T54: оба формата yarn.lock разбираются, scoped-имя сохранено.
         let v1 = "lodash@^4.0.0:\n  version \"4.17.20\"\n  resolved \"...\"\n\n\"@babel/core@^7.0.0\":\n  version \"7.1.0\"\n";
         let p = parse_yarn_lock(v1);
-        assert!(p.deps.iter().any(|(_, n, v)| n == "lodash" && v == "4.17.20"));
+        assert!(p
+            .deps
+            .iter()
+            .any(|(_, n, v)| n == "lodash" && v == "4.17.20"));
         assert!(p
             .deps
             .iter()
             .any(|(_, n, v)| n == "@babel/core" && v == "7.1.0"));
 
-        let berry = "\"lodash@npm:^4.0.0\":\n  version: 4.17.21\n  resolution: \"lodash@npm:4.17.21\"\n";
+        let berry =
+            "\"lodash@npm:^4.0.0\":\n  version: 4.17.21\n  resolution: \"lodash@npm:4.17.21\"\n";
         let pb = parse_yarn_lock(berry);
         assert!(
-            pb.deps.iter().any(|(_, n, v)| n == "lodash" && v == "4.17.21"),
+            pb.deps
+                .iter()
+                .any(|(_, n, v)| n == "lodash" && v == "4.17.21"),
             "berry-формат разобран: {:?}",
             pb.deps
         );
@@ -1724,7 +1927,9 @@ mod tests {
             "lockfileVersion: '6.0'\npackages:\n\n  /lodash/4.17.20:\n    resolution: {integrity: sha}\n\n  /@babel/core/7.0.0:\n    resolution: {integrity: sha}\n",
         );
         assert!(
-            p.deps.iter().any(|(_, n, v)| n == "lodash" && v == "4.17.20"),
+            p.deps
+                .iter()
+                .any(|(_, n, v)| n == "lodash" && v == "4.17.20"),
             "v6-ключ разобран: {:?}",
             p.deps
         );
@@ -1736,7 +1941,9 @@ mod tests {
         let v9 = "lockfileVersion: '9.0'\npackages:\n\n  lodash@4.17.21:\n    resolution: {integrity: sha}\n\n  '@babel/core@7.1.0':\n    resolution: {integrity: sha}\n";
         let p9 = parse_pnpm_lock(v9);
         assert!(
-            p9.deps.iter().any(|(_, n, v)| n == "lodash" && v == "4.17.21"),
+            p9.deps
+                .iter()
+                .any(|(_, n, v)| n == "lodash" && v == "4.17.21"),
             "v9-ключ разобран: {:?}",
             p9.deps
         );
@@ -1751,22 +1958,39 @@ mod tests {
         // T54: TOML/JSON/текстовые парсеры новых менеджеров извлекают имя и версию.
         let poetry = "[[package]]\nname = \"requests\"\nversion = \"2.19.0\"\n\n[[package]]\nname = \"jinja2\"\nversion = \"2.11.0\"\n";
         let pp = parse_poetry_lock(poetry);
-        assert!(pp.deps.iter().any(|(e, n, v)| *e == "PyPI" && n == "requests" && v == "2.19.0"));
+        assert!(pp
+            .deps
+            .iter()
+            .any(|(e, n, v)| *e == "PyPI" && n == "requests" && v == "2.19.0"));
 
         let pipfile = r#"{"default":{"requests":{"version":"==2.19.0"}},"develop":{"pytest":{"version":"==7.0.0"}}}"#;
         let pf = parse_pipfile_lock(pipfile);
-        assert!(pf.deps.iter().any(|(e, n, v)| *e == "PyPI" && n == "requests" && v == "2.19.0"));
-        assert!(pf.deps.iter().any(|(_, n, v)| n == "pytest" && v == "7.0.0"));
+        assert!(pf
+            .deps
+            .iter()
+            .any(|(e, n, v)| *e == "PyPI" && n == "requests" && v == "2.19.0"));
+        assert!(pf
+            .deps
+            .iter()
+            .any(|(_, n, v)| n == "pytest" && v == "7.0.0"));
 
         let composer = r#"{"packages":[{"name":"guzzlehttp/guzzle","version":"v6.5.5"}],"packages-dev":[{"name":"phpunit/phpunit","version":"9.5.0"}]}"#;
         let pc = parse_composer_lock(composer);
-        assert!(pc.deps.iter().any(|(e, n, v)| *e == "Packagist" && n == "guzzlehttp/guzzle" && v == "6.5.5"));
-        assert!(pc.deps.iter().any(|(_, n, v)| n == "phpunit/phpunit" && v == "9.5.0"));
+        assert!(pc
+            .deps
+            .iter()
+            .any(|(e, n, v)| *e == "Packagist" && n == "guzzlehttp/guzzle" && v == "6.5.5"));
+        assert!(pc
+            .deps
+            .iter()
+            .any(|(_, n, v)| n == "phpunit/phpunit" && v == "9.5.0"));
 
         let gemfile = "GEM\n  remote: https://rubygems.org/\n  specs:\n    omniauth (1.9.1)\n    rack (2.2.3)\n      rack-test (>= 0.5)\n\nPLATFORMS\n  ruby\n";
         let pg = parse_gemfile_lock(gemfile);
         assert!(
-            pg.deps.iter().any(|(e, n, v)| *e == "RubyGems" && n == "omniauth" && v == "1.9.1"),
+            pg.deps
+                .iter()
+                .any(|(e, n, v)| *e == "RubyGems" && n == "omniauth" && v == "1.9.1"),
             "Gemfile: прямой гем разобран: {:?}",
             pg.deps
         );
@@ -1791,10 +2015,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("osv_unv_{}", std::process::id()));
         let _ = f::remove_dir_all(&dir);
         f::create_dir_all(&dir).unwrap();
-        f::write(dir.join("requirements.txt"), "requests==2.18.0\njinja2>=2.10\n").unwrap();
+        f::write(
+            dir.join("requirements.txt"),
+            "requests==2.18.0\njinja2>=2.10\n",
+        )
+        .unwrap();
         let rep = scan(&dir);
         assert!(
-            rep.unverifiable.iter().any(|(e, n)| *e == "PyPI" && n == "jinja2"),
+            rep.unverifiable
+                .iter()
+                .any(|(e, n)| *e == "PyPI" && n == "jinja2"),
             "диапазон помечен непроверяемым: {:?}",
             rep.unverifiable
         );
@@ -1833,10 +2063,22 @@ mod tests {
         .unwrap();
 
         let (deps, manifests) = packages(&dir);
-        assert!(deps.iter().any(|(_, n, _)| n == "requests"), "корневой requirements");
-        assert!(deps.iter().any(|(_, n, _)| n == "lodash"), "вложенный package-lock");
-        assert!(deps.iter().any(|(_, n, _)| n == "minimist"), "вложенный yarn.lock");
-        assert!(!deps.iter().any(|(_, n, _)| n == "evil"), "node_modules исключён");
+        assert!(
+            deps.iter().any(|(_, n, _)| n == "requests"),
+            "корневой requirements"
+        );
+        assert!(
+            deps.iter().any(|(_, n, _)| n == "lodash"),
+            "вложенный package-lock"
+        );
+        assert!(
+            deps.iter().any(|(_, n, _)| n == "minimist"),
+            "вложенный yarn.lock"
+        );
+        assert!(
+            !deps.iter().any(|(_, n, _)| n == "evil"),
+            "node_modules исключён"
+        );
         assert!(manifests.contains(&"requirements.txt"));
         assert!(manifests.contains(&"yarn.lock"));
         let _ = f::remove_dir_all(&dir);
@@ -1856,7 +2098,10 @@ mod tests {
         .unwrap();
         f::write(dir.join("go.sum"), "example.com/m v1.0.0 h1:x=\n").unwrap();
         let (deps, _m) = packages(&dir);
-        assert!(!deps.iter().any(|(_, n, _)| n == "hidden"), ".gitignore уважён");
+        assert!(
+            !deps.iter().any(|(_, n, _)| n == "hidden"),
+            ".gitignore уважён"
+        );
         assert!(deps.iter().any(|(_, n, _)| n == "example.com/m"));
         let _ = f::remove_dir_all(&dir);
     }
@@ -1898,7 +2143,9 @@ mod tests {
         f::write(dir.join("composer.lock"), "{ битый json").unwrap();
         let rep = scan(&dir);
         assert!(
-            rep.unparsed_lockfiles.iter().any(|p| p.contains("composer.lock")),
+            rep.unparsed_lockfiles
+                .iter()
+                .any(|p| p.contains("composer.lock")),
             "необработанный lock-файл честно отражён: {:?}",
             rep.unparsed_lockfiles
         );

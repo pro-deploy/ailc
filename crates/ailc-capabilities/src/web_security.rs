@@ -32,6 +32,26 @@ use crate::{scan_manifest, ScanCapability};
 /// внутренний или RFC1918 хост признаётся находкой ТОЛЬКО рядом с вызовом HTTP-клиента
 /// (fetch/axios/requests/http.Get/curl и т.п.). Иначе это конфигурационный дефолт, строка
 /// лога, список CORS или база для разбора URL, а не SSRF, и фиксировать это нельзя.
+/// Инъекция шаблона на сервере. Общий образец для `owasp.rs` и `web_security.rs`.
+///
+/// Правило было объявлено в ОБОИХ модулях РАЗНЫМИ образцами, и они успели разойтись: версия в
+/// `owasp.rs` не знала ни `Twig…->createTemplate`, ни `velocityEngine.evaluate`, ни формы
+/// `jinja2.Environment()`. Расхождение опасно тем, что правку вносят в одну копию, а вторая
+/// продолжает жить своей жизнью, поэтому образец вынесен в единственное место.
+///
+/// Здесь же закрыта брешь обеих версий: обращение `Environment().from_string(...)` при
+/// импорте класса напрямую (`from jinja2 import Environment`) не ловилось ни одной из них,
+/// хотя это обычный способ записи.
+pub(crate) const SSTI_RE: &str = r"(?i)\brender_template_string\s*\(|\b(?:env(?:ironment)?|jinja2?\.Environment\(\)|Environment\s*\(\s*\))\.from_string\s*\(|\bTemplate\s*\([^)]*\)\s*\.\s*render\s*\(|\bTwig[A-Za-z]*->createTemplate\s*\(|\bnew\s+Template\s*\(|\bERB\.new\s*\(|\bHandlebars\.compile\s*\(|\bvelocityEngine\.evaluate\s*\(";
+
+/// Разрешение любого источника в правилах совместного доступа. Общий образец (см. `SSTI_RE`
+/// о причине выноса): версия в `owasp.rs` не знала форм `AllowAllOrigins` и `allowedOrigins`.
+pub(crate) const CORS_WILDCARD_RE: &str = r#"(?i)access-control-allow-origin["'\s:=]+\*|cors\s*\([^)\n]*origins?\s*[:=]\s*["']\*|AllowAllOrigins\s*[:=]\s*true|allowedOrigins?\s*[:(=]\s*["']\*"#;
+
+/// Отражение заголовка источника обратно в ответ. Общий образец (см. `SSTI_RE`): версия в
+/// `owasp.rs` не знала ни формы `${origin}`, ни записи через `setHeader`.
+pub(crate) const CORS_REFLECT_ORIGIN_RE: &str = r#"(?i)access-control-allow-origin["'\s:=]+(?:request|req|origin|\$http_origin|\$\{?origin)|cors\s*\([^)\n]*origin\s*:\s*true|@CrossOrigin\b|setHeader\s*\(\s*["']Access-Control-Allow-Origin["']\s*,\s*(?:request|req|origin)"#;
+
 pub(crate) const SSRF_INTERNAL_HOST_RE: &str = r"(?is)(169\.254\.169\.254|metadata\.google\.internal|metadata\.azure\.com|0x[Aa]9[Ff][Ee][Aa]9[Ff][Ee]|\b2852039166\b|\b0177\.0\.0\.1\b)|(?:fetch|axios|got|http\.get|http\.request|https\.get|https\.request|requests\.|urlopen|urllib|httpx|HttpClient|WebClient|RestTemplate|HttpURLConnection|URLConnection|Net::HTTP|open-uri|Faraday|file_get_contents|curl_exec|curl_init|GuzzleHttp|reqwest|hyper|URLSession|Alamofire|http\.Client|http\.NewRequest|client\.Do|\.get\(|\.post\(|\.request\()[^;{]{0,160}(?:127\.0\.0\.1|\blocalhost\b|\b0\.0\.0\.0\b|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})";
 
 // ───────────────────────── security.scan/web ─────────────────────────
@@ -78,7 +98,7 @@ fn web_rules() -> Vec<Rule> {
                 // Группа клиента, далее в его аргументах либо явный недоверенный
                 // источник, либо переменная URL-имени; ИЛИ оконная форма «явный
                 // источник ... клиент».
-                r"(?is)(?:(?:requests\.(?:get|post|put|delete|head|patch|request)|httpx\.(?:get|post|put|delete|head|request|client)|aiohttp\.[A-Za-z_]*\.(?:get|post|request)|urllib\.request\.urlopen|urlopen|axios(?:\.(?:get|post|put|delete|head|request))?|\bfetch|http\.(?:Get|Post|NewRequest)|HttpClient|OkHttpClient|WebClient)\s*\(\s*(?:request\.|req\.|params|query|user_input|user\.|\b(?:url|uri|target|link|endpoint|host|dest|destination|location|redirect|next|callback)\b)|(?:request\.|req\.|params|query|getParameter|user_input)[^;{]{0,160}?(?:requests\.(?:get|post|put|delete|head|patch|request)|httpx\.(?:get|post|request)|urlopen|axios(?:\.(?:get|post|request))?|\bfetch|http\.(?:Get|Post|NewRequest)|HttpClient|WebClient)\s*\()",
+                r"(?is)(?:(?:requests\.(?:get|post|put|delete|head|patch|request)|httpx\.(?:get|post|put|delete|head|request|client)|aiohttp\.[A-Za-z_]*\.(?:get|post|request)|urllib\.request\.urlopen|urlopen|axios(?:\.(?:get|post|put|delete|head|request))?|\bfetch|http\.(?:Get|Post|NewRequest)|HttpClient|OkHttpClient|WebClient)\s*\(\s*(?:request\.|req\.|params|query|user_input|user\.|\b(?:url|uri|target|link|endpoint|host|dest|destination|location|redirect|next|callback)\b)|(?:(?:^|[^.\w])(?:request|req)\.|params|query|getParameter|user_input)[^;{]{0,160}?(?:requests\.(?:get|post|put|delete|head|patch|request)|httpx\.(?:get|post|request)|urlopen|axios(?:\.(?:get|post|request))?|\bfetch|http\.(?:Get|Post|NewRequest)|HttpClient|WebClient)\s*\()",
                 3,
             ),
             message: "SSRF — запрос по управляемому пользователем URL (CWE-918, OWASP A10:2021 SSRF). Валидируйте хост по allow-list, запретите внутренние и метаданные-адреса.",
@@ -134,7 +154,7 @@ fn web_rules() -> Vec<Rule> {
             severity: High,
             exts: SOURCE_CODE,
             matcher: Matcher::regex(
-                r"(?i)\brender_template_string\s*\(|\b(?:env(?:ironment)?|jinja2?\.Environment\(\))\.from_string\s*\(|\bTemplate\s*\([^)]*\)\s*\.\s*render\s*\(|\bTwig[A-Za-z]*->createTemplate\s*\(|\bnew\s+Template\s*\(|\bERB\.new\s*\(|\bHandlebars\.compile\s*\(|\bvelocityEngine\.evaluate\s*\(",
+                SSTI_RE,
             ),
             message: "Server-Side Template Injection — рендер шаблона из строки (CWE-1336, OWASP A03:2021). Не подставляйте ввод в тело шаблона; используйте контекстные переменные.",
         },
@@ -231,7 +251,7 @@ fn web_rules() -> Vec<Rule> {
             severity: Medium,
             exts: SOURCE_CODE,
             matcher: Matcher::regex(
-                r#"(?i)access-control-allow-origin["'\s:=]+\*|cors\s*\([^)\n]*origins?\s*[:=]\s*["']\*|AllowAllOrigins\s*[:=]\s*true|allowedOrigins?\s*[:(=]\s*["']\*"#,
+                CORS_WILDCARD_RE,
             ),
             message: "CORS разрешает любой источник (*) (CWE-942, OWASP A05:2021). Перечислите доверенные домены явным allow-list.",
         },
@@ -245,7 +265,7 @@ fn web_rules() -> Vec<Rule> {
             severity: High,
             exts: SOURCE_CODE,
             matcher: Matcher::regex(
-                r#"(?i)access-control-allow-origin["'\s:=]+(?:request|req|origin|\$http_origin|\$\{?origin)|cors\s*\([^)\n]*origin\s*:\s*true|@CrossOrigin\b|setHeader\s*\(\s*["']Access-Control-Allow-Origin["']\s*,\s*(?:request|req|origin)"#,
+                CORS_REFLECT_ORIGIN_RE,
             ),
             message: "CORS отражает заголовок Origin (CWE-942/CWE-346, OWASP A05:2021). Динамическое отражение Origin вместе с Allow-Credentials:true позволяет кражу данных с учётными данными; используйте статический allow-list.",
         },
@@ -424,29 +444,56 @@ mod tests {
         let rs = web_rules();
         let r = rule(&rs, "ssrf-internal-host");
         // Метаданные облака и обфусцированные формы — находка даже голым литералом.
-        assert!(hits(r, "url = 'http://169.254.169.254/latest/meta-data/'"), "AWS IMDS");
+        assert!(
+            hits(r, "url = 'http://169.254.169.254/latest/meta-data/'"),
+            "AWS IMDS"
+        );
         assert!(hits(r, "host = 'metadata.google.internal'"), "GCP metadata");
         assert!(hits(r, "u = 'http://2852039166/'"), "decimal IMDS");
         assert!(hits(r, "u = 'http://0xA9FEA9FE/'"), "hex IMDS");
         // Внутренний/loopback/RFC1918 — находка ТОЛЬКО в окне с вызовом HTTP-клиента.
-        assert!(hits(r, "requests.get('http://127.0.0.1:8080/admin')"), "loopback в запросе");
-        assert!(hits(r, "axios.get('http://10.0.0.5/internal')"), "RFC1918 10/8 в запросе");
-        assert!(hits(r, "fetch('http://192.168.1.1/')"), "RFC1918 192.168 в запросе");
-        assert!(hits(r, "client.Do('http://172.16.0.1/')"), "RFC1918 172.16 в запросе");
+        assert!(
+            hits(r, "requests.get('http://127.0.0.1:8080/admin')"),
+            "loopback в запросе"
+        );
+        assert!(
+            hits(r, "axios.get('http://10.0.0.5/internal')"),
+            "RFC1918 10/8 в запросе"
+        );
+        assert!(
+            hits(r, "fetch('http://192.168.1.1/')"),
+            "RFC1918 192.168 в запросе"
+        );
+        assert!(
+            hits(r, "client.Do('http://172.16.0.1/')"),
+            "RFC1918 172.16 в запросе"
+        );
     }
 
     #[test]
     fn ssrf_литеральный_хост_не_трогает_публичный() {
         let rs = web_rules();
         let r = rule(&rs, "ssrf-internal-host");
-        assert!(!hits(r, "requests.get('http://93.184.216.34/')"), "публичный IP в запросе");
+        assert!(
+            !hits(r, "requests.get('http://93.184.216.34/')"),
+            "публичный IP в запросе"
+        );
         assert!(!hits(r, "u = 'http://172.32.0.1/'"), "172.32 вне RFC1918");
         assert!(!hits(r, "u = 'http://11.0.0.1/'"), "11.x не RFC1918");
         // Голый внутренний литерал без вызова HTTP-клиента (конфиг/дефолт/лог/CORS) — НЕ
         // SSRF. Раньше каждая такая строка давала ложное срабатывание (см. бенчмарк).
-        assert!(!hits(r, "const base = 'http://127.0.0.1:5173'"), "конфиг-дефолт");
-        assert!(!hits(r, "console.log('listening on http://localhost:3000')"), "строка лога");
-        assert!(!hits(r, "ALLOWED = 'http://localhost:5173,http://127.0.0.1:3000'"), "список CORS");
+        assert!(
+            !hits(r, "const base = 'http://127.0.0.1:5173'"),
+            "конфиг-дефолт"
+        );
+        assert!(
+            !hits(r, "console.log('listening on http://localhost:3000')"),
+            "строка лога"
+        );
+        assert!(
+            !hits(r, "ALLOWED = 'http://localhost:5173,http://127.0.0.1:3000'"),
+            "список CORS"
+        );
     }
 
     #[test]
@@ -465,11 +512,32 @@ mod tests {
         let r = rule(&rs, "tls-verify-disabled");
         assert!(hits(r, "requests.get(u, verify=False)"), "python verify");
         assert!(hits(r, "tr := &tls.Config{InsecureSkipVerify: true}"), "go");
-        assert!(hits(r, "const a = new https.Agent({rejectUnauthorized: false})"), "node agent");
-        assert!(hits(r, "conn.setHostnameVerifier((h, s) -> true);"), "java hostnameverifier");
-        assert!(hits(r, "ServicePointManager.ServerCertificateValidationCallback += (s,c,ch,e) => true;"), "dotnet");
-        assert!(hits(r, "process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'"), "node env");
-        assert!(hits(r, "public void checkServerTrusted(X509Certificate[] c, String a) {}"), "пустой checkServerTrusted");
+        assert!(
+            hits(r, "const a = new https.Agent({rejectUnauthorized: false})"),
+            "node agent"
+        );
+        assert!(
+            hits(r, "conn.setHostnameVerifier((h, s) -> true);"),
+            "java hostnameverifier"
+        );
+        assert!(
+            hits(
+                r,
+                "ServicePointManager.ServerCertificateValidationCallback += (s,c,ch,e) => true;"
+            ),
+            "dotnet"
+        );
+        assert!(
+            hits(r, "process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'"),
+            "node env"
+        );
+        assert!(
+            hits(
+                r,
+                "public void checkServerTrusted(X509Certificate[] c, String a) {}"
+            ),
+            "пустой checkServerTrusted"
+        );
     }
 
     #[test]
@@ -491,8 +559,14 @@ mod tests {
         let r = rule(&rs, "jwt-none-alg");
         assert!(hits(r, "jwt.decode(t, algorithms=['none'])"), "массив none");
         assert!(hits(r, "jwt.decode(t, algorithms=None)"), "algorithms=None");
-        assert!(hits(r, "jwt.decode(token, options={'algorithm': 'none'})"), "словарь alg none");
-        assert!(hits(r, "jwt.decode(t, verify_signature=False)"), "verify_signature false");
+        assert!(
+            hits(r, "jwt.decode(token, options={'algorithm': 'none'})"),
+            "словарь alg none"
+        );
+        assert!(
+            hits(r, "jwt.decode(t, verify_signature=False)"),
+            "verify_signature false"
+        );
     }
 
     #[test]
@@ -508,7 +582,10 @@ mod tests {
     fn jwt_alg_confusion_смешение_асим_и_hmac() {
         let rs = api_rules();
         let r = rule(&rs, "jwt-alg-confusion");
-        assert!(hits(r, "jwt.decode(t, algorithms=['HS256', 'RS256'])"), "HS+RS");
+        assert!(
+            hits(r, "jwt.decode(t, algorithms=['HS256', 'RS256'])"),
+            "HS+RS"
+        );
         assert!(hits(r, "algorithms: ['RS256', 'HS256']"), "RS+HS");
         // Один симметричный или один асимметричный класс — не путаница.
         assert!(!hits(r, "algorithms=['HS256', 'HS384']"), "только HMAC");
@@ -522,7 +599,10 @@ mod tests {
         // T22: класс символов включает равно, как в owasp-варианте.
         let rs = web_rules();
         let r = rule(&rs, "cors-wildcard");
-        assert!(hits(r, "Access-Control-Allow-Origin = \"*\""), "через равно");
+        assert!(
+            hits(r, "Access-Control-Allow-Origin = \"*\""),
+            "через равно"
+        );
         assert!(hits(r, "Access-Control-Allow-Origin: *"), "через двоеточие");
         assert!(hits(r, "cors(app, origins='*')"), "origins '*'");
     }
@@ -531,8 +611,17 @@ mod tests {
     fn cors_reflection_origin_high() {
         let rs = web_rules();
         let r = rule(&rs, "cors-reflect-origin");
-        assert!(hits(r, "Access-Control-Allow-Origin: $http_origin"), "nginx echo");
-        assert!(hits(r, "res.setHeader('Access-Control-Allow-Origin', req.headers.origin)"), "node echo");
+        assert!(
+            hits(r, "Access-Control-Allow-Origin: $http_origin"),
+            "nginx echo"
+        );
+        assert!(
+            hits(
+                r,
+                "res.setHeader('Access-Control-Allow-Origin', req.headers.origin)"
+            ),
+            "node echo"
+        );
         assert!(hits(r, "cors({origin: true})"), "origin true");
         assert!(hits(r, "@CrossOrigin"), "spring crossorigin");
         assert_eq!(r.severity, Severity::High, "reflection опаснее wildcard");
@@ -543,20 +632,32 @@ mod tests {
         let rs = web_rules();
         let r = rule(&rs, "insecure-cookie");
         // Кодовый флаг secure=False у вызова set_cookie (в т.ч. многострочного) — находка.
-        assert!(hits(r, "resp.set_cookie('s', v, secure=False)"), "secure=False");
+        assert!(
+            hits(r, "resp.set_cookie('s', v, secure=False)"),
+            "secure=False"
+        );
         assert!(
             hits(r, "RESPONSE.set_cookie(cookie, value,\n  path=request.path,\n  secure=False,\n  httponly=True)"),
             "многострочный set_cookie secure=False"
         );
-        assert!(hits(r, "res.cookie('s', v, { httpOnly: false })"), "node httpOnly:false");
+        assert!(
+            hits(r, "res.cookie('s', v, { httpOnly: false })"),
+            "node httpOnly:false"
+        );
         // Описательная проза «secure flag set to false» БЕЗ оператора и при secure=True —
         // НЕ находка (раньше предикат ложно срабатывал на ней во всех файлах корпуса).
         assert!(
-            !hits(r, "RESPONSE += 'Created cookie with secure flag set to false.'"),
+            !hits(
+                r,
+                "RESPONSE += 'Created cookie with secure flag set to false.'"
+            ),
             "проза про cookie не находка"
         );
         assert!(
-            !hits(r, "resp.set_cookie('s', v,\n  secure=True,\n  httponly=True)"),
+            !hits(
+                r,
+                "resp.set_cookie('s', v,\n  secure=True,\n  httponly=True)"
+            ),
             "secure=True безопасен"
         );
     }
@@ -568,10 +669,16 @@ mod tests {
         let rs = web_rules();
         let r = rule(&rs, "ssti");
         assert!(hits(r, "render_template_string(tpl)"), "flask");
-        assert!(hits(r, "env.from_string(user_tpl).render()"), "jinja from_string");
+        assert!(
+            hits(r, "env.from_string(user_tpl).render()"),
+            "jinja from_string"
+        );
         assert!(hits(r, "ERB.new(tpl).result(binding)"), "erb");
         assert!(hits(r, "Handlebars.compile(src)"), "handlebars");
-        assert!(hits(r, "Template tpl = new Template(\"n\", src, cfg);"), "freemarker new Template");
+        assert!(
+            hits(r, "Template tpl = new Template(\"n\", src, cfg);"),
+            "freemarker new Template"
+        );
     }
 
     #[test]
@@ -579,20 +686,38 @@ mod tests {
         let rs = web_rules();
         let r = rule(&rs, "insecure-deserialize");
         assert!(hits(r, "obj = pickle.loads(data)"), "python pickle");
-        assert!(hits(r, "ObjectInputStream ois = new ObjectInputStream(in);"), "java OIS");
-        assert!(hits(r, "$obj = unserialize($_POST['d']);"), "php unserialize");
+        assert!(
+            hits(r, "ObjectInputStream ois = new ObjectInputStream(in);"),
+            "java OIS"
+        );
+        assert!(
+            hits(r, "$obj = unserialize($_POST['d']);"),
+            "php unserialize"
+        );
         assert!(hits(r, "obj = Marshal.load(data)"), "ruby marshal");
-        assert!(hits(r, "var o = new BinaryFormatter().Deserialize(s);"), "dotnet BinaryFormatter");
+        assert!(
+            hits(r, "var o = new BinaryFormatter().Deserialize(s);"),
+            "dotnet BinaryFormatter"
+        );
     }
 
     #[test]
     fn path_traversal_новые_стоки_и_источники() {
         let rs = web_rules();
         let r = rule(&rs, "path-traversal");
-        assert!(hits(r, "send_file(request.args.get('f'))"), "send_file + request");
-        assert!(hits(r, "fs.readFileSync(req.query.path)"), "readFileSync + req");
+        assert!(
+            hits(r, "send_file(request.args.get('f'))"),
+            "send_file + request"
+        );
+        assert!(
+            hits(r, "fs.readFileSync(req.query.path)"),
+            "readFileSync + req"
+        );
         assert!(hits(r, "open(user_input)"), "open + user_input");
-        assert!(hits(r, "return File.new(params[:name])"), "ruby File.new + params");
+        assert!(
+            hits(r, "return File.new(params[:name])"),
+            "ruby File.new + params"
+        );
     }
 
     #[test]
@@ -600,24 +725,42 @@ mod tests {
         let rs = web_rules();
         let r = rule(&rs, "path-traversal");
         assert!(hits(r, "open('../../etc/passwd')"), "буквальный ../");
-        assert!(hits(r, "readfile('%2e%2e/secret')"), "URL-кодированный обход");
+        assert!(
+            hits(r, "readfile('%2e%2e/secret')"),
+            "URL-кодированный обход"
+        );
     }
 
     #[test]
     fn xxe_по_умолчанию_и_явно() {
         let rs = web_rules();
         let xxe = rule(&rs, "xxe");
-        assert!(hits(xxe, "parser = etree.XMLParser(resolve_entities=True)"), "явные сущности lxml");
+        assert!(
+            hits(xxe, "parser = etree.XMLParser(resolve_entities=True)"),
+            "явные сущности lxml"
+        );
         // Реальный XXE на xml.sax с включёнными внешними сущностями (раньше пропускался).
         assert!(
-            hits(xxe, "parser.setFeature(xml.sax.handler.feature_external_ges, True)"),
+            hits(
+                xxe,
+                "parser.setFeature(xml.sax.handler.feature_external_ges, True)"
+            ),
             "sax feature_external_ges=True"
         );
         let def = rule(&rs, "xxe-parser-default");
-        assert!(hits(def, "DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();"), "java фабрика");
+        assert!(
+            hits(
+                def,
+                "DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();"
+            ),
+            "java фабрика"
+        );
         // lxml etree.parse БОЛЬШЕ не считается XXE по умолчанию: современный lxml не
         // разворачивает внешние сущности, а паттерн ложно метил XPath-файлы как XXE.
-        assert!(!hits(def, "tree = etree.parse(xml_input)"), "голый etree.parse не XXE");
+        assert!(
+            !hits(def, "tree = etree.parse(xml_input)"),
+            "голый etree.parse не XXE"
+        );
     }
 
     #[test]
@@ -626,7 +769,10 @@ mod tests {
         let rs = web_rules();
         let r = rule(&rs, "command-exec-runtime");
         assert!(hits(r, "Runtime.getRuntime().exec(cmd)"), "Runtime.exec");
-        assert!(hits(r, "new ProcessBuilder(cmd).start();"), "ProcessBuilder");
+        assert!(
+            hits(r, "new ProcessBuilder(cmd).start();"),
+            "ProcessBuilder"
+        );
     }
 
     // ───────────────────────── общие инварианты ─────────────────────────
@@ -649,6 +795,10 @@ mod tests {
         let n = ids.len();
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), n, "идентификаторы правил web/api должны быть уникальны");
+        assert_eq!(
+            ids.len(),
+            n,
+            "идентификаторы правил web/api должны быть уникальны"
+        );
     }
 }

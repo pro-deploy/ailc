@@ -4,9 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[build-dependencies]
+# Сжатие снимка базы уязвимостей на этапе сборки (см. build.rs). Чистый Rust, без C.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
 [dependencies]
+# Распаковка встроенного снимка базы уязвимостей при первом обращении.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 ailc-contracts = { path = "../ailc-contracts" }
-model2vec-rs = "0.2.1"
 regex = "1"
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
@@ -30,3 +35,8 @@ tree-sitter-scala = "0.23"
 tree-sitter-kotlin-ng = "1.1.0"
 tree-sitter-swift = "0.7.3"
 tree-sitter-dart = "0.2.0"
+
+[dev-dependencies]
+# Оснастка тестов: временное рабочее дерево с гарантированной уборкой. Только для тестов,
+# в поставляемый бинарь не попадает.
+ailc-testkit = { path = "../ailc-testkit" }

@@ -164,7 +164,10 @@ pub fn detect(root: &Path) -> ProjectProfile {
         };
         let slice = &bytes[..bytes.len().min(MAX_READ)];
         let text = String::from_utf8_lossy(slice);
-        if !p.ru_locale && text.chars().take(20_000).any(|c| ('а'..='я').contains(&c.to_ascii_lowercase()) || c == 'ё') {
+        // Русскоязычность проекта определяется не единственной кириллической буквой, а
+        // заметным объёмом кириллицы: одно случайное слово в комментарии не должно
+        // включать профильные оси комплаенса на нерелевантном проекте.
+        if !p.ru_locale && cyrillic_count(&text, MIN_CYRILLIC) >= MIN_CYRILLIC {
             p.ru_locale = true;
         }
         if !p.has_pdn && has_pdn_marker(&text) {
@@ -181,20 +184,98 @@ pub fn detect(root: &Path) -> ProjectProfile {
     p
 }
 
+/// Сколько кириллических букв в просмотренной части файла считается признаком
+/// русскоязычного проекта. Порог отсекает единичное русское слово в комментарии и при
+/// этом заведомо перекрывается любым реальным русским текстом (одна фраза длиннее).
+const MIN_CYRILLIC: usize = 60;
+
+/// Число кириллических букв в первых 20 000 символах текста; подсчёт прекращается по
+/// достижении `limit`, поэтому стоимость ограничена.
+fn cyrillic_count(text: &str, limit: usize) -> usize {
+    let mut n = 0usize;
+    for c in text.chars().take(20_000) {
+        if ('а'..='я').contains(&c.to_lowercase().next().unwrap_or(c)) || c == 'ё' || c == 'Ё' {
+            n += 1;
+            if n >= limit {
+                return n;
+            }
+        }
+    }
+    n
+}
+
+/// Однозначные маркеры персональных данных: встречаются только в соответствующем
+/// смысле, поэтому ищутся как подстрока.
+const PDN_EXACT: &[&str] = &[
+    "снилс",
+    "passport_number",
+    "passport_series",
+    "personal_data",
+    "person_data",
+    "birth_date",
+    "date_of_birth",
+    "персональные данные",
+    "персональных данных",
+    "паспортные данные",
+    "паспортных данных",
+    "номер паспорта",
+    "серия паспорта",
+];
+
+/// Многозначные маркеры: ищутся ТОЛЬКО как отдельные слова. Подстрочный поиск здесь
+/// недопустим, поскольку сочетание «инн» входит в обычные слова («длинный»,
+/// «старинный», «инновация»), а слово «паспорт» вне сочетания с данными означает в том
+/// числе паспорт проекта, и подстрочный поиск объявлял бы обработкой персональных
+/// данных проекты, которые к ним отношения не имеют.
+const PDN_WORDS: &[&str] = &["инн", "снилс", "snils", "inn"];
+
 /// Признаки персональных данных в тексте файла (поля и термины, по которым работает
 /// и семейство compliance.ru; здесь только дешёвый сигнал «тема присутствует»).
 fn has_pdn_marker(text: &str) -> bool {
     let lower = text.to_lowercase();
-    ["снилс", "паспорт", "инн", "passport_number", "birth_date", "person_data", "personal_data"]
-        .iter()
-        .any(|m| lower.contains(m))
+    if PDN_EXACT.iter().any(|m| lower.contains(m)) {
+        return true;
+    }
+    PDN_WORDS.iter().any(|w| contains_word(&lower, w))
+}
+
+/// Входит ли `word` в `text` как отдельное слово. Границей слова считается любой символ,
+/// не являющийся буквой, цифрой или знаком подчёркивания; учитываются в том числе
+/// кириллические буквы, поэтому «инн» не совпадает внутри слова «инновация».
+fn contains_word(text: &str, word: &str) -> bool {
+    let is_part = |c: char| c.is_alphanumeric() || c == '_';
+    let mut from = 0usize;
+    while let Some(rel) = text[from..].find(word) {
+        let start = from + rel;
+        let end = start + word.len();
+        let before_ok = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_part(c));
+        let after_ok = text[end..].chars().next().is_none_or(|c| !is_part(c));
+        if before_ok && after_ok {
+            return true;
+        }
+        // Сдвигаемся на один символ вперёд, сохраняя корректность границ UTF-8.
+        from = start + text[start..].chars().next().map_or(1, char::len_utf8);
+        if from >= text.len() {
+            break;
+        }
+    }
+    false
 }
 
 /// Признак обращения к LLM в коде (когда SDK не виден в манифесте: прямые HTTP-вызовы).
 fn has_llm_call(text: &str) -> bool {
-    ["api.openai.com", "api.anthropic.com", "chat/completions", "createMessage", "generativelanguage.googleapis"]
-        .iter()
-        .any(|m| text.contains(m))
+    [
+        "api.openai.com",
+        "api.anthropic.com",
+        "chat/completions",
+        "createMessage",
+        "generativelanguage.googleapis",
+    ]
+    .iter()
+    .any(|m| text.contains(m))
 }
 
 /// Упомянут ли любой из маркеров в манифестах зависимостей корня.
@@ -286,12 +367,59 @@ mod tests {
             r#"{ "dependencies": { "@anthropic-ai/sdk": "^1.0.0" } }"#,
         )
         .unwrap();
-        std::fs::write(d.join("main.py"), "# проверка СНИЛС клиента\n").unwrap();
+        std::fs::write(
+            d.join("main.py"),
+            "# Проверка СНИЛС клиента перед сохранением анкеты в базу данных.\n\
+             # Значение приходит из формы регистрации и подлежит маскированию в журнале.\n",
+        )
+        .unwrap();
         let p = detect(&d);
         assert!(p.has_llm);
         assert!(p.ru_locale);
         assert!(p.has_pdn);
         assert_eq!(p.extra_families(), vec![ailc_contracts::Family::Compliance]);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// T-09: слова «старинный» и «инновация» содержат сочетание «инн», но признаком
+    /// обработки персональных данных не являются.
+    #[test]
+    fn inn_inside_ordinary_words_is_not_pdn() {
+        assert!(!has_pdn_marker(
+            "Длинный старинный алгоритм, инновация в вычислениях. Невинный комментарий."
+        ));
+        assert!(has_pdn_marker("поле inn заполняется из анкеты"));
+        assert!(has_pdn_marker("ИНН: 7701234567"));
+        assert!(has_pdn_marker("значение passport_number маскируется"));
+    }
+
+    /// T-09: паспорт проекта не превращает проект в обработчика персональных данных.
+    #[test]
+    fn project_passport_is_not_personal_data() {
+        assert!(!has_pdn_marker(
+            "Паспорт проекта определяется автоматически и хранится в .ailc/profile.md"
+        ));
+        assert!(has_pdn_marker(
+            "серия паспорта и номер паспорта не логируются"
+        ));
+    }
+
+    /// T-10: единственное русское слово не делает проект русскоязычным.
+    #[test]
+    fn single_russian_word_is_not_ru_locale() {
+        let d = tmp("ru-thin");
+        std::fs::write(d.join("a.rs"), "// хак\nfn main() {}\n").unwrap();
+        assert!(!detect(&d).ru_locale);
+        std::fs::remove_dir_all(&d).ok();
+
+        let d = tmp("ru-full");
+        std::fs::write(
+            d.join("a.rs"),
+            "// Этот модуль отвечает за разбор входящих сообщений и проверку подписи.\n\
+             // Ошибки разбора возвращаются вызывающему коду без паники.\nfn main() {}\n",
+        )
+        .unwrap();
+        assert!(detect(&d).ru_locale);
         std::fs::remove_dir_all(&d).ok();
     }
 

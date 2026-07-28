@@ -18,17 +18,25 @@ use ailc_core::Capability;
 use std::fs;
 
 use crate::spec_gen::doc_specs;
+use ailc_core::changes::ChangeClass;
 
 const TARGET_SCHEMA: &str = r#"{"type":"object","properties":{"target":{"type":"string"}}}"#;
 
-/// Содержимое авто-блока документа (между метками `co:auto`), обрезанное. None — нет
-/// файла или блока (документ ещё не сгенерирован).
+/// Содержимое авто-блока документа (между метками `ailc:auto`), обрезанное. None — нет
+/// файла или блока (документ ещё не сгенерирован). Прежнее написание меток `co:auto`
+/// читается ради совместимости с документами, созданными до переименования продукта.
 fn read_auto_block(ctx: &Ctx, rel: &str, key: &str) -> Option<String> {
+    use ailc_core::engines::generator::{
+        legacy_start_marker, start_marker, END_MARKER, LEGACY_END_MARKER,
+    };
     let text = fs::read_to_string(ctx.root.join(rel)).ok()?;
-    let start = format!("<!-- co:auto:start {key} -->");
+    let (start, end) = match text.find(&start_marker(key)) {
+        Some(_) => (start_marker(key), END_MARKER),
+        None => (legacy_start_marker(key), LEGACY_END_MARKER),
+    };
     let si = text.find(&start)?;
     let after = &text[si + start.len()..];
-    let ei = after.find("<!-- co:auto:end -->")?;
+    let ei = after.find(end)?;
     Some(after[..ei].trim().to_string())
 }
 
@@ -72,6 +80,83 @@ impl DriftCheck {
     }
 }
 
+impl DriftCheck {
+    /// Сверить документы, объявленные декларациями стандартов, со свежей сборкой.
+    ///
+    /// Возвращает число актуальных, устаревших и ещё не выпущенных документов. Сборка
+    /// идемпотентна и не зависит ни от даты, ни от состояния истории изменений, поэтому
+    /// расхождение означает именно изменение кода или ответов, а не течение времени.
+    fn check_declared(
+        &self,
+        ctx: &Ctx,
+        input: &RunInput,
+        out: &mut CapabilityOutput,
+    ) -> Result<(usize, usize, usize)> {
+        use ailc_core::engines::docgen;
+
+        let m = ailc_core::model::build(ctx, input)?;
+        let answers = ailc_core::answers::Answers::load(ctx);
+        let profile = ailc_core::profile::detect(&ctx.root);
+        let changes = ailc_core::changes::all(ctx);
+        let head = std::process::Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .current_dir(&ctx.root)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+
+        let (mut fresh, mut stale, mut absent) = (0usize, 0usize, 0usize);
+        for doc in ailc_core::standards::documents() {
+            let on_disk = fs::read_to_string(ctx.root.join(doc.path)).ok();
+            let r = docgen::render(
+                doc,
+                &m,
+                &answers,
+                &profile,
+                on_disk.as_deref(),
+                &head,
+                &changes,
+            );
+            out.metrics.push((
+                format!("полнота:{}", doc.id),
+                f64::from(r.completeness.percent()),
+            ));
+            match on_disk {
+                None => {
+                    absent += 1;
+                    out.records.push(format!("{}: не выпущен", doc.path));
+                }
+                Some(текст) if текст == r.text => {
+                    fresh += 1;
+                    out.records.push(format!("{}: актуален", doc.path));
+                }
+                Some(_) => {
+                    stale += 1;
+                    out.records.push(format!("{}: РАЗОШЁЛСЯ С КОДОМ", doc.path));
+                    out.findings.push(Finding {
+                        rule: "doc-drift".into(),
+                        severity: Severity::High,
+                        message: format!(
+                            "Документ «{}» ({}) разошёлся с кодом и врёт о системе. Пересобери: `ailc cap generate/doc <путь> \"{}\"`",
+                            doc.title, doc.path, doc.id
+                        ),
+                        location: Some(Location {
+                            file: doc.path.to_string(),
+                            line: 1,
+                        }),
+                        evidence: None,
+                        verified: true,
+                        source: "spec.check/drift".into(),
+                    });
+                }
+            }
+        }
+        Ok((fresh, stale, absent))
+    }
+}
+
 impl Capability for DriftCheck {
     fn manifest(&self) -> &CapabilityManifest {
         &self.manifest
@@ -100,9 +185,9 @@ impl Capability for DriftCheck {
                         out.records.push(format!("{}: УСТАРЕЛО", d.rel));
                         out.findings.push(Finding {
                             rule: "doc-drift".into(),
-                            severity: Severity::Low,
+                            severity: Severity::High,
                             message: format!(
-                                "Документ «{}» устарел — код изменился. Обнови: `ailc <путь> \"обнови документацию\"`",
+                                "Документ «{}» разошёлся с кодом и врёт о нём. Пересобери: `ailc cap generate/doc <путь>`",
                                 d.rel
                             ),
                             location: Some(Location {
@@ -116,6 +201,19 @@ impl Capability for DriftCheck {
                     }
                 }
             }
+        }
+
+        // Документы, объявленные декларациями стандартов, сверяются иначе: они
+        // принадлежат машине целиком, поэтому дрейф это расхождение файла со свежей
+        // сборкой. Собранный документ сравнивается с тем, что лежит на диске, и
+        // расхождение блокирует: устаревший документ по стандарту врёт о системе, а
+        // именно на такой документ ссылаются при сдаче.
+        let (декл_свежих, декл_устаревших, декл_нет) = self.check_declared(ctx, input, &mut out)?;
+        in_sync += декл_свежих;
+        stale += декл_устаревших;
+        if декл_нет > 0 {
+            out.records
+                .push(format!("документов по стандартам не выпущено: {декл_нет}"));
         }
 
         // Отсутствие доков — мягкий нудж, и только на существенном проекте (агрегатно).
@@ -136,7 +234,8 @@ impl Capability for DriftCheck {
 
         out.metrics.push(("docs_in_sync".into(), in_sync as f64));
         out.metrics.push(("docs_stale".into(), stale as f64));
-        out.metrics.push(("docs_missing".into(), missing.len() as f64));
+        out.metrics
+            .push(("docs_missing".into(), missing.len() as f64));
         out.summary = format!(
             "spec.check/drift: актуальны {in_sync}, устарели {stale}, отсутствуют {}",
             missing.len()
@@ -216,8 +315,26 @@ fn is_source(path: &str) -> bool {
         .to_ascii_lowercase();
     matches!(
         ext.as_str(),
-        "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "java" | "kt" | "rb" | "php"
-            | "cs" | "swift" | "dart" | "scala" | "c" | "cpp" | "h" | "hpp" | "vue" | "svelte"
+        "rs" | "py"
+            | "js"
+            | "ts"
+            | "tsx"
+            | "jsx"
+            | "go"
+            | "java"
+            | "kt"
+            | "rb"
+            | "php"
+            | "cs"
+            | "swift"
+            | "dart"
+            | "scala"
+            | "c"
+            | "cpp"
+            | "h"
+            | "hpp"
+            | "vue"
+            | "svelte"
     )
 }
 
@@ -249,7 +366,9 @@ impl Capability for TraceCheck {
     fn run(&self, ctx: &Ctx, _input: &RunInput) -> Result<CapabilityOutput> {
         let mut out = CapabilityOutput::default();
         let Some(files) = changed_files(&ctx.root) else {
-            out.skipped = Some("git недоступен или это не репозиторий — прослеживаемость не проверить".into());
+            out.skipped = Some(
+                "git недоступен или это не репозиторий — прослеживаемость не проверить".into(),
+            );
             out.summary = "spec.check/trace: пропущено (нет git)".into();
             return Ok(out);
         };
@@ -258,6 +377,26 @@ impl Capability for TraceCheck {
             out.summary = "spec.check/trace: изменённых исходников нет".into();
             return Ok(out);
         }
+        // Класс изменения выводится из самого различия, а не со слов агента: иначе любая
+        // правка объявлялась бы косметической, и дисциплина держалась бы на
+        // добросовестности того, кого она ограничивает.
+        let class = match ailc_core::changes::diff(&ctx.root) {
+            Some(d) => ailc_core::changes::classify(&d),
+            None => ChangeClass::Defect,
+        };
+
+        // Косметическая правка поведения не меняет: достаточно записи в журнале
+        // изменений, которую сервер делает сам. Требовать под неё техническое задание
+        // значило бы убить дисциплину на второй день.
+        if class == ChangeClass::Cosmetic {
+            out.metrics.push(("change_needs_design".into(), 0.0));
+            out.summary = format!(
+                "spec.check/trace: изменение косметическое ({} исходников), достаточно записи в журнале",
+                sources.len()
+            );
+            return Ok(out);
+        }
+
         let specs = specs_text(ctx);
         // Файл прослеживается, если спека/бэклог упоминает его имя или путь.
         let uncovered: Vec<&String> = sources
@@ -270,22 +409,34 @@ impl Capability for TraceCheck {
                 !(specs.contains(f.as_str()) || specs.contains(name))
             })
             .collect();
+        out.metrics.push(("change_needs_design".into(), 1.0));
         if uncovered.is_empty() {
             out.summary = format!(
-                "spec.check/trace: изменение прослеживается (исходников: {})",
+                "spec.check/trace: изменение прослеживается ({}, исходников: {})",
+                class.label(),
                 sources.len()
             );
             return Ok(out);
         }
+
+        // Соразмерность классу. Слом публичного контракта и новая функциональность без
+        // чертежа блокируют сдачу; исправление дефекта остаётся предупреждением, поскольку
+        // дефект чаще всего уже описан в задаче, а его срочность законна.
+        let severity = match class {
+            ChangeClass::ContractBreak | ChangeClass::Feature => Severity::High,
+            _ => Severity::Medium,
+        };
         let listed: Vec<String> = uncovered.iter().take(8).map(|s| s.to_string()).collect();
         out.findings.push(Finding {
             rule: "change-without-spec".into(),
-            severity: Severity::Low,
+            severity,
             message: format!(
-                "изменение не прослеживается к спеке или задаче бэклога ({} из {} файлов): {}",
+                "{}: изменение не прослеживается к спеке, решению или задаче ({} из {} файлов): {}. Требуется {}",
+                class.label(),
                 uncovered.len(),
                 sources.len(),
-                listed.join(", ")
+                listed.join(", "),
+                class.requires()
             ),
             location: Some(Location {
                 file: uncovered[0].to_string(),
@@ -296,7 +447,8 @@ impl Capability for TraceCheck {
             source: "spec.check/trace".into(),
         });
         out.summary = format!(
-            "spec.check/trace: без чертежа {} из {} изменённых исходников",
+            "spec.check/trace: {} без чертежа ({} из {} изменённых исходников)",
+            class.label(),
             uncovered.len(),
             sources.len()
         );
@@ -349,7 +501,9 @@ mod trace_tests {
 
     #[test]
     fn spec_mention_covers_change() {
-        let Some(root) = git_repo("covered") else { return };
+        let Some(root) = git_repo("covered") else {
+            return;
+        };
         fs::create_dir_all(root.join("docs/specs")).unwrap();
         fs::write(
             root.join("docs/specs/billing.md"),

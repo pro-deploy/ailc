@@ -13,24 +13,48 @@ on:
 
 permissions:
   contents: write
+  # Токен OIDC нужен для подписи артефактов в режиме без ключей (cosign keyless):
+  # закрытый ключ не создаётся и не хранится вовсе, вместо него удостоверяется личность
+  # самого рабочего процесса, а факт подписи попадает в публичный журнал прозрачности.
+  # Это снимает главный недостаток контрольной суммы, которая публикуется рядом с архивом
+  # и потому подтверждает целостность загрузки, но не подлинность источника.
+  id-token: write
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Выпуск не начинается, пока не доказано, что код исправен. Прежде сборка выпуска шла
+  # мимо тестов, поэтому в релиз мог уехать код с красными тестами.
+  gate:
+    name: Тесты и линтеры перед выпуском
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Инструментарий из rust-toolchain.toml
+        run: rustup show && rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Проверка форматирования
+        run: cargo fmt --all -- --check
+      - name: Clippy (предупреждения блокируют)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Тесты
+        run: cargo test --workspace
+
   build:
     name: ${{ matrix.target }}
+    needs: gate
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,    target: x86_64-unknown-linux-gnu }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
-          - { os: macos-latest,     target: x86_64-apple-darwin }
-          - { os: macos-latest,     target: aarch64-apple-darwin }
-          - { os: windows-latest,   target: x86_64-pc-windows-msvc }
+          - { os: ubuntu-latest,    target: x86_64-unknown-linux-gnu,   ext: tar.gz }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu,  ext: tar.gz }
+          - { os: macos-latest,     target: x86_64-apple-darwin,        ext: tar.gz }
+          - { os: macos-latest,     target: aarch64-apple-darwin,       ext: tar.gz }
+          - { os: windows-latest,   target: x86_64-pc-windows-msvc,     ext: zip }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -62,15 +86,37 @@ jobs:
           $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
           "$hash  $archive" | Out-File -Encoding ascii "$archive.sha256"
 
+      - name: Установить cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Подпись без ключей: удостоверяется личность рабочего процесса (репозиторий, имя
+      # процесса, тег), запись попадает в публичный журнал прозрачности Rekor. Рядом с
+      # архивом публикуются подпись и сертификат, поэтому проверить подлинность может
+      # любой, у кого установлен cosign, а хранить закрытый ключ никому не требуется.
+      - name: Подписать архив
+        shell: bash
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          archive="ailc-${{ matrix.target }}.${{ matrix.ext }}"
+          cosign sign-blob --yes \
+            --output-signature "$archive.sig" \
+            --output-certificate "$archive.pem" \
+            "$archive"
+
+      # Расширение архива задано в матрице, поэтому перечисляются ровно те файлы, которые
+      # действительно собраны на этой платформе, и отсутствие файла является ошибкой.
+      # Прежде список включал оба расширения и потому требовал fail_on_unmatched_files: false,
+      # из-за чего сорванная упаковка молча давала выпуск без вложений.
       - name: Прикрепить к релизу
         uses: softprops/action-gh-release@v2
         with:
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           files: |
-            ailc-${{ matrix.target }}.tar.gz
-            ailc-${{ matrix.target }}.tar.gz.sha256
-            ailc-${{ matrix.target }}.zip
-            ailc-${{ matrix.target }}.zip.sha256
+            ailc-${{ matrix.target }}.${{ matrix.ext }}
+            ailc-${{ matrix.target }}.${{ matrix.ext }}.sha256
+            ailc-${{ matrix.target }}.${{ matrix.ext }}.sig
+            ailc-${{ matrix.target }}.${{ matrix.ext }}.pem
 
   scripts:
     name: установочные скрипты
@@ -80,7 +126,7 @@ jobs:
       - name: Прикрепить установщики к релизу
         uses: softprops/action-gh-release@v2
         with:
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           files: |
             install.sh
             install.ps1

@@ -64,7 +64,11 @@ pub fn run(args: &[String]) {
     let cursor_cfg = home_dir().map(|h| h.join(".cursor/mcp.json"));
     editor_line(
         "Cursor",
-        cursor_cfg.as_deref().and_then(|p| read(p)).as_deref().map(has_ailc_entry),
+        cursor_cfg
+            .as_deref()
+            .and_then(read)
+            .as_deref()
+            .map(has_ailc_entry),
         "~/.cursor/mcp.json",
     );
     println!(
@@ -146,7 +150,9 @@ mod tests {
 
     #[test]
     fn ailc_entry_detected_in_config() {
-        assert!(has_ailc_entry(r#"{ "mcpServers": { "ailc": { "command": "npx" } } }"#));
+        assert!(has_ailc_entry(
+            r#"{ "mcpServers": { "ailc": { "command": "npx" } } }"#
+        ));
         assert!(!has_ailc_entry(r#"{ "mcpServers": { "other": {} } }"#));
     }
 

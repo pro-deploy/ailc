@@ -1,23 +1,31 @@
-//! Ядро ailc: трейт Capability, реестр и переиспользуемые движки.
-//!
-//! Здесь же позже поселится оркестратор (planner / router / executor /
-//! verify_supervisor / rigor_scorer / escalation). Пока — фундамент инструментов.
+//! Ядро ailc: трейт Capability, реестр, переиспользуемые движки и оркестратор
+//! (planner / router / executor / verify_supervisor / rigor_scorer / escalation),
+//! который живёт в модуле [`orchestrator`].
 
 pub mod agent;
+pub mod answers;
 pub mod autofix;
 pub mod baseline;
+pub mod cache;
+pub mod calibrate;
+pub mod changes;
 pub mod engines;
+pub mod env;
 pub mod fixer;
 pub mod i18n;
 pub mod memory_log;
+pub mod model;
 pub mod orchestrator;
 pub mod pipeline;
 pub mod policy;
 pub mod profile;
+pub mod re;
 pub mod registry;
 pub mod sarif;
 pub mod skills;
 pub mod stack;
+pub mod standards;
+pub mod tasks;
 pub mod verify;
 
 use ailc_contracts::{CapabilityManifest, CapabilityOutput, Ctx, Result, RunInput};

@@ -74,9 +74,16 @@ impl Capability for ReleaseNotes {
         } else {
             format!("{last_tag}..HEAD")
         };
-        let log = Runner::run(ctx, "git", &["log", &range, "--no-merges", "--pretty=format:%s"]);
+        let log = Runner::run(
+            ctx,
+            "git",
+            &["log", &range, "--no-merges", "--pretty=format:%s"],
+        );
         if !log.ran {
-            out.skipped = Some(log.skipped_reason.unwrap_or_else(|| "git недоступен".into()));
+            out.skipped = Some(
+                log.skipped_reason
+                    .unwrap_or_else(|| "git недоступен".into()),
+            );
             out.summary = "generate/release-notes: пропущено (нет git)".into();
             return Ok(out);
         }
@@ -124,8 +131,12 @@ impl Capability for ReleaseNotes {
             }
         }
 
-        let (path, action) =
-            Generator::write_block(ctx, "docs/RELEASE-NOTES.md", "release-notes", doc.trim_end())?;
+        let (path, action) = Generator::write_block(
+            ctx,
+            "docs/RELEASE-NOTES.md",
+            "release-notes",
+            doc.trim_end(),
+        )?;
         out.artifacts.push(path.clone());
         out.metrics.push(("commits".into(), counted as f64));
         out.summary = format!("generate/release-notes: {path} ({action}), {counted} изменений");

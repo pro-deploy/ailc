@@ -1,22 +1,99 @@
 name: CI
 
+# Непрерывная интеграция обязана быть способной остановить плохое изменение. Поэтому все
+# проверки ниже блокирующие: форматирование, clippy без предупреждений, тесты на трёх
+# операционных системах, аудит зависимостей на известные уязвимости и самопроверка ailc
+# на собственном коде. Инструмент, продающий детерминированный гейт качества, не может
+# держать собственный гейт отключённым.
+
 on:
   push:
     branches: [main]
   pull_request:
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  build-test:
-    name: Сборка и тесты
+  lint:
+    name: Формат и clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Инструментарий из rust-toolchain.toml
+        run: rustup show && rustup component add rustfmt clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Сборка (release)
-        run: cargo build --workspace --release
+
+      - name: Проверка форматирования
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (предупреждения блокируют)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Шаг «слим-сборка без встроенной модели эмбеддингов» УДАЛЁН как пустая операция.
+      # Он вызывал `cargo clippy -p ailc --no-default-features`, но секции [features] нет ни
+      # в одном манифесте воркспейса, а активы встроенной модели (assets/embed) из поставки
+      # удалены и в коде не упоминаются. Флаг поэтому ничего не отключал, и шаг проверял ту
+      # же самую сборку второй раз, сообщая при этом об экономии с 72 МБ до 30 МБ, которой
+      # не существует. Задание сборки, проверяющее несуществующую конфигурацию, создаёт
+      # ложную уверенность и тратит время прогона.
+
+  test:
+    name: Тесты (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Инструментарий из rust-toolchain.toml
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+
       - name: Тесты
         run: cargo test --workspace
-      - name: Clippy (информационно, не блокирует)
-        run: cargo clippy --workspace --all-targets
-        continue-on-error: true
+
+  metrics:
+    name: Метрики точности обнаружения
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Инструментарий из rust-toolchain.toml
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+
+      # Контролируемый корпус: полнота обнаружения и доля ложных срабатываний по
+      # семействам печатаются в журнал сборки и проверяются утверждениями. Заявление о
+      # чистке ложных срабатываний без потери сигнала должно быть измеримым, иначе оно
+      # остаётся словами.
+      - name: Полнота и ложные срабатывания
+        run: cargo test -p ailc-capabilities --test caps_tests _bench_controlled -- --nocapture
+
+  audit:
+    name: Аудит зависимостей
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Известные уязвимости в зависимостях (RustSec)
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  self-check:
+    name: Самопроверка ailc на собственном коде
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Инструментарий из rust-toolchain.toml
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Сборка release
+        run: cargo build --workspace --release
+
+      # Definition of Done на самом ailc. Базовая линия долга лежит в репозитории, поэтому
+      # проверка блокирует только НОВЫЕ находки, а исторический долг гасится отдельно.
+      - name: ailc dod .
+        run: ./target/release/ailc dod .

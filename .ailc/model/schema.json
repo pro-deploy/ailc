@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Модель проекта ailc",
+  "description": "Детерминированный свод фактов о системе. Каждый факт несёт происхождение: движок-источник, файл, строку и уверенность.",
+  "type": "object",
+  "required": ["schema_version", "identity", "environment", "structure", "surface", "dependencies", "deployment", "gaps"],
+  "properties": {
+    "schema_version": { "type": "integer", "description": "Версия схемы; несовпадение означает незнакомый формат" },
+    "identity": { "type": "object", "description": "Идентификация продукта: наименование, версия, лицензия, правообладатели, отпечаток состояния истории" },
+    "environment": { "type": "object", "description": "Технологическое окружение: стек, языки, зафиксированные версии инструментария, манифесты сборки" },
+    "structure": { "type": "object", "description": "Состав системы: модули, точки входа, связи, циклы, артефакты сборки, объявления с сигнатурами и описаниями" },
+    "surface": { "type": "object", "description": "Поверхность системы: маршруты, переменные окружения, внешние сервисы, модели данных, миграции, контрактные схемы, интерфейс командной строки, конфигурационные параметры" },
+    "dependencies": { "type": "array", "description": "Зависимости поставки с версиями", "items": { "type": "object", "required": ["ecosystem", "name", "version"] } },
+    "deployment": { "type": "object", "description": "Развёртывание: контейнеры и объявленные порты" },
+    "gaps": { "type": "array", "description": "Честные пробелы: что установить не удалось и почему", "items": { "type": "object", "required": ["what", "why"] } }
+  }
+}

@@ -47,13 +47,19 @@ fn severity_rank(sev: Severity) -> u8 {
 
 /// Сериализовать находки в SARIF 2.1.0 (pretty JSON).
 ///
-/// `refuted` — сколько ложных отсеял Verifier; `checks_run`/`checks_skipped` —
+/// `refuted` — сколько ложных отсеял Verifier; `suppressed` — сколько НАСТОЯЩИХ находок
+/// скрыто решением человека через маркер `ailc:ignore`; `checks_run`/`checks_skipped` —
 /// какие проверки выполнены и какие пропущены (с причиной). Всё это попадает в
 /// `runs[0].properties`, чтобы потребитель видел реальный охват, а не «0 = чисто».
+///
+/// Подавленное выводится ОТДЕЛЬНЫМ полем, а не слагаемым в `refutedFalsePositives`: первое
+/// это сокрытие настоящей находки, второе это вывод о ложности. Для читателя отчёта в
+/// системе сборки это разные факты, и объединение их в один счётчик вводило в заблуждение.
 pub fn to_sarif(
     findings: &[Finding],
     version: &str,
     refuted: usize,
+    suppressed: usize,
     checks_run: &[String],
     checks_skipped: &[(String, String)],
 ) -> String {
@@ -121,6 +127,7 @@ pub fn to_sarif(
             "results": results,
             "properties": {
                 "refutedFalsePositives": refuted,
+                "suppressedByIgnoreMarker": suppressed,
                 "checksRun": checks_run,
                 "checksSkipped": skipped,
             },
@@ -159,14 +166,18 @@ mod tests {
             f("rce", Severity::Critical),
             f("warn", Severity::Medium),
         ];
-        let out = to_sarif(&findings, "0.0.0", 0, &[], &[]);
+        let out = to_sarif(&findings, "0.0.0", 0, 0, &[], &[]);
         let d: Value = serde_json::from_str(&out).expect("валидный SARIF JSON");
         let res = d["runs"][0]["results"].as_array().expect("results массив");
         assert_eq!(res.len(), 3);
         assert_eq!(res[0]["ruleId"], "rce", "критичное первым");
         assert_eq!(res[0]["rank"], 100);
         assert_eq!(res[0]["level"], "error");
-        assert_eq!(res.last().unwrap()["ruleId"], "style-note", "информационное в хвосте");
+        assert_eq!(
+            res.last().unwrap()["ruleId"],
+            "style-note",
+            "информационное в хвосте"
+        );
         assert_eq!(res.last().unwrap()["rank"], 10);
     }
 }

@@ -405,15 +405,54 @@ impl Capability for DepsAudit {
                         for l in res.tail(10) {
                             out.records.push(l);
                         }
-                        ext_note =
-                            format!("внешний {bin} ({label}): сбой аудитора, результат недостоверен");
+                        ext_note = format!(
+                            "внешний {bin} ({label}): сбой аудитора, результат недостоверен"
+                        );
                     }
                 }
             }
         }
 
-        out.metrics.push(("osv_checked".into(), native.checked as f64));
+        out.metrics
+            .push(("osv_checked".into(), native.checked as f64));
         out.metrics.push(("osv_matches".into(), osv_hits as f64));
+
+        // ВОЗРАСТ СНИМКА БАЗЫ как самостоятельная находка. Снимок вшит в бинарь на этапе
+        // сборки и во время работы не обновляется, поэтому покрытие деградирует само от
+        // времени. Прежде дата снимка разбиралась и печаталась, но ни с чем не сравнивалась,
+        // и пользователь, поставивший выпуск полгода назад, получал зелёный отчёт по
+        // зависимостям без единого признака устаревания базы.
+        //
+        // Важность Medium выбрана намеренно: при пороге блокировки по умолчанию (High) это
+        // предупреждение, а не блокер. Устаревшая база это ограничение покрытия, а не дефект
+        // проверяемого кода, и краснеть сборке от одного лишь хода календаря неправильно.
+        if let Some(gen_at) = native.db_generated_at.as_deref() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+                .unwrap_or(0);
+            if let Some(age) = ailc_core::engines::osv::snapshot_age_days(gen_at, now) {
+                out.metrics.push(("osv_db_age_days".into(), age as f64));
+                if age > ailc_core::engines::osv::SNAPSHOT_MAX_AGE_DAYS {
+                    out.findings.push(Finding {
+                        rule: "osv-snapshot-stale".into(),
+                        severity: Severity::Medium,
+                        message: format!(
+                            "Встроенный снимок базы уязвимостей устарел: собран {gen_at}, ему {age} \
+                             суток (предел {}). Вердикт «уязвимых зависимостей нет» получен по \
+                             устаревшей базе и не является доказательством: обновите ailc до \
+                             свежего выпуска либо дополните проверку внешним аудитором \
+                             (cargo audit, npm audit, pip-audit).",
+                            ailc_core::engines::osv::SNAPSHOT_MAX_AGE_DAYS
+                        ),
+                        location: None,
+                        evidence: Some(format!("снимок от {gen_at}, записей {}", native.db_entries)),
+                        verified: true,
+                        source: "security.scan/deps".into(),
+                    });
+                }
+            }
+        }
         // Честность покрытия: «0 уязвимостей» в экосистеме, по которой база пуста, —
         // не «чисто», а «не покрыто»; человек должен это видеть в сводке.
         let uncovered_note = if native.uncovered.is_empty() {
@@ -424,8 +463,18 @@ impl Capability for DepsAudit {
                 native.uncovered.join(", ")
             )
         };
+        // Возраст и объём встроенного снимка базы уязвимостей сообщаются ЯВНО. Снимок
+        // невелик и обновляется только вместе с выпуском бинаря, поэтому «уязвимых 0»
+        // само по себе не означает «зависимости безопасны»: оно означает лишь «во вшитом
+        // снимке совпадений нет». Умолчание об этом создавало у пользователя ложное
+        // ощущение защищённости, что для проверки безопасности недопустимо.
+        let db_note = format!(
+            "; база: {} записей, снимок от {} (обновляется с выпуском, полнота OSV.dev не гарантируется)",
+            native.db_entries,
+            native.db_generated_at.as_deref().unwrap_or("даты нет")
+        );
         out.summary = format!(
-            "security.scan/deps: OSV — {osv_hits} уязвимых из {} зависимостей; {ext_note}{uncovered_note}",
+            "security.scan/deps: OSV — {osv_hits} уязвимых из {} зависимостей; {ext_note}{uncovered_note}{db_note}",
             native.checked
         );
         Ok(out)
@@ -582,30 +631,8 @@ pub fn register(reg: &mut Registry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    static CNT: AtomicU32 = AtomicU32::new(0);
-
-    /// Уникальная пустая временная папка для файловых фикстур, без внешних зависимостей.
-    fn tmp() -> PathBuf {
-        let n = CNT.fetch_add(1, Ordering::SeqCst);
-        let dir =
-            std::env::temp_dir().join(format!("ailc-security-extra-{}-{}", std::process::id(), n));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    /// Записать файл по относительному пути внутри корня, создав родительские каталоги.
-    fn write(dir: &Path, rel: &str, content: &str) {
-        let p = dir.join(rel);
-        if let Some(parent) = p.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(p, content).unwrap();
-    }
+    use ailc_testkit::TempTree;
+    use std::path::Path;
 
     /// Прогнать произвольный сканер по корню без подпути.
     fn run_scan(cap: &ScanCapability, root: &Path) -> CapabilityOutput {
@@ -626,37 +653,36 @@ mod tests {
 
     #[test]
     fn injection_catches_classic_dom_sinks() {
-        let dir = tmp();
-        write(
-            &dir,
-            "app.js",
+        let t = TempTree::new("security-extra");
+        t.write("app.js",
             "el.innerHTML = data;\nnode.outerHTML = userHtml;\ncontainer.insertAdjacentHTML('beforeend', payload);\ndocument.write(unsafe);\n",
         );
-        let out = run_scan(&injection_scan(), &dir);
+        let out = run_scan(&injection_scan(), t.path());
         assert!(has_rule(&out, "raw-innerhtml"), "innerHTML должен ловиться");
         assert!(has_rule(&out, "raw-outerhtml"), "outerHTML должен ловиться");
         assert!(
             has_rule(&out, "insert-adjacent-html"),
             "insertAdjacentHTML должен ловиться"
         );
-        assert!(has_rule(&out, "document-write"), "document.write должен ловиться");
+        assert!(
+            has_rule(&out, "document-write"),
+            "document.write должен ловиться"
+        );
     }
 
     #[test]
     fn injection_catches_framework_sinks() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("security-extra");
+        t.write(
             "view.tsx",
             "return <div dangerouslySetInnerHTML={{ __html: raw }} />;\n",
         );
-        write(&dir, "page.vue", "<div v-html=\"raw\"></div>\n");
-        write(
-            &dir,
+        t.write("page.vue", "<div v-html=\"raw\"></div>\n");
+        t.write(
             "trust.ts",
             "const safe = this.sanitizer.bypassSecurityTrustHtml(raw);\n",
         );
-        let out = run_scan(&injection_scan(), &dir);
+        let out = run_scan(&injection_scan(), t.path());
         assert!(has_rule(&out, "react-raw-html"), "dangerouslySetInnerHTML");
         assert!(has_rule(&out, "vue-raw-html"), "v-html");
         assert!(
@@ -669,13 +695,12 @@ mod tests {
     fn injection_catches_template_literal_html_across_lines() {
         // Шаблонный литерал разнесён на несколько строк форматтером: построчное правило
         // его упустит, многострочное обязано поймать.
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("security-extra");
+        t.write(
             "render.js",
             "const html = `\n  <div class=\"card\">\n    ${userName}\n  </div>\n`;\n",
         );
-        let out = run_scan(&injection_scan(), &dir);
+        let out = run_scan(&injection_scan(), t.path());
         assert!(
             has_rule(&out, "template-literal-html"),
             "HTML в шаблонном литерале с интерполяцией, разорванный переносом, должен ловиться"
@@ -685,13 +710,12 @@ mod tests {
     #[test]
     fn injection_catches_sql_concat_across_lines() {
         // Запрос SQL собран конкатенацией и разнесён по строкам.
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("security-extra");
+        t.write(
             "dao.java",
             "String q = \"SELECT * FROM users WHERE name = \" +\n    name;\n",
         );
-        let out = run_scan(&injection_scan(), &dir);
+        let out = run_scan(&injection_scan(), t.path());
         assert!(
             has_rule(&out, "sql-string-concat"),
             "SQL, собранный конкатенацией с переменной, должен ловиться"
@@ -701,13 +725,11 @@ mod tests {
     #[test]
     fn injection_messages_carry_cwe_reference() {
         // Требование задачи: каждое сообщение правила безопасности несёт ссылку CWE.
-        let dir = tmp();
-        write(
-            &dir,
-            "app.js",
+        let t = TempTree::new("security-extra");
+        t.write("app.js",
             "el.innerHTML = data;\nnode.outerHTML = x;\nc.insertAdjacentHTML('x', y);\ndocument.write(z);\n",
         );
-        let out = run_scan(&injection_scan(), &dir);
+        let out = run_scan(&injection_scan(), t.path());
         assert!(!out.findings.is_empty(), "ожидались находки");
         for f in &out.findings {
             assert!(
@@ -725,22 +747,29 @@ mod tests {
     fn injection_ignores_safe_dom_api() {
         // textContent/createTextNode и обычная склейка строк без HTML-тега не должны
         // порождать находки.
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("security-extra");
+        t.write(
             "safe.js",
             "el.textContent = data;\nconst full = first + last;\nconst path = base + '/' + name;\n",
         );
-        let out = run_scan(&injection_scan(), &dir);
-        assert_eq!(out.findings.len(), 0, "безопасный код не должен давать находок: {:?}", out.findings);
+        let out = run_scan(&injection_scan(), t.path());
+        assert_eq!(
+            out.findings.len(),
+            0,
+            "безопасный код не должен давать находок: {:?}",
+            out.findings
+        );
     }
 
     #[test]
     fn injection_ignores_plain_template_literal_without_tag() {
         // Шаблонный литерал без HTML-тега (обычная подстановка в текст) не сток XSS.
-        let dir = tmp();
-        write(&dir, "log.js", "const msg = `привет, ${userName}, добро пожаловать`;\n");
-        let out = run_scan(&injection_scan(), &dir);
+        let t = TempTree::new("security-extra");
+        t.write(
+            "log.js",
+            "const msg = `привет, ${userName}, добро пожаловать`;\n",
+        );
+        let out = run_scan(&injection_scan(), t.path());
         assert!(
             !has_rule(&out, "template-literal-html"),
             "текстовый шаблон без HTML-тега не должен ловиться как XSS"
@@ -750,13 +779,12 @@ mod tests {
     #[test]
     fn injection_ignores_select_word_without_concat() {
         // Слово SELECT в параметризованном запросе без конкатенации с переменной не сток.
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("security-extra");
+        t.write(
             "dao.py",
             "cursor.execute(\"SELECT * FROM users WHERE name = ?\", (name,))\n",
         );
-        let out = run_scan(&injection_scan(), &dir);
+        let out = run_scan(&injection_scan(), t.path());
         assert!(
             !has_rule(&out, "sql-string-concat"),
             "параметризованный запрос не должен ловиться как конкатенация SQL"
@@ -767,13 +795,11 @@ mod tests {
 
     #[test]
     fn iac_catches_kubernetes_misconfig() {
-        let dir = tmp();
-        write(
-            &dir,
-            "pod.yaml",
+        let t = TempTree::new("security-extra");
+        t.write("pod.yaml",
             "spec:\n  hostNetwork: true\n  hostPID: true\n  securityContext:\n    privileged: true\n    runAsNonRoot: false\n    allowPrivilegeEscalation: true\n",
         );
-        let out = run_scan(&iac_scan(), &dir);
+        let out = run_scan(&iac_scan(), t.path());
         assert!(has_rule(&out, "privileged-container"));
         assert!(has_rule(&out, "host-network"));
         assert!(has_rule(&out, "host-pid"));
@@ -784,13 +810,12 @@ mod tests {
     #[test]
     fn iac_catches_add_all_capabilities_block_form() {
         // Блочная форма списка YAML: `add:` на отдельной строке, `- ALL` следующей.
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("security-extra");
+        t.write(
             "caps-list.yaml",
             "securityContext:\n  capabilities:\n    add:\n      - ALL\n",
         );
-        let out = run_scan(&iac_scan(), &dir);
+        let out = run_scan(&iac_scan(), t.path());
         assert!(
             has_rule(&out, "cap-add-all"),
             "блочная форма add: - ALL должна ловиться"
@@ -800,13 +825,12 @@ mod tests {
     #[test]
     fn iac_catches_add_all_capabilities_inline_form() {
         // Встроенный список YAML: `add: ["ALL"]` на одной строке.
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("security-extra");
+        t.write(
             "caps-inline.yaml",
             "securityContext:\n  capabilities:\n    add: [\"ALL\"]\n",
         );
-        let out = run_scan(&iac_scan(), &dir);
+        let out = run_scan(&iac_scan(), t.path());
         assert!(
             has_rule(&out, "cap-add-all"),
             "встроенная форма add: [\"ALL\"] должна ловиться"
@@ -815,13 +839,11 @@ mod tests {
 
     #[test]
     fn iac_catches_dockerfile_issues() {
-        let dir = tmp();
-        write(
-            &dir,
-            "Dockerfile",
+        let t = TempTree::new("security-extra");
+        t.write("Dockerfile",
             "FROM node:latest\nADD https://example.com/app.tar.gz /app\nRUN curl -fsSL https://get.example.sh | sh\n",
         );
-        let out = run_scan(&iac_scan(), &dir);
+        let out = run_scan(&iac_scan(), t.path());
         assert!(has_rule(&out, "from-latest-tag"), "FROM ...:latest");
         assert!(has_rule(&out, "add-remote-url"), "ADD по URL");
         assert!(
@@ -832,21 +854,22 @@ mod tests {
 
     #[test]
     fn iac_catches_image_latest_in_compose() {
-        let dir = tmp();
-        write(&dir, "compose.yml", "services:\n  web:\n    image: nginx:latest\n");
-        let out = run_scan(&iac_scan(), &dir);
+        let t = TempTree::new("security-extra");
+        t.write(
+            "compose.yml",
+            "services:\n  web:\n    image: nginx:latest\n",
+        );
+        let out = run_scan(&iac_scan(), t.path());
         assert!(has_rule(&out, "image-latest-tag"), "image: ...:latest");
     }
 
     #[test]
     fn iac_messages_carry_cwe_reference() {
-        let dir = tmp();
-        write(
-            &dir,
-            "pod.yaml",
+        let t = TempTree::new("security-extra");
+        t.write("pod.yaml",
             "hostNetwork: true\nhostPID: true\nprivileged: true\nrunAsNonRoot: false\nallowPrivilegeEscalation: true\nimage: nginx:latest\n",
         );
-        let out = run_scan(&iac_scan(), &dir);
+        let out = run_scan(&iac_scan(), t.path());
         assert!(!out.findings.is_empty(), "ожидались находки IaC");
         for f in &out.findings {
             assert!(
@@ -862,26 +885,36 @@ mod tests {
 
     #[test]
     fn iac_ignores_hardened_config() {
-        let dir = tmp();
-        write(
-            &dir,
-            "pod.yaml",
+        let t = TempTree::new("security-extra");
+        t.write("pod.yaml",
             "spec:\n  hostNetwork: false\n  hostPID: false\n  securityContext:\n    privileged: false\n    runAsNonRoot: true\n    allowPrivilegeEscalation: false\n    capabilities:\n      drop:\n        - ALL\n        - NET_RAW\n",
         );
         // Закреплённая версия образа, проверяемый ADD-локальный путь.
-        write(&dir, "Dockerfile", "FROM node:20.11.1-alpine\nADD ./dist /app\nRUN npm ci\n");
-        let out = run_scan(&iac_scan(), &dir);
+        t.write(
+            "Dockerfile",
+            "FROM node:20.11.1-alpine\nADD ./dist /app\nRUN npm ci\n",
+        );
+        let out = run_scan(&iac_scan(), t.path());
         // `drop: - ALL` — это сброс всех capability, безопасная практика. Правило
         // cap-add-all привязано к ключу `add`, поэтому НЕ должно срабатывать на `drop`.
-        assert!(!has_rule(&out, "cap-add-all"), "drop: ALL — безопасный сброс, не находка");
+        assert!(
+            !has_rule(&out, "cap-add-all"),
+            "drop: ALL — безопасный сброс, не находка"
+        );
         assert!(!has_rule(&out, "privileged-container"));
         assert!(!has_rule(&out, "host-network"));
         assert!(!has_rule(&out, "host-pid"));
         assert!(!has_rule(&out, "run-as-root"));
         assert!(!has_rule(&out, "allow-priv-escalation"));
-        assert!(!has_rule(&out, "from-latest-tag"), "закреплённый тег не должен ловиться");
+        assert!(
+            !has_rule(&out, "from-latest-tag"),
+            "закреплённый тег не должен ловиться"
+        );
         assert!(!has_rule(&out, "add-remote-url"), "локальный ADD не URL");
-        assert!(!has_rule(&out, "dockerfile-curl-bash"), "npm ci не конвейер в оболочку");
+        assert!(
+            !has_rule(&out, "dockerfile-curl-bash"),
+            "npm ci не конвейер в оболочку"
+        );
     }
 
     // ───────────────────────── target traversal: отказ во всех capability ─────────────────────────
@@ -890,36 +923,36 @@ mod tests {
     fn scan_capabilities_reject_absolute_target() {
         // ScanCapability валидирует target через ctx.base: абсолютный путь уводит за
         // корень и обязан давать Err во всех сканерах семейства (security_extra).
-        let dir = tmp();
-        write(&dir, "app.js", "el.innerHTML = x;\n");
+        let t = TempTree::new("security-extra");
+        t.write("app.js", "el.innerHTML = x;\n");
         let input = RunInput {
             target: Some("/etc".into()),
             query: None,
         };
         assert!(
-            injection_scan().run(&Ctx::new(&dir), &input).is_err(),
+            injection_scan().run(&Ctx::new(t.path()), &input).is_err(),
             "absolute target должен быть отвергнут injection-сканером"
         );
         assert!(
-            iac_scan().run(&Ctx::new(&dir), &input).is_err(),
+            iac_scan().run(&Ctx::new(t.path()), &input).is_err(),
             "absolute target должен быть отвергнут iac-сканером"
         );
     }
 
     #[test]
     fn scan_capabilities_reject_parent_dir_target() {
-        let dir = tmp();
-        write(&dir, "app.js", "el.innerHTML = x;\n");
+        let t = TempTree::new("security-extra");
+        t.write("app.js", "el.innerHTML = x;\n");
         let input = RunInput {
             target: Some("../../secret".into()),
             query: None,
         };
         assert!(
-            injection_scan().run(&Ctx::new(&dir), &input).is_err(),
+            injection_scan().run(&Ctx::new(t.path()), &input).is_err(),
             "target с .. должен быть отвергнут injection-сканером"
         );
         assert!(
-            iac_scan().run(&Ctx::new(&dir), &input).is_err(),
+            iac_scan().run(&Ctx::new(t.path()), &input).is_err(),
             "target с .. должен быть отвергнут iac-сканером"
         );
     }
@@ -928,8 +961,8 @@ mod tests {
     fn deep_analyzers_reject_traversal_target() {
         // Глубокие sast/taint валидируют target через engine ctx.base(input)?: тот же
         // отказ на абсолютный путь и компоненты с двумя точками (согласовано с T42).
-        let dir = tmp();
-        write(&dir, "app.py", "import os\nx = input()\nos.system(x)\n");
+        let t = TempTree::new("security-extra");
+        t.write("app.py", "import os\nx = input()\nos.system(x)\n");
         let abs = RunInput {
             target: Some("/etc".into()),
             query: None,
@@ -938,10 +971,10 @@ mod tests {
             target: Some("../..".into()),
             query: None,
         };
-        assert!(SastScan::new().run(&Ctx::new(&dir), &abs).is_err());
-        assert!(SastScan::new().run(&Ctx::new(&dir), &parent).is_err());
-        assert!(TaintScan::new().run(&Ctx::new(&dir), &abs).is_err());
-        assert!(TaintScan::new().run(&Ctx::new(&dir), &parent).is_err());
+        assert!(SastScan::new().run(&Ctx::new(t.path()), &abs).is_err());
+        assert!(SastScan::new().run(&Ctx::new(t.path()), &parent).is_err());
+        assert!(TaintScan::new().run(&Ctx::new(t.path()), &abs).is_err());
+        assert!(TaintScan::new().run(&Ctx::new(t.path()), &parent).is_err());
     }
 
     // ───────────────────────── T36: тир пола безопасности ─────────────────────────
@@ -963,11 +996,14 @@ mod tests {
 
     #[test]
     fn deps_audit_skips_unrecognized_project() {
-        let dir = tmp();
-        write(&dir, "readme.txt", "просто текст\n");
+        let t = TempTree::new("security-extra");
+        t.write("readme.txt", "просто текст\n");
         let out = DepsAudit::new()
-            .run(&Ctx::new(&dir), &RunInput::default())
+            .run(&Ctx::new(t.path()), &RunInput::default())
             .unwrap();
-        assert!(out.skipped.is_some(), "нераспознанный проект — честный пропуск");
+        assert!(
+            out.skipped.is_some(),
+            "нераспознанный проект — честный пропуск"
+        );
     }
 }

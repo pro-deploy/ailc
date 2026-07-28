@@ -9,13 +9,18 @@
 //! (размещение ЦОД, уведомления РКН, категорирование КИИ) — они в ЧЕК-ЛИСТ-ДЖУНА.md,
 //! не в коде. Срабатывания — повод для ревью; ailc отсеивает тесты/комментарии.
 
+use ailc_contracts::{
+    CapabilityManifest, CapabilityOutput, Ctx, EngineKind, Family, Result, RunInput, Severity, Tier,
+};
 use ailc_core::engines::scan::{Matcher, Rule, DEFAULT_WINDOW};
 use ailc_core::registry::Registry;
 use ailc_core::Capability;
-use ailc_contracts::{
-    CapabilityManifest, CapabilityOutput, Ctx, EngineKind, Family, Result, RunInput, Severity,
-    Tier,
-};
+
+/// Обороты, в которых слово «паспорт» не обозначает документ гражданина. Правила ПДн в
+/// логах исключают их явно, иначе печать строки «Паспорт проекта: …» объявлялась утечкой
+/// персональных данных и блокировала сдачу.
+const EXCEPT_PASSPORT_HOMONYM: &str =
+    r"(?i)паспорт\w*\s+(?:проект\w*|сборк\w*|систем\w*|модул\w*)|project\s+passport";
 
 use crate::{scan_manifest, ScanCapability, TARGET_SCHEMA};
 
@@ -26,9 +31,37 @@ const SRC: &[&str] = &[
     "swift", "dart", "c", "cc", "cpp", "h", "hpp", "vue", "svelte",
 ];
 const SRC_CFG: &[&str] = &[
-    "py", "go", "js", "ts", "jsx", "tsx", "java", "php", "rb", "cs", "kt", "kts", "rs", "scala",
-    "swift", "dart", "c", "cc", "cpp", "h", "hpp", "vue", "svelte", "yaml", "yml", "json", "toml",
-    "env", "ini", "conf", "properties",
+    "py",
+    "go",
+    "js",
+    "ts",
+    "jsx",
+    "tsx",
+    "java",
+    "php",
+    "rb",
+    "cs",
+    "kt",
+    "kts",
+    "rs",
+    "scala",
+    "swift",
+    "dart",
+    "c",
+    "cc",
+    "cpp",
+    "h",
+    "hpp",
+    "vue",
+    "svelte",
+    "yaml",
+    "yml",
+    "json",
+    "toml",
+    "env",
+    "ini",
+    "conf",
+    "properties",
 ];
 const SRC_HTML: &[&str] = &[
     "py", "go", "js", "ts", "jsx", "tsx", "java", "php", "rb", "cs", "kt", "kts", "rs", "scala",
@@ -61,9 +94,13 @@ fn pdn_logs() -> ScanCapability {
                 severity: Severity::High,
                 exts: SRC,
                 // Вызов логгера (любой стек) + поле ПДн на той же строке.
+                // Исключение отделяет документ гражданина от омонима: «паспорт проекта»
+                // и подобные обороты персональными данными не являются, а без оговорки
+                // печать такой строки блокировала сдачу исправного кода.
                 matcher: Matcher::regex(
-                    r"(?i)(?:console\.(?:log|info|warn|error|debug)|logger?\s*\.|logging\.|log\.(?:Print|Info|Debug|Warn|Error)|fmt\.(?:Print|Sprint)|println!|\bprint\()[^\n]{0,90}(?:passport|паспорт|снилс|\bинн\b|passport_number|passportseries|passport_series|birth_certificate|снилс|\bsnils\b)",
-                ),
+                    r"(?i)(?:console\.(?:log|info|warn|error|debug)|logger?\s*\.|logging\.|log\.(?:Print|Info|Debug|Warn|Error)|fmt\.(?:Print|Sprint)|println!|\bprint\()[^\n]{0,90}(?:passport|паспорт|снилс|\bинн\b|passport_number|passportseries|passport_series|birth_certificate|\bsnils\b)",
+                )
+                .except(EXCEPT_PASSPORT_HOMONYM),
                 message: "ПДн в логах (CWE-532 запись чувствительных данных в журнал; OWASP A09:2021 Security Logging and Monitoring Failures) — 152-ФЗ, ст.13.11 КоАП; утечка от 3 до 15 млн руб. (при повторе оборотный штраф). Маскируйте поле перед логированием.",
             },
             Rule {
@@ -78,7 +115,8 @@ fn pdn_logs() -> ScanCapability {
                 matcher: Matcher::window_regex(
                     r"(?is)(?:console\.(?:log|info|warn|error|debug)|logger?\s*\.|logging\.|log\.(?:Print|Info|Debug|Warn|Error)|fmt\.(?:Print|Sprint)|println!|\bprint\()[^\n]*\n[^;{}]{0,160}?(?:passport|паспорт|снилс|\bинн\b|passport_number|passportseries|passport_series|birth_certificate|\bsnils\b)",
                     DEFAULT_WINDOW,
-                ),
+                )
+                .except(EXCEPT_PASSPORT_HOMONYM),
                 message: "ПДн в многострочном вызове логирования (поле перенесено на отдельную строку) (CWE-532 запись чувствительных данных в журнал; OWASP A09:2021 Security Logging and Monitoring Failures) — 152-ФЗ, ст.13.11 КоАП. Маскируйте поле перед логированием.",
             },
         ],
@@ -284,31 +322,15 @@ pub fn register(reg: &mut Registry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use ailc_testkit::TempTree;
 
-    static CNT: AtomicU32 = AtomicU32::new(0);
-
-    /// Временный проект из пар (относительный путь, содержимое). Уникальная директория на
-    /// каждый вызов, чтобы тесты не мешали друг другу при параллельном прогоне.
-    fn tmp(files: &[(&str, &str)]) -> Ctx {
-        let n = CNT.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("ailc-compliance-{}-{}", std::process::id(), n));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for (rel, content) in files {
-            let p = dir.join(rel);
-            if let Some(parent) = p.parent() {
-                std::fs::create_dir_all(parent).unwrap();
-            }
-            std::fs::write(p, content).unwrap();
-        }
-        Ctx::new(dir)
-    }
-
-    /// Идентификаторы правил, сработавших на одном файле указанного сканера.
+    /// Идентификаторы правил, сработавших на одном файле указанного сканера. Временное
+    /// дерево живёт до конца функции и убирается при её выходе, поэтому каталоги фикстур
+    /// не накапливаются во временном каталоге машины.
     fn hits(cap: ScanCapability, file: &str, content: &str) -> Vec<String> {
-        let ctx = tmp(&[(file, content)]);
-        let out = cap.run(&ctx, &RunInput::default()).unwrap();
+        let t = TempTree::new("compliance");
+        t.write(file, content);
+        let out = cap.run(&t.ctx(), &RunInput::default()).unwrap();
         out.findings.into_iter().map(|f| f.rule).collect()
     }
 
@@ -322,7 +344,10 @@ mod tests {
             "app/handler.py",
             "logger.info(\"user passport_number=%s\", u.passport_number)\n",
         );
-        assert!(h.iter().any(|r| r == "pdn-in-logs"), "ожидали pdn-in-logs, получили {h:?}");
+        assert!(
+            h.iter().any(|r| r == "pdn-in-logs"),
+            "ожидали pdn-in-logs, получили {h:?}"
+        );
     }
 
     #[test]
@@ -364,7 +389,10 @@ mod tests {
             "app/one.py",
             "logger.info(\"passport_number=%s\", u.passport_number)\n",
         );
-        assert!(h.iter().any(|r| r == "pdn-in-logs"), "ожидали pdn-in-logs, получили {h:?}");
+        assert!(
+            h.iter().any(|r| r == "pdn-in-logs"),
+            "ожидали pdn-in-logs, получили {h:?}"
+        );
         assert!(
             !h.iter().any(|r| r == "pdn-in-logs-multiline"),
             "многострочное правило не должно дублировать однострочное, получили {h:?}"
@@ -379,7 +407,10 @@ mod tests {
             "app/ok.py",
             "logger.info(\n    \"order created: %s\",\n    order.id,\n)\n",
         );
-        assert!(h.is_empty(), "не ждали находок на безобидном логе, получили {h:?}");
+        assert!(
+            h.is_empty(),
+            "не ждали находок на безобидном логе, получили {h:?}"
+        );
     }
 
     #[test]
@@ -402,14 +433,18 @@ mod tests {
     #[test]
     fn foreign_region_срабатывает_рядом_с_ключом_региона() {
         // Регион рядом с ключом region: это осмысленный сигнал, срабатываем (Info).
-        let ctx = tmp(&[("config/app.yaml", "aws_region: us-east-1\n")]);
-        let out = localization().run(&ctx, &RunInput::default()).unwrap();
+        let t = TempTree::new("compliance");
+        t.write("config/app.yaml", "aws_region: us-east-1\n");
+        let out = localization().run(&t.ctx(), &RunInput::default()).unwrap();
         let region: Vec<_> = out
             .findings
             .iter()
             .filter(|f| f.rule == "foreign-region")
             .collect();
-        assert!(!region.is_empty(), "ожидали foreign-region рядом с ключом региона");
+        assert!(
+            !region.is_empty(),
+            "ожидали foreign-region рядом с ключом региона"
+        );
         assert_eq!(
             region[0].severity,
             Severity::Info,
@@ -477,8 +512,9 @@ mod tests {
     #[test]
     fn foreign_db_host_сообщение_формулирует_сигнал_а_не_факт() {
         // Сообщение не должно утверждать факт нарушения: формулировка «сигнал/проверьте».
-        let ctx = tmp(&[("app/db.go", "url = \"x.supabase.co\"\n")]);
-        let out = localization().run(&ctx, &RunInput::default()).unwrap();
+        let t = TempTree::new("compliance");
+        t.write("app/db.go", "url = \"x.supabase.co\"\n");
+        let out = localization().run(&t.ctx(), &RunInput::default()).unwrap();
         let msg = &out
             .findings
             .iter()
@@ -508,8 +544,9 @@ mod tests {
     fn foreign_tracker_сообщение_не_преувеличивает() {
         // Сообщение трекера должно говорить о возможной передаче (сигнал), а не о
         // доказанной, и нести проверенную ссылку CWE.
-        let ctx = tmp(&[("web/app.js", "fetch(\"https://api.mixpanel.com/track\")\n")]);
-        let out = cross_border().run(&ctx, &RunInput::default()).unwrap();
+        let t = TempTree::new("compliance");
+        t.write("web/app.js", "fetch(\"https://api.mixpanel.com/track\")\n");
+        let out = cross_border().run(&t.ctx(), &RunInput::default()).unwrap();
         let msg = &out
             .findings
             .iter()
@@ -535,5 +572,29 @@ mod tests {
             "pdn-logs-ast обязан быть Core для дефолтного прогона комплаенса"
         );
         assert_eq!(ast.manifest().family, Family::Compliance);
+    }
+    /// T-09: «паспорт проекта» не является персональными данными, а «паспорт клиента»
+    /// является. Оговорка отделяет омоним и не ослабляет правило.
+    #[test]
+    fn паспорт_проекта_не_считается_утечкой_пдн() {
+        let h = hits(
+            pdn_logs(),
+            "main.rs",
+            "println!(\"Паспорт проекта: {}\", summary);\n",
+        );
+        assert!(
+            !h.iter().any(|r| r == "pdn-in-logs"),
+            "оборот «паспорт проекта» не является ПДн: {h:?}"
+        );
+
+        let h = hits(
+            pdn_logs(),
+            "app.rs",
+            "println!(\"паспорт клиента: {}\", passport);\n",
+        );
+        assert!(
+            h.iter().any(|r| r == "pdn-in-logs"),
+            "настоящая утечка по-прежнему ловится: {h:?}"
+        );
     }
 }

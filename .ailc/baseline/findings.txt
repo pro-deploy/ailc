@@ -1,0 +1,109 @@
+# Базовая линия долга AILC: зафиксированные находки (правило|файл|сообщение|свидетельство).
+# Вердикт сдачи блокируют только находки ВНЕ этого списка. Пересборка: ailc baseline <путь>
+# Уязвимости (семейство security, важность high и выше) в линию не заносятся и блокируют всегда.
+change-without-spec|crates/ailc-capabilities/src/ai_security.rs|изменение не прослеживается к спеке или задаче бэклога (66 из 66 файлов): crates/ailc-capabilities/src/ai_security.rs, crates/ailc-capabilities/src/api_contract.rs, crates/ailc-capabilities/src/completeness.rs, crates/ailc-capabilities/src/compliance.rs, crates/ailc-capabilities/src/design.rs, crate…
+dead-export|crates/ailc-core/src/engines/codeintel.rs|Экспортируемый fn `cycle_confidence` без использований (возможно мёртвый код)
+dead-export|crates/ailc-core/src/engines/walk.rs|Экспортируемый fn `is_data_blob` без использований (возможно мёртвый код)
+debt-marker|crates/ailc-capabilities/src/completeness.rs|Маркер технического долга|a8aa8a57
+debt-marker|crates/ailc-capabilities/src/completeness.rs|Маркер технического долга|cf075d02
+debt-marker|crates/ailc-core/src/verify.rs|Маркер технического долга|200f6b90
+deep-nesting|crates/ailc-capabilities/src/governance.rs|Слишком глубокая вложенность (уровень 9)
+deep-nesting|crates/ailc-capabilities/src/lib.rs|Слишком глубокая вложенность (уровень 13)
+deep-nesting|crates/ailc-capabilities/src/mobile.rs|Слишком глубокая вложенность (уровень 9)
+deep-nesting|crates/ailc-capabilities/src/security_extra.rs|Слишком глубокая вложенность (уровень 8)
+deep-nesting|crates/ailc-capabilities/src/spec_check.rs|Слишком глубокая вложенность (уровень 8)
+deep-nesting|crates/ailc-capabilities/src/supply.rs|Слишком глубокая вложенность (уровень 7)
+deep-nesting|crates/ailc-capabilities/src/verify_extra.rs|Слишком глубокая вложенность (уровень 7)
+deep-nesting|crates/ailc-capabilities/src/workflow_extra.rs|Слишком глубокая вложенность (уровень 7)
+deep-nesting|crates/ailc-core/src/agent.rs|Слишком глубокая вложенность (уровень 7)
+deep-nesting|crates/ailc-core/src/engines/codeintel.rs|Слишком глубокая вложенность (уровень 8)
+deep-nesting|crates/ailc-core/src/engines/gate.rs|Слишком глубокая вложенность (уровень 8)
+deep-nesting|crates/ailc-core/src/engines/osv.rs|Слишком глубокая вложенность (уровень 7)
+deep-nesting|crates/ailc-core/src/engines/sast.rs|Слишком глубокая вложенность (уровень 8)
+deep-nesting|crates/ailc-core/src/engines/scan.rs|Слишком глубокая вложенность (уровень 9)
+deep-nesting|crates/ailc-core/src/engines/surface.rs|Слишком глубокая вложенность (уровень 8)
+deep-nesting|crates/ailc-core/src/orchestrator.rs|Слишком глубокая вложенность (уровень 7)
+deep-nesting|crates/ailc-core/src/pipeline.rs|Слишком глубокая вложенность (уровень 10)
+deep-nesting|crates/ailc/src/mcp.rs|Слишком глубокая вложенность (уровень 7)
+deep-nesting|npm/ailc-mcp/bin/ailc-mcp.js|Слишком глубокая вложенность (уровень 7)
+email-literal|SECURITY.md|Email в исходниках|c05ff24d
+god-file|crates/ailc-capabilities/src/ai_security.rs|Слишком много сущностей в одном файле (61)
+god-file|crates/ailc-capabilities/src/desktop.rs|Слишком много сущностей в одном файле (45)
+god-file|crates/ailc-capabilities/src/governance.rs|Слишком много сущностей в одном файле (61)
+god-file|crates/ailc-capabilities/src/lib.rs|Слишком много сущностей в одном файле (102)
+god-file|crates/ailc-capabilities/src/mobile.rs|Слишком много сущностей в одном файле (68)
+god-file|crates/ailc-capabilities/src/owasp.rs|Слишком много сущностей в одном файле (58)
+god-file|crates/ailc-capabilities/src/security_extra.rs|Слишком много сущностей в одном файле (44)
+god-file|crates/ailc-capabilities/src/spec_gen.rs|Слишком много сущностей в одном файле (41)
+god-file|crates/ailc-capabilities/src/ui_ux.rs|Слишком много сущностей в одном файле (91)
+god-file|crates/ailc-capabilities/src/verify_extra.rs|Слишком много сущностей в одном файле (47)
+god-file|crates/ailc-capabilities/src/workflow_extra.rs|Слишком много сущностей в одном файле (40)
+god-file|crates/ailc-capabilities/tests/caps_tests.rs|Слишком много сущностей в одном файле (54)
+god-file|crates/ailc-contracts/src/lib.rs|Слишком много сущностей в одном файле (56)
+god-file|crates/ailc-core/src/engines/codeintel.rs|Слишком много сущностей в одном файле (85)
+god-file|crates/ailc-core/src/engines/osv.rs|Слишком много сущностей в одном файле (94)
+god-file|crates/ailc-core/src/engines/sast.rs|Слишком много сущностей в одном файле (115)
+god-file|crates/ailc-core/src/engines/scan.rs|Слишком много сущностей в одном файле (53)
+god-file|crates/ailc-core/src/engines/surface.rs|Слишком много сущностей в одном файле (35)
+god-file|crates/ailc-core/src/engines/walk.rs|Слишком много сущностей в одном файле (37)
+god-file|crates/ailc-core/src/orchestrator.rs|Слишком много сущностей в одном файле (51)
+god-file|crates/ailc-core/src/pipeline.rs|Слишком много сущностей в одном файле (44)
+god-file|crates/ailc-core/src/verify.rs|Слишком много сущностей в одном файле (51)
+god-file|crates/ailc-core/tests/core_tests.rs|Слишком много сущностей в одном файле (55)
+god-file|crates/ailc/src/mcp.rs|Слишком много сущностей в одном файле (34)
+high-complexity|crates/ailc-capabilities/src/ai_security.rs|Слишком высокая сложность: 131
+high-complexity|crates/ailc-capabilities/src/completeness.rs|Слишком высокая сложность: 63
+high-complexity|crates/ailc-capabilities/src/governance.rs|Слишком высокая сложность: 135
+high-complexity|crates/ailc-capabilities/src/lib.rs|Слишком высокая сложность: 137
+high-complexity|crates/ailc-capabilities/src/mobile.rs|Слишком высокая сложность: 81
+high-complexity|crates/ailc-capabilities/src/security_extra.rs|Слишком высокая сложность: 51
+high-complexity|crates/ailc-capabilities/src/ui_ux.rs|Слишком высокая сложность: 95
+high-complexity|crates/ailc-capabilities/src/verify_extra.rs|Слишком высокая сложность: 71
+high-complexity|crates/ailc-capabilities/src/workflow_extra.rs|Слишком высокая сложность: 68
+high-complexity|crates/ailc-capabilities/tests/caps_tests.rs|Слишком высокая сложность: 52
+high-complexity|crates/ailc-core/src/engines/codeintel.rs|Слишком высокая сложность: 249
+high-complexity|crates/ailc-core/src/engines/osv.rs|Слишком высокая сложность: 234
+high-complexity|crates/ailc-core/src/engines/sast.rs|Слишком высокая сложность: 508
+high-complexity|crates/ailc-core/src/engines/scan.rs|Слишком высокая сложность: 84
+high-complexity|crates/ailc-core/src/engines/surface.rs|Слишком высокая сложность: 71
+high-complexity|crates/ailc-core/src/engines/walk.rs|Слишком высокая сложность: 103
+high-complexity|crates/ailc-core/src/orchestrator.rs|Слишком высокая сложность: 124
+high-complexity|crates/ailc-core/src/verify.rs|Слишком высокая сложность: 84
+high-complexity|crates/ailc/examples/bench.rs|Слишком высокая сложность: 87
+high-complexity|crates/ailc/src/main.rs|Слишком высокая сложность: 63
+high-complexity|crates/ailc/src/mcp.rs|Слишком высокая сложность: 86
+long-file|crates/ailc-capabilities/src/ai_security.rs|Слишком длинный файл: 1266 строк
+long-file|crates/ailc-capabilities/src/compliance.rs|Слишком длинный файл: 614 строк
+long-file|crates/ailc-capabilities/src/desktop.rs|Слишком длинный файл: 978 строк
+long-file|crates/ailc-capabilities/src/governance.rs|Слишком длинный файл: 1476 строк
+long-file|crates/ailc-capabilities/src/lib.rs|Слишком длинный файл: 2183 строк
+long-file|crates/ailc-capabilities/src/mobile.rs|Слишком длинный файл: 1671 строк
+long-file|crates/ailc-capabilities/src/owasp.rs|Слишком длинный файл: 1746 строк
+long-file|crates/ailc-capabilities/src/security_extra.rs|Слишком длинный файл: 1017 строк
+long-file|crates/ailc-capabilities/src/spec_check.rs|Слишком длинный файл: 418 строк
+long-file|crates/ailc-capabilities/src/spec_gen.rs|Слишком длинный файл: 595 строк
+long-file|crates/ailc-capabilities/src/ui_ux.rs|Слишком длинный файл: 1835 строк
+long-file|crates/ailc-capabilities/src/verify_extra.rs|Слишком длинный файл: 1047 строк
+long-file|crates/ailc-capabilities/src/web_security.rs|Слишком длинный файл: 784 строк
+long-file|crates/ailc-capabilities/src/workflow_extra.rs|Слишком длинный файл: 960 строк
+long-file|crates/ailc-capabilities/tests/caps_tests.rs|Слишком длинный файл: 1617 строк
+long-file|crates/ailc-contracts/src/lib.rs|Слишком длинный файл: 1241 строк
+long-file|crates/ailc-core/src/engines/codeintel.rs|Слишком длинный файл: 2217 строк
+long-file|crates/ailc-core/src/engines/gate.rs|Слишком длинный файл: 741 строк
+long-file|crates/ailc-core/src/engines/osv.rs|Слишком длинный файл: 2071 строк
+long-file|crates/ailc-core/src/engines/sast.rs|Слишком длинный файл: 4393 строк
+long-file|crates/ailc-core/src/engines/scan.rs|Слишком длинный файл: 1196 строк
+long-file|crates/ailc-core/src/engines/surface.rs|Слишком длинный файл: 856 строк
+long-file|crates/ailc-core/src/engines/walk.rs|Слишком длинный файл: 866 строк
+long-file|crates/ailc-core/src/orchestrator.rs|Слишком длинный файл: 1708 строк
+long-file|crates/ailc-core/src/pipeline.rs|Слишком длинный файл: 751 строк
+long-file|crates/ailc-core/src/policy.rs|Слишком длинный файл: 704 строк
+long-file|crates/ailc-core/src/profile.rs|Слишком длинный файл: 441 строк
+long-file|crates/ailc-core/src/verify.rs|Слишком длинный файл: 1118 строк
+long-file|crates/ailc-core/tests/core_tests.rs|Слишком длинный файл: 1664 строк
+long-file|crates/ailc/examples/bench.rs|Слишком длинный файл: 828 строк
+long-file|crates/ailc/src/custodian.rs|Слишком длинный файл: 420 строк
+long-file|crates/ailc/src/main.rs|Слишком длинный файл: 437 строк
+long-file|crates/ailc/src/mcp.rs|Слишком длинный файл: 1117 строк
+panic-path|crates/ailc/examples/bench.rs|panic/unwrap — потенциальный аварийный выход|33d37a79
+panic-path|crates/ailc/examples/bench.rs|panic/unwrap — потенциальный аварийный выход|dfecbd6d

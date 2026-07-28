@@ -8,11 +8,304 @@
 //! `extract()` напрямую. Тест-файлы пропускаются — документируем продукт, не фикстуры.
 
 use super::scan::SOURCE_CODE;
-use super::walk::{ext_of, is_test_path, walk};
+use super::walk::{blank_rust_test_modules, ext_of, is_test_path, walk};
 use ailc_contracts::{Ctx, Result, RunInput};
 use regex::Regex;
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
+
+/// Синтаксис комментариев и строковых литералов по расширению файла.
+///
+/// Нужен маскировщику [`mask_comments`]: чтобы убрать комментарий, надо сначала
+/// достоверно знать, что найденная последовательность не находится внутри строки.
+struct CommentSyntax {
+    /// Строчный `//` и блочный `/* … */`.
+    slashes: bool,
+    /// Строчный `#` до конца строки.
+    hash: bool,
+    /// Строчный `--` до конца строки.
+    dashes: bool,
+    /// Тройные кавычки Python как документирующая строка.
+    py_triple: bool,
+    /// Одиночная кавычка открывает строку (а не символьный литерал и не время жизни).
+    single_quote: bool,
+    /// Обратная кавычка открывает строку (шаблонная строка JS, сырая строка Go).
+    backtick: bool,
+    /// Сырые строки Rust вида `r"…"`, `r#"…"#`, `br#"…"#`.
+    rust_raw: bool,
+}
+
+fn comment_syntax(ext: &str) -> CommentSyntax {
+    CommentSyntax {
+        slashes: matches!(
+            ext,
+            "rs" | "go"
+                | "js"
+                | "jsx"
+                | "mjs"
+                | "cjs"
+                | "ts"
+                | "tsx"
+                | "java"
+                | "kt"
+                | "kts"
+                | "swift"
+                | "cs"
+                | "c"
+                | "cc"
+                | "cpp"
+                | "cxx"
+                | "h"
+                | "hpp"
+                | "hh"
+                | "hxx"
+                | "scala"
+                | "sc"
+                | "php"
+                | "dart"
+                | "proto"
+                | "gradle"
+                | "groovy"
+        ),
+        // GraphQL и PHP комментируют решёткой; PHP умеет и то, и другое.
+        hash: matches!(
+            ext,
+            "py" | "rb"
+                | "sh"
+                | "bash"
+                | "zsh"
+                | "yaml"
+                | "yml"
+                | "toml"
+                | "pl"
+                | "pm"
+                | "r"
+                | "ex"
+                | "exs"
+                | "cr"
+                | "nim"
+                | "jl"
+                | "tf"
+                | "graphql"
+                | "gql"
+                | "conf"
+                | "cfg"
+                | "ini"
+                | "properties"
+                | "php"
+        ),
+        dashes: matches!(ext, "sql" | "lua" | "hs" | "elm" | "adb" | "ads"),
+        py_triple: ext == "py",
+        // Rust и Go исключены намеренно: там одиночная кавычка это время жизни `'a`
+        // и руническая константа, и приняв её за строку, маскировщик проглотил бы
+        // остаток строки вместе с настоящими фактами.
+        single_quote: matches!(
+            ext,
+            "py" | "rb"
+                | "js"
+                | "jsx"
+                | "mjs"
+                | "cjs"
+                | "ts"
+                | "tsx"
+                | "php"
+                | "sql"
+                | "sh"
+                | "bash"
+                | "zsh"
+                | "dart"
+                | "yaml"
+                | "yml"
+                | "toml"
+                | "pl"
+                | "pm"
+                | "ex"
+                | "exs"
+                | "lua"
+                | "r"
+        ),
+        backtick: matches!(ext, "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "go"),
+        rust_raw: ext == "rs",
+    }
+}
+
+/// Состояние разбора при маскировании комментариев.
+enum Lex {
+    /// Код вне литерала.
+    Code,
+    /// Обычная строка до указанного закрывающего символа.
+    Str(char),
+    /// Сырая строка Rust, закрываемая кавычкой и указанным числом решёток.
+    Raw(usize),
+    /// Тройные кавычки Python до повторения того же символа трижды.
+    Triple(char),
+}
+
+/// Заменить содержимое комментариев пробелами, СОХРАНИВ строковые литералы.
+///
+/// Строки сохраняются намеренно: маршрут `app.get("/users")`, строка подключения
+/// `postgres://host/db` и имя переменной окружения живут именно в строковом литерале,
+/// поэтому их маскирование уничтожило бы саму поверхность системы. Комментарии же
+/// являются массовым источником ложных фактов: именно в них живут примеры употребления,
+/// которыми документированы таблицы правил самого анализатора, и такой пример
+/// неотличим от настоящего объявления маршрута.
+///
+/// Отслеживание строк обязательно и по обратной причине: последовательность `//`
+/// внутри `postgres://host` не должна приниматься за начало комментария.
+///
+/// Нумерация строк сохраняется: содержимое заменяется пробелами, переводы строк
+/// остаются на местах. Незакрытая обычная строка сбрасывается на переводе строки,
+/// поэтому ошибка разбора одной строки не распространяется на остаток файла.
+fn mask_comments(ext: &str, content: &str) -> String {
+    let cs = comment_syntax(ext);
+    if !(cs.slashes || cs.hash || cs.dashes || cs.py_triple) {
+        return content.to_string(); // языку нечего маскировать (например JSON)
+    }
+    let mut out = String::with_capacity(content.len());
+    let mut st = Lex::Code;
+    let mut i = 0usize;
+    // Предыдущий значащий символ кода: нужен, чтобы `r"` распознавалось как начало
+    // сырой строки, а не как хвост идентификатора вида `for"…`.
+    let mut prev_code: char = ' ';
+    while i < content.len() {
+        let rest = &content[i..];
+        let Some(ch) = rest.chars().next() else { break };
+        match st {
+            Lex::Code => {
+                // Комментарии.
+                if cs.slashes && rest.starts_with("//") {
+                    let n = skip_to_eol(rest, &mut out);
+                    i += n;
+                    continue;
+                }
+                if cs.slashes && rest.starts_with("/*") {
+                    let n = mask_block(rest, "*/", &mut out);
+                    i += n;
+                    continue;
+                }
+                if cs.hash && ch == '#' {
+                    let n = skip_to_eol(rest, &mut out);
+                    i += n;
+                    continue;
+                }
+                if cs.dashes && rest.starts_with("--") {
+                    let n = skip_to_eol(rest, &mut out);
+                    i += n;
+                    continue;
+                }
+                // Литералы.
+                if cs.py_triple && (rest.starts_with("\"\"\"") || rest.starts_with("'''")) {
+                    // Документирующая строка Python маскируется как комментарий: на
+                    // практике это проза с примерами, а не поверхность системы.
+                    out.push_str("   ");
+                    st = Lex::Triple(ch);
+                    i += 3;
+                    continue;
+                }
+                if cs.rust_raw && !prev_code.is_alphanumeric() && prev_code != '_' {
+                    if let Some(n) = rust_raw_open(rest) {
+                        // Содержимое сырой строки сохраняется: это литерал, а не комментарий.
+                        out.push_str(&rest[..n]);
+                        st = Lex::Raw(rest[..n].matches('#').count());
+                        i += n;
+                        continue;
+                    }
+                }
+                if ch == '"' || (cs.single_quote && ch == '\'') || (cs.backtick && ch == '`') {
+                    st = Lex::Str(ch);
+                }
+                if !ch.is_whitespace() {
+                    prev_code = ch;
+                }
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+            Lex::Str(delim) => {
+                // Экранирование: обратная косая уводит следующий символ из-под разбора.
+                if ch == '\\' && delim != '`' {
+                    out.push(ch);
+                    i += ch.len_utf8();
+                    if let Some(next) = content[i..].chars().next() {
+                        out.push(next);
+                        i += next.len_utf8();
+                    }
+                    continue;
+                }
+                if ch == delim {
+                    st = Lex::Code;
+                } else if ch == '\n' && delim != '`' {
+                    // Незакрытая однострочная строка: ошибка разбора не должна
+                    // распространяться дальше своей строки.
+                    st = Lex::Code;
+                }
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+            Lex::Raw(hashes) => {
+                let close = format!("\"{}", "#".repeat(hashes));
+                if rest.starts_with(&close) {
+                    out.push_str(&close);
+                    i += close.len();
+                    st = Lex::Code;
+                    continue;
+                }
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+            Lex::Triple(delim) => {
+                let close: String = std::iter::repeat_n(delim, 3).collect();
+                if rest.starts_with(&close) {
+                    out.push_str("   ");
+                    i += 3;
+                    st = Lex::Code;
+                    continue;
+                }
+                out.push(if ch == '\n' { '\n' } else { ' ' });
+                i += ch.len_utf8();
+            }
+        }
+    }
+    out
+}
+
+/// Замаскировать пробелами остаток строки (перевод строки сохраняется).
+/// Возвращает число поглощённых байтов.
+fn skip_to_eol(rest: &str, out: &mut String) -> usize {
+    let mut n = 0usize;
+    for ch in rest.chars() {
+        if ch == '\n' {
+            break;
+        }
+        out.push(' ');
+        n += ch.len_utf8();
+    }
+    n
+}
+
+/// Замаскировать пробелами блочный комментарий вместе с закрывающей меткой.
+/// Незакрытый блок поглощает остаток файла: это консервативно и безопасно.
+fn mask_block(rest: &str, close: &str, out: &mut String) -> usize {
+    let end = rest
+        .find(close)
+        .map(|p| p + close.len())
+        .unwrap_or(rest.len());
+    for ch in rest[..end].chars() {
+        out.push(if ch == '\n' { '\n' } else { ' ' });
+    }
+    end
+}
+
+/// Длина открывающей последовательности сырой строки Rust (`r"`, `r#"`, `br##"`),
+/// либо None, если строка начинается не с неё.
+fn rust_raw_open(rest: &str) -> Option<usize> {
+    let body = rest.strip_prefix("br").or_else(|| rest.strip_prefix('r'))?;
+    let hashes = body.len() - body.trim_start_matches('#').len();
+    if body[hashes..].starts_with('"') {
+        Some(rest.len() - body.len() + hashes + 1)
+    } else {
+        None
+    }
+}
 
 /// Один извлечённый факт: его значение и где он найден (для перехода).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,12 +354,25 @@ struct RouteRe {
 fn route_res() -> &'static Vec<RouteRe> {
     static R: OnceLock<Vec<RouteRe>> = OnceLock::new();
     R.get_or_init(|| {
-        let mk = |p: &str, method: Method, path_g: usize, require_slash: bool| RouteRe {
-            re: Regex::new(p).expect("встроенный паттерн роута валиден"),
-            method,
-            path_g,
-            require_slash,
-            exts: &[],
+        // Невалидный встроенный паттерн исключает СВОЁ правило и не завершает процесс:
+        // сервер живёт одним процессом на весь сеанс среды разработки, поэтому цена паники
+        // несоизмерима с ценой пропуска одного правила (см. модуль `crate::re`). Полнота
+        // набора закреплена тестом `все_встроенные_паттерны_компилируются`.
+        let mk_ext = |p: &str,
+                      method: Method,
+                      path_g: usize,
+                      require_slash: bool,
+                      exts: &'static [&'static str]| {
+            crate::re::compile(p).map(|re| RouteRe {
+                re,
+                method,
+                path_g,
+                require_slash,
+                exts,
+            })
+        };
+        let mk = |p: &str, method: Method, path_g: usize, require_slash: bool| {
+            mk_ext(p, method, path_g, require_slash, &[])
         };
         vec![
             // Express/Gin/обобщённо: obj.method("/path")
@@ -147,108 +453,94 @@ fn route_res() -> &'static Vec<RouteRe> {
                 false,
             ),
             // Swift Vapor: app.get("users") / routes.post("x") — относительный путь легитимен.
-            RouteRe {
-                re: Regex::new(
-                    r#"(?i)\b(?:app|routes)\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#,
-                )
-                .expect("встроенный паттерн Vapor валиден"),
-                method: Method::Group(1),
-                path_g: 2,
-                require_slash: false,
-                exts: &["swift"],
-            },
+            mk_ext(
+                r#"(?i)\b(?:app|routes)\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#,
+                Method::Group(1),
+                2,
+                false,
+                &["swift"],
+            ),
             // Kotlin Ktor: routing { get("/users") { … } } — голый метод, путь со «/».
-            RouteRe {
-                re: Regex::new(r#"\b(get|post|put|delete|patch)\s*\(\s*["'](/[^"']*)["']"#)
-                    .expect("встроенный паттерн Ktor валиден"),
-                method: Method::Group(1),
-                path_g: 2,
-                require_slash: false,
-                exts: &["kt", "kts"],
-            },
+            mk_ext(
+                r#"\b(get|post|put|delete|patch)\s*\(\s*["'](/[^"']*)["']"#,
+                Method::Group(1),
+                2,
+                false,
+                &["kt", "kts"],
+            ),
             // Go echo: ВЕРХНИЙ регистр метода на любом приёмнике (e.GET, g.POST). Имя
             // переменной у echo произвольно, но методы — заглавные, что отличает их от
             // обычного `obj.get("ключ")` (T69). Применяем только к Go.
-            RouteRe {
-                re: Regex::new(
-                    r#"\b[A-Za-z_]\w*\.(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*["'`]([^"'`]+)["'`]"#,
-                )
-                .expect("встроенный паттерн echo валиден"),
-                method: Method::Group(1),
-                path_g: 2,
-                require_slash: true,
-                exts: &["go"],
-            },
+            mk_ext(
+                r#"\b[A-Za-z_]\w*\.(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*["'`]([^"'`]+)["'`]"#,
+                Method::Group(1),
+                2,
+                true,
+                &["go"],
+            ),
             // Express/fiber/chi с ПРОИЗВОЛЬНЫМ именем переменной (не только из белого
             // списка): любой идентификатор, у которого вызывается http-метод нижним
             // регистром с путём, начинающимся со «/» (T69). Слэш отсекает `cache.get`.
             // Ограничено JS/TS-семейством, где такой паттерн идиоматичен, чтобы не ловить
             // `obj.get("/x")` в других языках.
-            RouteRe {
-                re: Regex::new(
-                    r#"\b[A-Za-z_]\w*\.(get|post|put|delete|patch|head|options|all)\s*\(\s*["'`](/[^"'`]*)["'`]"#,
-                )
-                .expect("встроенный паттерн Express-any валиден"),
-                method: Method::Group(1),
-                path_g: 2,
-                require_slash: true,
-                exts: &["js", "jsx", "ts", "tsx", "mjs", "cjs"],
-            },
+            mk_ext(
+                r#"\b[A-Za-z_]\w*\.(get|post|put|delete|patch|head|options|all)\s*\(\s*["'`](/[^"'`]*)["'`]"#,
+                Method::Group(1),
+                2,
+                true,
+                &["js", "jsx", "ts", "tsx", "mjs", "cjs"],
+            ),
             // Rails resources/resource: resources :users [, only: …]. Метод обобщён до
             // REST-набора пометкой RESOURCES, путь — имя ресурса (T69). Только Ruby.
-            RouteRe {
-                re: Regex::new(r#"^\s*resources?\s+:([A-Za-z_]\w*)"#)
-                    .expect("встроенный паттерн Rails resources валиден"),
-                method: Method::Fixed("RESOURCES"),
-                path_g: 1,
-                require_slash: false,
-                exts: &["rb"],
-            },
+            mk_ext(
+                r#"^\s*resources?\s+:([A-Za-z_]\w*)"#,
+                Method::Fixed("RESOURCES"),
+                1,
+                false,
+                &["rb"],
+            ),
             // ASP.NET Minimal API: app.MapGet("/x", …) / MapPost / MapPut / MapDelete (T69).
             // Только C#.
-            RouteRe {
-                re: Regex::new(
-                    r#"\b[A-Za-z_]\w*\.Map(Get|Post|Put|Delete|Patch)\s*\(\s*["']([^"']+)["']"#,
-                )
-                .expect("встроенный паттерн Minimal API валиден"),
-                method: Method::Group(1),
-                path_g: 2,
-                require_slash: false,
-                exts: &["cs"],
-            },
+            mk_ext(
+                r#"\b[A-Za-z_]\w*\.Map(Get|Post|Put|Delete|Patch)\s*\(\s*["']([^"']+)["']"#,
+                Method::Group(1),
+                2,
+                false,
+                &["cs"],
+            ),
             // gRPC сервис в .proto: rpc MethodName(Req) returns (Resp). Путь — имя метода,
             // метод помечается RPC (T69). Применяем к proto-файлам.
-            RouteRe {
-                re: Regex::new(r#"^\s*rpc\s+([A-Za-z_]\w*)\s*\("#)
-                    .expect("встроенный паттерн gRPC валиден"),
-                method: Method::Fixed("RPC"),
-                path_g: 1,
-                require_slash: false,
-                exts: &["proto"],
-            },
+            mk_ext(
+                r#"^\s*rpc\s+([A-Za-z_]\w*)\s*\("#,
+                Method::Fixed("RPC"),
+                1,
+                false,
+                &["proto"],
+            ),
         ]
+        .into_iter()
+        .flatten()
+        .collect()
     })
 }
 
 /// Имя поля верхнего уровня в типе GraphQL Query/Mutation/Subscription (T69). Извлечение
 /// GraphQL делается с учётом блока (внутри какого типа находится поле), поэтому реализовано
 /// отдельно от построчных `route_res`: иначе поля обычных объектных типов давали бы шум.
-fn gql_field_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(r#"^\s*([A-Za-z_]\w*)\s*(?:\([^)]*\))?\s*:\s*[A-Za-z_\[]"#)
-            .expect("встроенный паттерн поля GraphQL валиден")
-    })
+fn gql_field_re() -> Option<&'static Regex> {
+    static R: OnceLock<Option<Regex>> = OnceLock::new();
+    R.get_or_init(|| crate::re::compile(r#"^\s*([A-Za-z_]\w*)\s*(?:\([^)]*\))?\s*:\s*[A-Za-z_\[]"#))
+        .as_ref()
 }
 
 /// Открытие блока типа GraphQL: `type Query {` / `type Mutation {` (и Subscription).
 /// Группа 1 — операционный корень (Query/Mutation/Subscription).
-fn gql_root_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
+fn gql_root_re() -> Option<&'static Regex> {
+    static R: OnceLock<Option<Regex>> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r#"^\s*(?:extend\s+)?type\s+(Query|Mutation|Subscription)\b"#)
-            .expect("встроенный паттерн корня GraphQL валиден")
+        crate::re::compile(r#"^\s*(?:extend\s+)?type\s+(Query|Mutation|Subscription)\b"#)
     })
+    .as_ref()
 }
 
 fn env_res() -> &'static Vec<Regex> {
@@ -277,8 +569,8 @@ fn env_res() -> &'static Vec<Regex> {
             // Scala: sys.env("X") / sys.env.get("X").
             r#"sys\.env(?:\.get)?\s*\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']"#,
         ]
-        .iter()
-        .map(|p| Regex::new(p).expect("встроенный паттерн ENV валиден"))
+        .into_iter()
+        .filter_map(crate::re::compile)
         .collect()
     })
 }
@@ -298,8 +590,8 @@ fn service_res() -> &'static Vec<Regex> {
             r#"(?i)\b(?:elasticsearch|elastic|es)://[^\s"'`]+"#,
             r#"(?i)\bhttps://[a-z0-9.\-]+\.amazonaws\.com[^\s"'`]*"#,
         ]
-        .iter()
-        .map(|p| Regex::new(p).expect("встроенный паттерн сервиса валиден"))
+        .into_iter()
+        .filter_map(crate::re::compile)
         .collect()
     })
 }
@@ -309,66 +601,87 @@ fn service_res() -> &'static Vec<Regex> {
 /// `env_res`, но факт наличия внешней зависимости (например очередь/БД через ENV)
 /// дополнительно фиксируется как сервис, чтобы межсервисный взгляд не терял зависимость,
 /// сконфигурированную через окружение, а не зашитую URL-строкой.
-fn service_env_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
+///
+/// Применяется к УЖЕ ИЗВЛЕЧЁННОМУ имени переменной, а не к произвольной строке файла:
+/// сопоставление с сырым текстом давало самосовпадение внутри таблицы правил самого
+/// анализатора и приписывало продукту несуществующие зависимости.
+fn service_env_re() -> Option<&'static Regex> {
+    static R: OnceLock<Option<Regex>> = OnceLock::new();
     R.get_or_init(|| {
         // Префикс необязателен (`[A-Z0-9_]*`), чтобы совпадало и голое `DATABASE_URL`,
         // и `MY_DATABASE_URL`. Регистр игнорируется.
-        Regex::new(
+        crate::re::compile(
             r#"(?i)\b([A-Z0-9_]*(?:DATABASE_URL|DB_URL|REDIS_URL|AMQP_URL|KAFKA_BROKERS?|MONGO_URL|RABBITMQ_URL|NATS_URL|SQS_QUEUE_URL|ELASTICSEARCH_URL|ES_URL|BROKER_URL|QUEUE_URL|RABBIT_URL))\b"#,
         )
-        .expect("встроенный паттерн env-сервиса валиден")
     })
+    .as_ref()
 }
 
 /// (расширение, регекс, группа-имя) для моделей данных.
 fn model_res() -> &'static Vec<(&'static str, Regex)> {
     static R: OnceLock<Vec<(&'static str, Regex)>> = OnceLock::new();
     R.get_or_init(|| {
-        vec![
-            ("prisma", Regex::new(r"^\s*model\s+([A-Za-z_]\w*)\s*\{").unwrap()),
+        // Пара, чей паттерн не собрался, из таблицы исключается: одна проверка молча
+        // деградирует, а процесс продолжает работу (см. `crate::re`).
+        let pairs: Vec<(&'static str, Option<Regex>)> = vec![
+            ("prisma", crate::re::compile(r"^\s*model\s+([A-Za-z_]\w*)\s*\{")),
             (
                 "sql",
-                Regex::new(r#"(?i)create\s+table\s+(?:if\s+not\s+exists\s+)?[`"']?([A-Za-z_]\w*)"#)
-                    .unwrap(),
+                crate::re::compile(
+r#"(?i)create\s+table\s+(?:if\s+not\s+exists\s+)?[`"']?([A-Za-z_]\w*)"#,
+),
             ),
             // Django ORM-модель.
             (
                 "py",
-                Regex::new(r"^\s*class\s+([A-Za-z_]\w*)\s*\([^)]*models\.Model").unwrap(),
+                crate::re::compile(
+r"^\s*class\s+([A-Za-z_]\w*)\s*\([^)]*models\.Model",
+),
             ),
             // SQLAlchemy declarative (наследование Base).
             (
                 "py",
-                Regex::new(r"^\s*class\s+([A-Za-z_]\w*)\s*\([^)]*\bBase\b").unwrap(),
+                crate::re::compile(
+r"^\s*class\s+([A-Za-z_]\w*)\s*\([^)]*\bBase\b",
+),
             ),
             // Rails ActiveRecord: class X < ApplicationRecord / ActiveRecord::Base.
             (
                 "rb",
-                Regex::new(r"^\s*class\s+([A-Za-z_]\w*)\s*<\s*(?:ActiveRecord::Base|ApplicationRecord)")
-                    .unwrap(),
+                crate::re::compile(
+r"^\s*class\s+([A-Za-z_]\w*)\s*<\s*(?:ActiveRecord::Base|ApplicationRecord)",
+),
             ),
             // PHP Eloquent: class X extends Model / Authenticatable.
             (
                 "php",
-                Regex::new(r"^\s*(?:final\s+|abstract\s+)?class\s+([A-Za-z_]\w*)\s+extends\s+(?:Model|Authenticatable)")
-                    .unwrap(),
+                crate::re::compile(
+r"^\s*(?:final\s+|abstract\s+)?class\s+([A-Za-z_]\w*)\s+extends\s+(?:Model|Authenticatable)",
+),
             ),
             // C# EF Core: DbSet<X> Xs.
-            ("cs", Regex::new(r"DbSet<\s*([A-Za-z_]\w*)\s*>").unwrap()),
+            ("cs", crate::re::compile(r"DbSet<\s*([A-Za-z_]\w*)\s*>")),
             // Swift SwiftData/Core Data: @Model [final] class X.
             (
                 "swift",
-                Regex::new(r"@Model\s+(?:final\s+)?class\s+([A-Za-z_]\w*)").unwrap(),
+                crate::re::compile(
+r"@Model\s+(?:final\s+)?class\s+([A-Za-z_]\w*)",
+),
             ),
             // Dart drift/floor: class X extends Table.
-            ("dart", Regex::new(r"^\s*class\s+([A-Za-z_]\w*)\s+extends\s+Table").unwrap()),
+            ("dart", crate::re::compile(r"^\s*class\s+([A-Za-z_]\w*)\s+extends\s+Table")),
             // Scala Slick: class X(...) extends Table.
             (
                 "scala",
-                Regex::new(r"^\s*(?:final\s+)?class\s+([A-Za-z_]\w*).*extends\s+Table").unwrap(),
+                crate::re::compile(
+r"^\s*(?:final\s+)?class\s+([A-Za-z_]\w*).*extends\s+Table",
+),
             ),
-        ]
+        ];
+        pairs
+            .into_iter()
+            .filter_map(|(ext, re)| re.map(|re| (ext, re)))
+            .collect()
     })
 }
 
@@ -376,12 +689,18 @@ fn model_res() -> &'static Vec<(&'static str, Regex)> {
 /// (`@Entity`/`#[derive(FromRow)]`). Берём по паре (предыдущая строка, текущая).
 /// Покрывает JPA/TypeORM (`@Entity` + class) и Rust sqlx (`derive(FromRow)` + struct).
 fn annotation_model(prev: &str, line: &str, ext: &str) -> Option<String> {
-    static CLS: OnceLock<Regex> = OnceLock::new();
-    static ST: OnceLock<Regex> = OnceLock::new();
-    static DSL: OnceLock<Regex> = OnceLock::new();
-    let cls = CLS.get_or_init(|| Regex::new(r"\bclass\s+([A-Za-z_]\w*)").unwrap());
-    let st = ST.get_or_init(|| Regex::new(r"\bstruct\s+([A-Za-z_]\w*)").unwrap());
-    let dsl = DSL.get_or_init(|| Regex::new(r"^\s*([A-Za-z_]\w*)\s*\(").unwrap());
+    static CLS: OnceLock<Option<Regex>> = OnceLock::new();
+    static ST: OnceLock<Option<Regex>> = OnceLock::new();
+    static DSL: OnceLock<Option<Regex>> = OnceLock::new();
+    let cls = CLS
+        .get_or_init(|| crate::re::compile(r"\bclass\s+([A-Za-z_]\w*)"))
+        .as_ref()?;
+    let st = ST
+        .get_or_init(|| crate::re::compile(r"\bstruct\s+([A-Za-z_]\w*)"))
+        .as_ref()?;
+    let dsl = DSL
+        .get_or_init(|| crate::re::compile(r"^\s*([A-Za-z_]\w*)\s*\("))
+        .as_ref()?;
     let p = prev.trim_start();
     match ext {
         "java" | "kt" | "kts" | "ts" | "tsx" | "js" if p.starts_with("@Entity") => {
@@ -399,17 +718,17 @@ fn annotation_model(prev: &str, line: &str, ext: &str) -> Option<String> {
 }
 
 /// Регекс определения Go-структуры (для распознавания gorm-моделей по тегам/embed).
-fn go_type_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^\s*type\s+([A-Za-z_]\w*)\s+struct\b").unwrap())
+fn go_type_re() -> Option<&'static Regex> {
+    static R: OnceLock<Option<Regex>> = OnceLock::new();
+    R.get_or_init(|| crate::re::compile(r"^\s*type\s+([A-Za-z_]\w*)\s+struct\b"))
+        .as_ref()
 }
 
 /// Строка Play-роута в файле conf/routes: «GET   /users   controllers.Users.list».
-fn play_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(r"^\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(/\S*)").unwrap()
-    })
+fn play_re() -> Option<&'static Regex> {
+    static R: OnceLock<Option<Regex>> = OnceLock::new();
+    R.get_or_init(|| crate::re::compile(r"^\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(/\S*)"))
+        .as_ref()
 }
 
 fn routes_in_line(line: &str, ext: &str) -> Vec<String> {
@@ -478,7 +797,8 @@ pub fn extract(ctx: &Ctx, input: &RunInput) -> Result<Surface> {
         // Не сканируем СГЕНЕРИРОВАННУЮ документацию: иначе URL сервиса из docs/СПЕЦИФИКАЦИЯ.md
         // попадёт обратно в surface — самозагрязнение и неидемпотентная регенерация.
         // Markdown в принципе не источник поверхности (это проза, не код/конфиг).
-        if ext == "md" || ext == "markdown" || rel.starts_with("docs/") || rel.starts_with("docs\\") {
+        if ext == "md" || ext == "markdown" || rel.starts_with("docs/") || rel.starts_with("docs\\")
+        {
             return;
         }
         let is_source = SOURCE_CODE.contains(&ext);
@@ -488,13 +808,25 @@ pub fn extract(ctx: &Ctx, input: &RunInput) -> Result<Surface> {
         let is_contract = matches!(ext, "proto" | "graphql" | "gql");
         let is_play = path.file_name().and_then(|n| n.to_str()) == Some("routes");
 
+        // Комментарии маскируются, строковые литералы сохраняются: пример употребления
+        // в комментарии («// FastAPI: @app.get("/path")») неотличим от настоящего
+        // объявления маршрута и попадал в документы как эндпоинт продукта.
+        let masked = mask_comments(ext, &content);
+        let mut lines: Vec<&str> = masked.lines().collect();
+        // Rust держит тесты ВНУТРИ исходного файла, поэтому путь-ориентированный
+        // `is_test_path` их не видит: строки подключения из тестовых фикстур попадали
+        // в документ как внешние зависимости продукта. Гасим модули под `#[cfg(test)]`.
+        if ext == "rs" {
+            blank_rust_test_modules(&mut lines);
+        }
+
         let mut prev: &str = "";
         let mut go_type: Option<String> = None;
         // Текущий операционный корень GraphQL (Query/Mutation/Subscription) или None вне
         // такого блока. Глубина фигурных скобок отслеживает выход из блока.
         let mut gql_root: Option<String> = None;
         let mut gql_depth: i32 = 0;
-        for (i, line) in content.lines().enumerate() {
+        for (i, line) in lines.iter().copied().enumerate() {
             let ln = (i as u32) + 1;
             let mut push = |cat: u8, value: String, bucket: &mut Vec<SurfaceItem>| {
                 if seen.insert((cat, value.clone(), rel.clone(), ln)) {
@@ -526,13 +858,6 @@ pub fn extract(ctx: &Ctx, input: &RunInput) -> Result<Surface> {
                     push(2, sanitize_service(m.as_str()), &mut s.services);
                 }
             }
-            // Внешний сервис, сконфигурированный через переменную окружения (T69):
-            // фиксируем зависимость по характерному имени ENV (DATABASE_URL и так далее).
-            if let Some(c) = service_env_re().captures(line) {
-                if let Some(m) = c.get(1) {
-                    push(2, format!("env:{}", m.as_str()), &mut s.services);
-                }
-            }
             // Модели данных — по расширению файла.
             for (mext, re) in model_res() {
                 if *mext == ext {
@@ -551,7 +876,7 @@ pub fn extract(ctx: &Ctx, input: &RunInput) -> Result<Surface> {
             }
             // Go gorm: имя модели — последняя `type X struct`, помеченная gorm-тегом/embed.
             if ext == "go" {
-                if let Some(c) = go_type_re().captures(line) {
+                if let Some(c) = go_type_re().and_then(|re| re.captures(line)) {
                     go_type = Some(c[1].to_string());
                 } else if line.contains("gorm.Model") || line.contains("gorm:\"") {
                     if let Some(name) = go_type.take() {
@@ -561,24 +886,28 @@ pub fn extract(ctx: &Ctx, input: &RunInput) -> Result<Surface> {
             }
             // Scala Play: роуты в conf/routes (файл без расширения).
             if is_play {
-                if let Some(c) = play_re().captures(line) {
-                    push(0, format!("{} {}", c[1].to_uppercase(), &c[2]), &mut s.routes);
+                if let Some(c) = play_re().and_then(|re| re.captures(line)) {
+                    push(
+                        0,
+                        format!("{} {}", c[1].to_uppercase(), &c[2]),
+                        &mut s.routes,
+                    );
                 }
             }
             // GraphQL SDL: поля внутри type Query/Mutation/Subscription как операции (T69).
             // Учёт блока (а не построчно), чтобы не ловить поля обычных объектных типов.
             if matches!(ext, "graphql" | "gql") {
                 if gql_root.is_none() {
-                    if let Some(c) = gql_root_re().captures(line) {
+                    if let Some(c) = gql_root_re().and_then(|re| re.captures(line)) {
                         gql_root = Some(c[1].to_string());
-                        gql_depth = line.matches('{').count() as i32
-                            - line.matches('}').count() as i32;
+                        gql_depth =
+                            line.matches('{').count() as i32 - line.matches('}').count() as i32;
                     }
                 } else {
                     let opens = line.matches('{').count() as i32;
                     let closes = line.matches('}').count() as i32;
                     // Поле операции на текущем уровне блока.
-                    if let Some(c) = gql_field_re().captures(line) {
+                    if let Some(c) = gql_field_re().and_then(|re| re.captures(line)) {
                         if let (Some(root), Some(m)) = (gql_root.as_ref(), c.get(1)) {
                             let op = match root.as_str() {
                                 "Query" => "QUERY",
@@ -599,6 +928,31 @@ pub fn extract(ctx: &Ctx, input: &RunInput) -> Result<Surface> {
         }
     })?;
 
+    // Внешний сервис, сконфигурированный через переменную окружения (T69): зависимость
+    // выводится ИЗ УЖЕ ИЗВЛЕЧЁННЫХ переменных окружения, а не сканированием сырого
+    // текста. Прежний порядок ловил характерное имя где угодно, в том числе внутри
+    // собственной таблицы правил анализатора (перечисление имён в теле регулярного
+    // выражения совпадало само с собой), и продукт получал несуществующую зависимость.
+    // Извлечение переменной требует настоящего обращения к окружению, поэтому вывод из
+    // него самосовпадением не страдает.
+    if let Some(re) = service_env_re() {
+        let derived: Vec<SurfaceItem> = s
+            .env
+            .iter()
+            .filter(|it| re.is_match(&it.value))
+            .map(|it| SurfaceItem {
+                value: format!("env:{}", it.value),
+                file: it.file.clone(),
+                line: it.line,
+            })
+            .collect();
+        for item in derived {
+            if !s.services.iter().any(|x| x.value == item.value) {
+                s.services.push(item);
+            }
+        }
+    }
+
     // Детерминированный порядок (обход ФС не сортирован) — иначе регенерация доков не
     // идемпотентна: один и тот же код давал бы разный порядок и «обновлён» каждый раз.
     sort_items(&mut s.routes);
@@ -610,34 +964,19 @@ pub fn extract(ctx: &Ctx, input: &RunInput) -> Result<Surface> {
 
 fn sort_items(v: &mut [SurfaceItem]) {
     v.sort_by(|a, b| {
-        (a.file.as_str(), a.line, a.value.as_str()).cmp(&(b.file.as_str(), b.line, b.value.as_str()))
+        (a.file.as_str(), a.line, a.value.as_str()).cmp(&(
+            b.file.as_str(),
+            b.line,
+            b.value.as_str(),
+        ))
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use ailc_testkit::TempTree;
     use std::path::Path;
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    static CNT: AtomicU32 = AtomicU32::new(0);
-
-    fn tmp() -> std::path::PathBuf {
-        let n = CNT.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("ailc-surface-{}-{}", std::process::id(), n));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn write(dir: &Path, rel: &str, content: &str) {
-        let p = dir.join(rel);
-        if let Some(parent) = p.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(p, content).unwrap();
-    }
 
     fn route_values(dir: &Path) -> Vec<String> {
         let ctx = Ctx::new(dir);
@@ -649,6 +988,126 @@ mod tests {
         let ctx = Ctx::new(dir);
         let s = extract(&ctx, &RunInput::default()).unwrap();
         s.services.into_iter().map(|i| i.value).collect()
+    }
+
+    fn env_values(dir: &Path) -> Vec<String> {
+        let ctx = Ctx::new(dir);
+        let s = extract(&ctx, &RunInput::default()).unwrap();
+        s.env.into_iter().map(|i| i.value).collect()
+    }
+
+    // ────────────── Чистота фактов: комментарии, встроенные тесты, самосовпадение ──────────────
+
+    /// Пример употребления в комментарии не является поверхностью продукта. Именно так
+    /// в документы попадали несуществующие эндпоинты: таблицы правил самого анализатора
+    /// документированы примерами вида `@app.get("/path")`.
+    #[test]
+    fn пример_маршрута_в_комментарии_не_становится_фактом() {
+        let t = TempTree::new("surface");
+        t.write(
+            "src/app.py",
+            "# FastAPI/Flask: @app.get(\"/пример-из-комментария\")\n@app.get(\"/настоящий\")\ndef h(): pass\n",
+        );
+        let routes = route_values(t.path());
+        assert!(
+            routes.iter().any(|r| r.contains("/настоящий")),
+            "настоящий маршрут обязан извлекаться: {routes:?}"
+        );
+        assert!(
+            !routes.iter().any(|r| r.contains("из-комментария")),
+            "пример из комментария маршрутом не является: {routes:?}"
+        );
+    }
+
+    /// Строка подключения в комментарии не делает продукт зависимым от базы данных,
+    /// а такая же строка в коде делает. Проверяется заодно, что `//` внутри схемы URI
+    /// не принимается за начало строчного комментария.
+    #[test]
+    fn строка_подключения_из_комментария_не_становится_зависимостью() {
+        let t = TempTree::new("surface");
+        t.write(
+            "src/main.rs",
+            "// пример: postgres://из-комментария:5432/app\nfn main() { let u = \"postgres://настоящий:5432/app\"; let _ = u; }\n",
+        );
+        let services = service_values(t.path());
+        assert!(
+            services.iter().any(|s| s.contains("настоящий")),
+            "строка подключения из кода обязана извлекаться: {services:?}"
+        );
+        assert!(
+            !services.iter().any(|s| s.contains("из-комментария")),
+            "строка подключения из комментария зависимостью не является: {services:?}"
+        );
+    }
+
+    /// Rust держит тесты внутри исходного файла, поэтому путь-ориентированное исключение
+    /// их не видит: фикстуры тестов попадали в документ как поверхность продукта.
+    #[test]
+    fn встроенный_тестовый_модуль_фактов_не_даёт() {
+        let t = TempTree::new("surface");
+        t.write(
+            "src/lib.rs",
+            "pub fn f() { let _ = \"postgres://прод:5432/app\"; }\n\
+             #[cfg(test)]\n\
+             mod tests {\n\
+             \x20   #[test]\n\
+             \x20   fn t() { let _ = \"postgres://фикстура:5432/app\"; }\n\
+             }\n",
+        );
+        let services = service_values(t.path());
+        assert!(
+            services.iter().any(|s| s.contains("прод")),
+            "поверхность прод-кода обязана извлекаться: {services:?}"
+        );
+        assert!(
+            !services.iter().any(|s| s.contains("фикстура")),
+            "фикстура встроенного теста поверхностью не является: {services:?}"
+        );
+    }
+
+    /// Зависимость через переменную окружения выводится из настоящего обращения к
+    /// окружению. Голое имя в тексте (например перечисление имён внутри таблицы правил)
+    /// зависимостью продукта не является.
+    #[test]
+    fn зависимость_через_окружение_выводится_из_обращения_а_не_из_упоминания() {
+        let t = TempTree::new("surface");
+        t.write(
+            "src/config.py",
+            "url = os.getenv(\"DATABASE_URL\")\nизвестные = \"DATABASE_URL|REDIS_URL|AMQP_URL\"\n",
+        );
+        let services = service_values(t.path());
+        let env = env_values(t.path());
+        assert!(
+            env.contains(&"DATABASE_URL".to_string()),
+            "обращение к окружению обязано извлекаться: {env:?}"
+        );
+        assert_eq!(
+            services
+                .iter()
+                .filter(|s| s.starts_with("env:"))
+                .collect::<Vec<_>>(),
+            vec!["env:DATABASE_URL"],
+            "перечисление имён в строке зависимостями не является: {services:?}"
+        );
+    }
+
+    /// Документирующая строка Python это проза с примерами, а не поверхность системы.
+    #[test]
+    fn документирующая_строка_python_фактов_не_даёт() {
+        let t = TempTree::new("surface");
+        t.write(
+            "src/views.py",
+            "def h():\n    \"\"\"Пример: @app.get(\"/из-документации\")\"\"\"\n    return 1\n\n@app.get(\"/настоящий\")\ndef g(): pass\n",
+        );
+        let routes = route_values(t.path());
+        assert!(
+            routes.iter().any(|r| r.contains("/настоящий")),
+            "настоящий маршрут обязан извлекаться: {routes:?}"
+        );
+        assert!(
+            !routes.iter().any(|r| r.contains("из-документации")),
+            "пример из документирующей строки маршрутом не является: {routes:?}"
+        );
     }
 
     // ───────────────────────── T69: расширение роутов ─────────────────────────
@@ -690,32 +1149,28 @@ mod tests {
 
     #[test]
     fn grpc_proto_routes() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("surface");
+        t.write(
             "api/svc.proto",
             "service Billing {\n  rpc Charge(ChargeReq) returns (ChargeResp);\n}\n",
         );
-        let routes = route_values(&dir);
+        let routes = route_values(t.path());
         assert!(routes.iter().any(|r| r == "RPC Charge"), "{routes:?}");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn graphql_query_fields() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("surface");
+        t.write(
             "schema.graphql",
             "type User { id: ID }\ntype Query {\n  users: [User]\n  user(id: ID): User\n}\n",
         );
-        let routes = route_values(&dir);
+        let routes = route_values(t.path());
         // Поля Query извлекаются как операции.
         assert!(routes.iter().any(|r| r == "QUERY users"), "{routes:?}");
         assert!(routes.iter().any(|r| r == "QUERY user"), "{routes:?}");
         // Поле обычного типа User НЕ должно попадать (учёт блока).
         assert!(!routes.iter().any(|r| r == "QUERY id"), "{routes:?}");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -733,43 +1188,42 @@ mod tests {
 
     #[test]
     fn extended_service_schemes() {
-        let dir = tmp();
-        write(
-            &dir,
+        let t = TempTree::new("surface");
+        t.write(
             "config.yaml",
             "nats: nats://broker:4222\nes: elasticsearch://es:9200\ndb: postgres://h/db\n",
         );
-        let svcs = service_values(&dir);
+        let svcs = service_values(t.path());
         assert!(svcs.iter().any(|s| s.starts_with("nats://")), "{svcs:?}");
         assert!(
             svcs.iter().any(|s| s.starts_with("elasticsearch://")),
             "{svcs:?}"
         );
-        assert!(svcs.iter().any(|s| s.starts_with("postgres://")), "{svcs:?}");
-        let _ = fs::remove_dir_all(&dir);
+        assert!(
+            svcs.iter().any(|s| s.starts_with("postgres://")),
+            "{svcs:?}"
+        );
     }
 
     #[test]
     fn env_based_service_dependency() {
-        let dir = tmp();
-        write(&dir, "app.py", "import os\nurl = os.getenv(\"DATABASE_URL\")\n");
-        let svcs = service_values(&dir);
+        let t = TempTree::new("surface");
+        t.write("app.py", "import os\nurl = os.getenv(\"DATABASE_URL\")\n");
+        let svcs = service_values(t.path());
         assert!(svcs.iter().any(|s| s == "env:DATABASE_URL"), "{svcs:?}");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     // ───────────────────────── T68: устойчивость к кодировке ─────────────────────────
 
     #[test]
     fn bom_does_not_hide_first_route() {
-        let dir = tmp();
+        let t = TempTree::new("surface");
         // Файл с ведущим BOM: первый роут на первой строке не должен теряться.
         let mut bytes = vec![0xEF, 0xBB, 0xBF];
         bytes.extend_from_slice(br#"app.get("/first", h)"#);
-        fs::write(dir.join("server.js"), &bytes).unwrap();
-        let routes = route_values(&dir);
+        std::fs::write(t.path().join("server.js"), &bytes).unwrap();
+        let routes = route_values(t.path());
         assert!(routes.iter().any(|r| r == "GET /first"), "{routes:?}");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     // ───────────────────────── T70: компиляция статических паттернов ─────────────────────────
@@ -787,5 +1241,32 @@ mod tests {
         let _ = gql_root_re();
         let _ = go_type_re();
         let _ = play_re();
+    }
+    /// T-05: таблицы встроенных паттернов собираются целиком. Компиляция больше не
+    /// завершает процесс, поэтому опечатка в литерале молча уменьшила бы таблицу; тест
+    /// делает такую деградацию видимой в непрерывной интеграции.
+    #[test]
+    fn таблицы_встроенных_паттернов_собираются_целиком() {
+        assert!(
+            route_res().len() >= 14,
+            "правил роутов: {}",
+            route_res().len()
+        );
+        assert!(env_res().len() >= 8, "паттернов ENV: {}", env_res().len());
+        assert!(
+            service_res().len() >= 6,
+            "паттернов сервисов: {}",
+            service_res().len()
+        );
+        assert!(
+            model_res().len() >= 10,
+            "паттернов моделей: {}",
+            model_res().len()
+        );
+        assert!(gql_field_re().is_some(), "паттерн поля GraphQL собран");
+        assert!(gql_root_re().is_some(), "паттерн корня GraphQL собран");
+        assert!(service_env_re().is_some(), "паттерн env-сервиса собран");
+        assert!(go_type_re().is_some(), "паттерн Go-структуры собран");
+        assert!(play_re().is_some(), "паттерн Play-роута собран");
     }
 }

@@ -7,8 +7,8 @@
 //! шаг даёт `skipped` с причиной на русском — инвариант «нет молчаливых пропусков».
 
 use ailc_contracts::{
-    looks_like_tool_failure, CapabilityManifest, CapabilityOutput, Ctx, EngineKind, Family, Finding,
-    Location, Result, RunInput, Severity, SymbolKind, Tier,
+    looks_like_tool_failure, CapabilityManifest, CapabilityOutput, Ctx, EngineKind, Family,
+    Finding, Location, Result, RunInput, Severity, SymbolKind, Tier,
 };
 use ailc_core::engines::codeintel::CodeIntelEngine;
 use ailc_core::engines::runner::Runner;
@@ -22,8 +22,7 @@ use std::path::Path;
 /// Единая JSON-схема входа для проверок «по проекту».
 const TARGET_SCHEMA: &str = r#"{"type":"object","properties":{"target":{"type":"string"}}}"#;
 /// Схема входа для проверок, требующих имя символа.
-const QUERY_SCHEMA: &str =
-    r#"{"type":"object","properties":{"query":{"type":"string"},"target":{"type":"string"}},"required":["query"]}"#;
+const QUERY_SCHEMA: &str = r#"{"type":"object","properties":{"query":{"type":"string"},"target":{"type":"string"}},"required":["query"]}"#;
 
 // ───────────────────────── verify/coverage (E2 Runner) ─────────────────────────
 
@@ -67,15 +66,35 @@ fn detect_coverage(root: &Path) -> Option<CoveragePlan> {
             label: "python",
         })
     } else if has("build.sbt") {
-        Some(CoveragePlan::Run { bin: "sbt", args: vec!["coverage", "test"], label: "scala" })
+        Some(CoveragePlan::Run {
+            bin: "sbt",
+            args: vec!["coverage", "test"],
+            label: "scala",
+        })
     } else if has("build.gradle.kts") || has("build.gradle") {
-        Some(CoveragePlan::Run { bin: "gradle", args: vec!["jacocoTestReport", "-q"], label: "jvm" })
+        Some(CoveragePlan::Run {
+            bin: "gradle",
+            args: vec!["jacocoTestReport", "-q"],
+            label: "jvm",
+        })
     } else if has("pom.xml") {
-        Some(CoveragePlan::Run { bin: "mvn", args: vec!["-q", "test", "jacoco:report"], label: "java" })
+        Some(CoveragePlan::Run {
+            bin: "mvn",
+            args: vec!["-q", "test", "jacoco:report"],
+            label: "java",
+        })
     } else if has("Package.swift") {
-        Some(CoveragePlan::Run { bin: "swift", args: vec!["test", "--enable-code-coverage"], label: "swift" })
+        Some(CoveragePlan::Run {
+            bin: "swift",
+            args: vec!["test", "--enable-code-coverage"],
+            label: "swift",
+        })
     } else if has("pubspec.yaml") {
-        Some(CoveragePlan::Run { bin: "dart", args: vec!["test", "--coverage=coverage"], label: "dart" })
+        Some(CoveragePlan::Run {
+            bin: "dart",
+            args: vec!["test", "--coverage=coverage"],
+            label: "dart",
+        })
     } else if ailc_core::stack::has_ext(root, &[".sln", ".csproj"]) {
         Some(CoveragePlan::Run {
             bin: "dotnet",
@@ -289,8 +308,7 @@ impl Capability for SymbolVerify {
 
         // Прямое совпадение по полному имени символа (некоторые языки/извлекатели хранят
         // квалифицированную форму целиком): это безусловное подтверждение существования.
-        let exact: Vec<&ailc_contracts::Symbol> =
-            syms.iter().filter(|s| s.name == query).collect();
+        let exact: Vec<&ailc_contracts::Symbol> = syms.iter().filter(|s| s.name == query).collect();
 
         // Определения листа по короткому имени.
         let leaf_defs: Vec<&ailc_contracts::Symbol> =
@@ -330,7 +348,8 @@ impl Capability for SymbolVerify {
                         out.records
                             .push(format!("{}:{} {} {}", s.file, s.line, s.kind, s.name));
                     }
-                    out.metrics.push(("definitions".into(), confirmed.len() as f64));
+                    out.metrics
+                        .push(("definitions".into(), confirmed.len() as f64));
                     out.metrics.push(("container_confirmed".into(), 1.0));
                     out.summary = format!(
                         "verify/symbol «{query}»: символ существует и принадлежит `{cont}` ({} определений)",
@@ -357,9 +376,11 @@ impl Capability for SymbolVerify {
                         source: "verify/symbol".into(),
                     });
                     out.metrics.push(("definitions".into(), 0.0));
-                    out.metrics.push(("leaf_only".into(), leaf_defs.len() as f64));
-                    out.summary =
-                        format!("verify/symbol «{query}»: найдено похожее, принадлежность не подтверждена");
+                    out.metrics
+                        .push(("leaf_only".into(), leaf_defs.len() as f64));
+                    out.summary = format!(
+                        "verify/symbol «{query}»: найдено похожее, принадлежность не подтверждена"
+                    );
                 } else {
                     // Ни листа, ни принадлежности: символ не найден.
                     out.findings.push(Finding {
@@ -377,11 +398,8 @@ impl Capability for SymbolVerify {
             }
             // ── Простое имя либо прямое совпадение по полному имени ──
             _ => {
-                let defs: Vec<&ailc_contracts::Symbol> = if !exact.is_empty() {
-                    exact
-                } else {
-                    leaf_defs
-                };
+                let defs: Vec<&ailc_contracts::Symbol> =
+                    if !exact.is_empty() { exact } else { leaf_defs };
                 if defs.is_empty() {
                     out.findings.push(Finding {
                         rule: "symbol-not-found".into(),
@@ -412,7 +430,6 @@ impl Capability for SymbolVerify {
 }
 
 // ───────────────────────── quality.check/antipattern (E3 CodeIntel) ─────────────────────────
-
 
 pub struct AntipatternCheck {
     manifest: CapabilityManifest,
@@ -652,39 +669,18 @@ pub fn register(reg: &mut Registry) {
 mod tests {
     use super::*;
     use ailc_contracts::CheckOutcome;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static CNT: AtomicU64 = AtomicU64::new(0);
-
-    /// Уникальная пустая временная папка для файловых фикстур.
-    fn tmp() -> PathBuf {
-        let n = CNT.fetch_add(1, Ordering::SeqCst);
-        let dir =
-            std::env::temp_dir().join(format!("ailc-verify-extra-{}-{}", std::process::id(), n));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn write(dir: &Path, rel: &str, content: &str) {
-        let p = dir.join(rel);
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(p, content).unwrap();
-    }
+    use ailc_testkit::TempTree;
 
     // ───────────────────────── T42: ctx.base в AntipatternCheck ─────────────────────────
 
     #[test]
     fn t42_antipattern_абсолютный_target_отвергается() {
-        let dir = tmp();
+        let t = TempTree::new("verify-extra");
         let input = RunInput {
             target: Some("/etc".to_string()),
             ..Default::default()
         };
-        let res = AntipatternCheck::new().run(&Ctx::new(&dir), &input);
+        let res = AntipatternCheck::new().run(&t.ctx(), &input);
         assert!(
             res.is_err(),
             "абсолютный target должен отвергаться через ctx.base, а не уводить обход за корень"
@@ -693,12 +689,12 @@ mod tests {
 
     #[test]
     fn t42_antipattern_двойные_точки_отвергаются() {
-        let dir = tmp();
+        let t = TempTree::new("verify-extra");
         let input = RunInput {
             target: Some("../../etc".to_string()),
             ..Default::default()
         };
-        let res = AntipatternCheck::new().run(&Ctx::new(&dir), &input);
+        let res = AntipatternCheck::new().run(&t.ctx(), &input);
         assert!(
             res.is_err(),
             "target с компонентами .. должен отвергаться через ctx.base"
@@ -707,14 +703,17 @@ mod tests {
 
     #[test]
     fn t42_antipattern_корректный_подпуть_исполняется() {
-        let dir = tmp();
-        write(&dir, "src/lib.rs", "fn main() {}\n");
+        let t = TempTree::new("verify-extra");
+        t.write("src/lib.rs", "fn main() {}\n");
         let input = RunInput {
             target: Some("src".to_string()),
             ..Default::default()
         };
-        let res = AntipatternCheck::new().run(&Ctx::new(&dir), &input);
-        assert!(res.is_ok(), "обычный относительный подпуть должен исполняться");
+        let res = AntipatternCheck::new().run(&t.ctx(), &input);
+        assert!(
+            res.is_ok(),
+            "обычный относительный подпуть должен исполняться"
+        );
     }
 
     // ───────────────────────── T91: ширина отступа по файлу ─────────────────────────
@@ -723,7 +722,11 @@ mod tests {
     fn t91_indent_unit_определяет_двойной_пробел() {
         // Файл, целиком отформатированный двумя пробелами на уровень.
         let content = "a\n  b\n    c\n      d\n";
-        assert_eq!(indent_unit(content), 2, "ширина уровня должна определиться как 2");
+        assert_eq!(
+            indent_unit(content),
+            2,
+            "ширина уровня должна определиться как 2"
+        );
         // Глубина строки «      d» (6 пробелов) при unit=2 равна 3, а не 1 (как было бы
         // при зашитой ширине 4 с округлением вниз).
         assert_eq!(indent_depth("      d", 2), 3);
@@ -763,7 +766,7 @@ mod tests {
 
     #[test]
     fn t91_deep_nesting_срабатывает_на_двух_пробелах() {
-        let dir = tmp();
+        let t = TempTree::new("verify-extra");
         // Пороги по умолчанию max_nesting обычно невелики; строим заведомо глубокий файл
         // на двух пробелах. При прежней зашитой четвёрке глубина была бы вдвое меньше.
         let mut src = String::from("fn main() {\n");
@@ -773,9 +776,9 @@ mod tests {
             src.push_str(&format!("{indent}let x{i} = {i};\n"));
         }
         src.push_str("}\n");
-        write(&dir, "deep.rs", &src);
+        t.write("deep.rs", &src);
         let out = AntipatternCheck::new()
-            .run(&Ctx::new(&dir), &RunInput::default())
+            .run(&t.ctx(), &RunInput::default())
             .expect("antipattern должен отработать");
         assert!(
             out.findings.iter().any(|f| f.rule == "deep-nesting"),
@@ -788,7 +791,7 @@ mod tests {
 
     #[test]
     fn t91_крупный_файл_пропускается_по_размеру() {
-        let dir = tmp();
+        let t = TempTree::new("verify-extra");
         // Файл крупнее MAX_SCAN_BYTES не должен читаться в память (защита от OOM).
         // Защита двухслойная: walk не передаёт такой файл в обработчик (T64), а сам
         // обработчик дополнительно проверяет fs::metadata перед read_to_string (T91),
@@ -804,9 +807,9 @@ mod tests {
         let unit = (MAX_SCAN_BYTES as usize) / deep.len() + 2;
         let big = deep.repeat(unit);
         assert!(big.len() as u64 > MAX_SCAN_BYTES);
-        write(&dir, "huge.rs", &big);
+        t.write("huge.rs", &big);
         let out = AntipatternCheck::new()
-            .run(&Ctx::new(&dir), &RunInput::default())
+            .run(&t.ctx(), &RunInput::default())
             .expect("antipattern должен отработать без падения на крупном файле");
         assert!(
             !out.findings.iter().any(|f| f.rule == "deep-nesting"),
@@ -818,10 +821,9 @@ mod tests {
 
     #[test]
     fn t91_symbol_лист_принадлежит_контейнеру_подтверждён() {
-        let dir = tmp();
+        let t = TempTree::new("verify-extra");
         // Контейнер Foo и метод bar внутри него в одном файле.
-        write(
-            &dir,
+        t.write(
             "src/foo.rs",
             "struct Foo {}\nimpl Foo {\n    fn bar(&self) {}\n}\n",
         );
@@ -829,7 +831,7 @@ mod tests {
             query: Some("Foo::bar".to_string()),
             ..Default::default()
         };
-        let out = SymbolVerify::new().run(&Ctx::new(&dir), &input).unwrap();
+        let out = SymbolVerify::new().run(&t.ctx(), &input).unwrap();
         assert!(
             out.findings.is_empty(),
             "лист bar принадлежит Foo: находок быть не должно, summary={}",
@@ -844,12 +846,11 @@ mod tests {
 
     #[test]
     fn t91_symbol_лист_в_чужом_контейнере_не_подтверждён() {
-        let dir = tmp();
+        let t = TempTree::new("verify-extra");
         // bar существует, но принадлежит Other, а контейнер Foo пуст. Запрос Foo::bar
         // не должен ложно подтверждаться лишь по совпадению листа bar.
-        write(&dir, "src/foo.rs", "struct Foo {}\nimpl Foo {\n}\n");
-        write(
-            &dir,
+        t.write("src/foo.rs", "struct Foo {}\nimpl Foo {\n}\n");
+        t.write(
             "src/other.rs",
             "struct Other {}\nimpl Other {\n    fn bar(&self) {}\n}\n",
         );
@@ -857,7 +858,7 @@ mod tests {
             query: Some("Foo::bar".to_string()),
             ..Default::default()
         };
-        let out = SymbolVerify::new().run(&Ctx::new(&dir), &input).unwrap();
+        let out = SymbolVerify::new().run(&t.ctx(), &input).unwrap();
         assert!(
             out.findings
                 .iter()
@@ -875,13 +876,13 @@ mod tests {
 
     #[test]
     fn t91_symbol_квалифицированный_не_найден_вовсе() {
-        let dir = tmp();
-        write(&dir, "src/foo.rs", "struct Foo {}\n");
+        let t = TempTree::new("verify-extra");
+        t.write("src/foo.rs", "struct Foo {}\n");
         let input = RunInput {
             query: Some("Foo::missing".to_string()),
             ..Default::default()
         };
-        let out = SymbolVerify::new().run(&Ctx::new(&dir), &input).unwrap();
+        let out = SymbolVerify::new().run(&t.ctx(), &input).unwrap();
         assert!(
             out.findings.iter().any(|f| f.rule == "symbol-not-found"),
             "несуществующий лист должен дать symbol-not-found, summary={}",
@@ -891,13 +892,13 @@ mod tests {
 
     #[test]
     fn t91_symbol_простое_имя_по_прежнему_находится() {
-        let dir = tmp();
-        write(&dir, "src/foo.rs", "fn standalone() {}\n");
+        let t = TempTree::new("verify-extra");
+        t.write("src/foo.rs", "fn standalone() {}\n");
         let input = RunInput {
             query: Some("standalone".to_string()),
             ..Default::default()
         };
-        let out = SymbolVerify::new().run(&Ctx::new(&dir), &input).unwrap();
+        let out = SymbolVerify::new().run(&t.ctx(), &input).unwrap();
         assert!(
             out.findings.is_empty() && out.summary.contains("существует"),
             "простое имя без квалификации должно подтверждаться как раньше, summary={}",
@@ -907,13 +908,13 @@ mod tests {
 
     #[test]
     fn t91_symbol_простое_имя_не_найдено() {
-        let dir = tmp();
-        write(&dir, "src/foo.rs", "fn real() {}\n");
+        let t = TempTree::new("verify-extra");
+        t.write("src/foo.rs", "fn real() {}\n");
         let input = RunInput {
             query: Some("imaginary".to_string()),
             ..Default::default()
         };
-        let out = SymbolVerify::new().run(&Ctx::new(&dir), &input).unwrap();
+        let out = SymbolVerify::new().run(&t.ctx(), &input).unwrap();
         assert!(
             out.findings.iter().any(|f| f.rule == "symbol-not-found"),
             "выдуманное простое имя должно давать symbol-not-found"
@@ -922,15 +923,18 @@ mod tests {
 
     #[test]
     fn t42_symbol_абсолютный_target_отвергается() {
-        let dir = tmp();
+        let t = TempTree::new("verify-extra");
         let input = RunInput {
             query: Some("Foo".to_string()),
             target: Some("/etc".to_string()),
         };
         // CodeIntelEngine::symbols вызывает ctx.base(input)?, поэтому абсолютный target
         // отвергается и здесь (единообразие границы T42).
-        let res = SymbolVerify::new().run(&Ctx::new(&dir), &input);
-        assert!(res.is_err(), "абсолютный target должен отвергаться и в verify/symbol");
+        let res = SymbolVerify::new().run(&t.ctx(), &input);
+        assert!(
+            res.is_err(),
+            "абсолютный target должен отвергаться и в verify/symbol"
+        );
     }
 
     // ───────────────────────── T86: сбой инструмента покрытия не равен находке ─────────────
@@ -965,7 +969,9 @@ mod tests {
     #[test]
     fn t86_coverage_крах_сборки_не_находка() {
         // Ошибка компиляции в выводе раннера покрытия: это сбой инструмента, не дефект.
-        let out = coverage_branch("error[E0277]: the trait bound is not satisfied\ncould not compile `crate`");
+        let out = coverage_branch(
+            "error[E0277]: the trait bound is not satisfied\ncould not compile `crate`",
+        );
         assert!(
             out.findings.is_empty(),
             "крах сборки не должен превращаться в находку coverage-failed"

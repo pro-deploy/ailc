@@ -1,8 +1,9 @@
 //! Серверное ведение памяти проекта: след оставляет САМ сервер, а не агент по памятке.
 //!
 //! Каждый вызов инструмента (plan / run / dod / autofix / design) дописывает строку в
-//! журнал `.ailc/memory-bank/journal.md` и обновляет авто-блок «Журнал AILC» в
-//! `.ailc/memory-bank/active-context.md` (последние события и следующий шаг). Ручные
+//! журнал `.ailc/memory-bank/journal.md` и обновляет в
+//! `.ailc/memory-bank/active-context.md` два авто-блока: «Журнал AILC» с последними
+//! событиями и «Состояние работ» с тем, что в работе, в очереди, отложено и отклонено. Ручные
 //! разделы активного контекста не трогаются: авто-блок живёт в управляемых маркерах
 //! генератора. Так память проекта актуальна, даже если агент среды о ней не вспоминал.
 
@@ -37,8 +38,8 @@ pub fn note(ctx: &Ctx, tool: &str, detail: &str, digest: &str) {
 
 /// Перестроить авто-блок активного контекста из хвоста журнала.
 fn refresh_active_context(ctx: &Ctx) {
-    let journal = std::fs::read_to_string(ctx.root.join(".ailc").join(NS).join(JOURNAL))
-        .unwrap_or_default();
+    let journal =
+        std::fs::read_to_string(ctx.root.join(".ailc").join(NS).join(JOURNAL)).unwrap_or_default();
     let recent: Vec<&str> = journal
         .lines()
         .filter(|l| l.starts_with("- "))
@@ -55,7 +56,24 @@ fn refresh_active_context(ctx: &Ctx) {
             body.push('\n');
         }
     }
-    let _ = Generator::write_block(ctx, ".ailc/memory-bank/active-context.md", "ailc-journal", &body);
+    let _ = Generator::write_block(
+        ctx,
+        ".ailc/memory-bank/active-context.md",
+        "ailc-journal",
+        &body,
+    );
+
+    // Состояние работ обновляется тем же вызовом. Журнал событий отвечает на вопрос
+    // «что происходило», а состояние работ на вопрос «где мы находимся»: что брошено на
+    // середине, что в очереди, что отложено и почему. Человек, вернувшийся к проекту
+    // после обрыва сеанса, читает именно это, поэтому запись не должна зависеть от того,
+    // вспомнил ли о ней агент.
+    let _ = Generator::write_block(
+        ctx,
+        ".ailc/memory-bank/active-context.md",
+        "ailc-tasks",
+        &crate::tasks::active_context_block(&crate::tasks::all(ctx)),
+    );
 }
 
 /// Первичный бутстрап активного контекста: паспорт проекта вместо пустой заглушки.
@@ -65,9 +83,14 @@ pub fn bootstrap(ctx: &Ctx, profile_summary: &str) {
         return;
     }
     let body = format!(
-        "## Паспорт (определён AILC)\n\n{profile_summary}\n\nПодробности в `.ailc/profile.md`.\n"
+        "## Паспорт проекта (определён AILC)\n\n{profile_summary}\n\nПодробности в `.ailc/profile.md`.\n"
     );
-    let _ = Generator::write_block(ctx, ".ailc/memory-bank/active-context.md", "ailc-passport", &body);
+    let _ = Generator::write_block(
+        ctx,
+        ".ailc/memory-bank/active-context.md",
+        "ailc-passport",
+        &body,
+    );
     refresh_active_context(ctx);
 }
 
@@ -141,10 +164,7 @@ mod tests {
 
     #[test]
     fn note_outside_project_is_silent_noop() {
-        let root = std::env::temp_dir().join(format!(
-            "ailc-memlog-noop-{}",
-            std::process::id()
-        ));
+        let root = std::env::temp_dir().join(format!("ailc-memlog-noop-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let ctx = Ctx::new(root.to_str().unwrap());
         note(&ctx, "dod", "", "что-то"); // .ailc нет — тихо ничего

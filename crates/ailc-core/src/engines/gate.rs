@@ -36,7 +36,12 @@ pub const SECURITY_FLOOR_IDS: &[&str] = &["security.scan/sast", "security.scan/t
 /// Бюджет времени на один шаг глубокого анализатора (T36). Тяжёлый разбор AST/taint не
 /// должен завесить детерминированный цикл: по истечении бюджета шаг помечается как сбой
 /// инструмента (а не как «находок нет»), и вердикт это видит явно.
-const DEEP_STEP_TIMEOUT: Duration = Duration::from_secs(120);
+///
+/// ЕДИНСТВЕННЫЙ источник этого бюджета для всех путей (гейт и прямой прогон осей в
+/// оркестраторе): прежде существовали две константы с разными значениями (120 и 180
+/// секунд), и один и тот же анализатор получал разный бюджет в зависимости от пути вызова.
+/// Значение согласовано с бюджетом шага пайплайна (`pipeline::STEP_TIMEOUT`, 180 секунд).
+pub const SECURITY_FLOOR_TIMEOUT: Duration = Duration::from_secs(180);
 
 impl GateRunner {
     /// Собрать находки из применимых (не мутирующих, нужного семейства) capability и
@@ -44,11 +49,38 @@ impl GateRunner {
     /// пакета (веса балла) берёт из ОДНОЙ загрузки политики, не перечитывая файл дважды
     /// (T38). Делегирует в `run_with_pack`, где живёт вся логика.
     pub fn run(reg: &Registry, ctx: &Ctx, input: &RunInput, policy: &GatePolicy) -> GateReport {
+        Self::run_excluding(reg, ctx, input, policy, &[])
+    }
+
+    /// То же, что `run`, но с ЯВНЫМ списком исключаемых capability. Нужен пути DoD:
+    /// оси пола безопасности (secret/sast/taint) он исполняет НАПРЯМУЮ ради классификации
+    /// исхода и числа опровергнутых, и прежде эти же capability повторно гонялись внутри
+    /// гейта, то есть тяжёлый анализ исполнялся дважды за один вердикт. Исключение здесь
+    /// устраняет двойное исполнение; находки исключённых источников подмешивает прямой
+    /// прогон вызывающего, поэтому дедупликация не нарушается.
+    pub fn run_excluding(
+        reg: &Registry,
+        ctx: &Ctx,
+        input: &RunInput,
+        policy: &GatePolicy,
+        exclude: &[&str],
+    ) -> GateReport {
         // Единственная загрузка пакета: веса берём отсюда, а политику гейта (block_at и
         // families) подменяем переданным аргументом, чтобы не было расхождения источников.
-        let (mut pack, _note) = crate::policy::load(&ctx.root);
+        let (mut pack, note) = crate::policy::load(&ctx.root);
         pack.gate = policy.clone();
-        Self::run_with_pack(reg, ctx, input, &pack)
+        let mut report = Self::run_with_pack_excluding(reg, ctx, input, &pack, exclude);
+        // Заметка о политике доводится до отчёта, а не выбрасывается. Предупреждение о
+        // неразобранной, подменённой или ослабленной политике обязано быть видно там же, где
+        // вердикт: молча применённая чужая или ослабленная политика делает вердикт
+        // необъяснимым, а инвариант «нет молчаливых пропусков» распространяется и на правила,
+        // по которым выносится решение, а не только на проверки.
+        if let Some(n) = note {
+            if n.starts_with('⚠') {
+                report.checks_skipped.push(("governance".to_string(), n));
+            }
+        }
+        report
     }
 
     /// Полный прогон по ЕДИНОМУ `PolicyPack` (T38): классификация и веса балла опираются
@@ -60,14 +92,60 @@ impl GateRunner {
         input: &RunInput,
         pack: &PolicyPack,
     ) -> GateReport {
+        Self::run_with_pack_excluding(reg, ctx, input, pack, &[])
+    }
+
+    /// Полный прогон по пакету с ЯВНЫМ списком исключаемых capability (см. `run_excluding`
+    /// о причине: устранение двойного исполнения пола безопасности в пути DoD).
+    fn run_with_pack_excluding(
+        reg: &Registry,
+        ctx: &Ctx,
+        input: &RunInput,
+        pack: &PolicyPack,
+        exclude: &[&str],
+    ) -> GateReport {
+        // Инкрементальность (T24): статический прогон гейта переиспользуется, когда дерево,
+        // политика и версия бинаря не изменились. Ключ включает состав политики, поэтому
+        // ослабление или ужесточение правил кэш обесценивает. Проверки семейства verify
+        // (тесты, линт, покрытие) в гейтовый прогон не входят и выполняются отдельно,
+        // поэтому «зелёные тесты» закэшировать нельзя по устройству.
+        let cache_key = input
+            .target
+            .is_none()
+            .then(|| crate::cache::fingerprint(ctx))
+            .flatten()
+            .map(|f| {
+                let fams: Vec<String> = pack.gate.families.iter().map(|x| x.to_string()).collect();
+                // Список исключённых входит в ключ: прогон с исключениями и без — разные
+                // составы, и подмена одного другим через кэш недопустима.
+                format!(
+                    "gate|{f}|{}|{}|excl:{}",
+                    pack.gate.block_at,
+                    fams.join(","),
+                    exclude.join(",")
+                )
+            });
+        if let Some(k) = &cache_key {
+            if let Some(hit) = crate::cache::load_run::<GateReport>(ctx, k) {
+                return hit;
+            }
+        }
+
         let policy = &pack.gate;
         let mut findings = Vec::new();
         let mut checks_run = Vec::new();
         let mut checks_skipped = Vec::new();
+        let mut tools_failed = Vec::new();
 
         for cap in reg.all() {
             let m = cap.manifest();
             if m.mutates {
+                continue;
+            }
+            // Явно исключённые вызывающим capability не исполняются: их прямой прогон
+            // делает сам вызывающий (путь DoD), а двойное исполнение тяжёлого анализа
+            // недопустимо.
+            if exclude.contains(&m.id) {
                 continue;
             }
             // Глубокий sast/taint включаем по ИМЕНИ как пол безопасности даже при
@@ -90,7 +168,7 @@ impl GateRunner {
             // зависшего шага (как в pipeline).
             let result = if is_floor {
                 match reg.get_arc(m.id) {
-                    Some(owned) => run_with_timeout(owned, ctx, input, DEEP_STEP_TIMEOUT),
+                    Some(owned) => run_with_timeout(owned, ctx, input, SECURITY_FLOOR_TIMEOUT),
                     // Хэндл по id обязан существовать (мы только что взяли его из all()),
                     // но на всякий случай не паникуем, а зовём напрямую.
                     None => cap.run(ctx, input).map_err(|e| e.to_string()),
@@ -106,11 +184,16 @@ impl GateRunner {
                     &mut findings,
                     &mut checks_run,
                     &mut checks_skipped,
+                    &mut tools_failed,
                 ),
                 // Ошибка/паника/таймаут capability считается СБОЕМ инструмента (T38), а не
                 // находка и не штатный пропуск. Помечаем явной категорией, чтобы Rigor
-                // Score и человек отличали поломку от «нечего проверять».
-                Err(e) => checks_skipped.push((m.id.to_string(), format!("сбой инструмента: {e}"))),
+                // Score и человек отличали поломку от «нечего проверять», и учитываем в
+                // `tools_failed`, чтобы сбой снимал вердикт, а не выглядел чистым прогоном.
+                Err(e) => {
+                    checks_skipped.push((m.id.to_string(), format!("сбой инструмента: {e}")));
+                    tools_failed.push((m.id.to_string(), e));
+                }
             }
         }
 
@@ -118,7 +201,10 @@ impl GateRunner {
         // отсутствие в прогоне делаем ВИДИМЫМ (инвариант «нет молчаливых пропусков», T36):
         // вердикт не должен молча выглядеть «чистым» без глубокого анализа.
         for id in SECURITY_FLOOR_IDS {
-            let attempted = checks_run.iter().any(|x| x.as_str() == *id)
+            // Явно исключённая вызывающим capability не является молчаливым пропуском:
+            // вызывающий (путь DoD) исполняет её напрямую и сам отвечает за видимость.
+            let attempted = exclude.contains(id)
+                || checks_run.iter().any(|x| x.as_str() == *id)
                 || checks_skipped.iter().any(|(x, _)| x.as_str() == *id);
             if !attempted {
                 checks_skipped.push((
@@ -135,7 +221,24 @@ impl GateRunner {
         let (confirmed, _refuted) = crate::verify::Verifier::verify(ctx, findings);
         // Веса балла берём из ТОГО ЖЕ пакета, что и политику классификации (T38): без
         // повторного чтения файла и без расхождения источников.
-        Self::classify(confirmed, checks_run, checks_skipped, policy, &pack.thresholds)
+        let report = Self::classify(
+            confirmed,
+            checks_run,
+            checks_skipped,
+            tools_failed,
+            policy,
+            &pack.thresholds,
+        );
+        // Запись кэша: сбой намеренно игнорируется, кэш является ускорением. Отчёт с
+        // непустым `tools_failed` НЕ сохраняется: сбой инструмента (нет тулчейна, таймаут,
+        // паника) транзиентен, и его кэширование заморозило бы «красный» вердикт до
+        // изменения дерева, хотя повторный прогон мог бы пройти чисто.
+        if let Some(k) = &cache_key {
+            if report.tools_failed.is_empty() {
+                let _ = crate::cache::save_run(ctx, k, &report);
+            }
+        }
+        report
     }
 
     /// Разнести исход одной capability по спискам прогона, используя `CheckOutcome` (T38):
@@ -149,6 +252,7 @@ impl GateRunner {
         findings: &mut Vec<Finding>,
         checks_run: &mut Vec<String>,
         checks_skipped: &mut Vec<(String, String)>,
+        tools_failed: &mut Vec<(String, String)>,
     ) {
         match out.outcome() {
             CheckOutcome::Ran => {
@@ -159,7 +263,11 @@ impl GateRunner {
                 checks_skipped.push((id.to_string(), reason));
             }
             CheckOutcome::Failed(reason) => {
+                // Сбой попадает и в `checks_skipped` (чтобы человек видел его в общем
+                // перечне непройденного), и в `tools_failed`, который участвует в вычислении
+                // вердикта. Второе существенно: без него сбой был равен чистому прогону.
                 checks_skipped.push((id.to_string(), format!("сбой инструмента: {reason}")));
+                tools_failed.push((id.to_string(), reason));
             }
         }
     }
@@ -169,12 +277,14 @@ impl GateRunner {
         findings: Vec<Finding>,
         checks_run: Vec<String>,
         checks_skipped: Vec<(String, String)>,
+        tools_failed: Vec<(String, String)>,
         policy: &GatePolicy,
         thresholds: &Thresholds,
     ) -> GateReport {
         let mut report = GateReport {
             checks_run,
             checks_skipped,
+            tools_failed,
             ..Default::default()
         };
         let mut unverified = 0usize;
@@ -204,10 +314,14 @@ impl GateRunner {
                 format!("{unverified} находок без верификации отброшено (в балл не идут)"),
             ));
         }
-        // passed считаем безусловно по итоговому множеству блокеров (T38, защитно): любая
-        // последующая переклассификация обязана пересчитать его снова, см.
-        // escalate_unfinished.
-        report.passed = report.blocking.is_empty();
+        // Вердикт: блокеров нет И ни один инструмент не упал. Второе условие добавлено
+        // потому, что сбой инструмента это ОТСУТСТВИЕ результата, а не чистый результат.
+        // Без него на машине без нужного тулчейна почти все проверки возвращали сбой, одна
+        // дешёвая проходила чисто, и вердикт получался зелёным с баллом 100. Осознанные
+        // пропуски (`checks_skipped`) вердикт по-прежнему не снимают: «нечего проверять» это
+        // законный результат. Любая последующая переклассификация обязана пересчитать
+        // `passed` снова, см. `escalate_unfinished`.
+        report.passed = report.blocking.is_empty() && report.tools_failed.is_empty();
         report.score = quality_score(&report, thresholds);
         report
             .metrics
@@ -240,8 +354,7 @@ impl GateRunner {
     pub fn escalate_unfinished(report: &mut GateReport) {
         // Источники незавершённого: ищем И в warning, И в advisories, так как дрейф доков теперь
         // низкоуверенный (совет), но на сдаче обязан эскалировать наравне с заглушками.
-        let is_unfinished =
-            |f: &Finding| UNFINISHED_SOURCES.contains(&f.source.as_str());
+        let is_unfinished = |f: &Finding| UNFINISHED_SOURCES.contains(&f.source.as_str());
         let (mut unfinished, warn_rest): (Vec<Finding>, Vec<Finding>) =
             std::mem::take(&mut report.warning)
                 .into_iter()
@@ -257,9 +370,10 @@ impl GateRunner {
             report.blocking.append(&mut unfinished);
         }
         // Пересчёт passed БЕЗУСЛОВНЫЙ (T38): даже при пустом unfinished фиксируем
-        // инвариант passed == blocking.is_empty(), чтобы будущие изменения порядка не
-        // оставили passed рассогласованным с blocking.
-        report.passed = report.blocking.is_empty();
+        // инвариант passed == blocking.is_empty() && tools_failed.is_empty(), тот же,
+        // что и в classify: сбой инструмента не равен чистому прогону, и строгий режим
+        // не вправе ослаблять этот инвариант.
+        report.passed = report.blocking.is_empty() && report.tools_failed.is_empty();
     }
 
     /// Эскалация недоделанного с проверкой охвата политики (T35). Делает то же, что
@@ -268,7 +382,10 @@ impl GateRunner {
     /// одно такое семейство исключено политикой (тогда эскалация по нему недостижима на
     /// детерминированных входах). Предупреждение нужно класть в вердикт, чтобы отключение
     /// строгости урезанными families не было молчаливым.
-    pub fn escalate_unfinished_checked(report: &mut GateReport, policy: &GatePolicy) -> Option<String> {
+    pub fn escalate_unfinished_checked(
+        report: &mut GateReport,
+        policy: &GatePolicy,
+    ) -> Option<String> {
         let warning = unfinished_coverage_warning(policy);
         Self::escalate_unfinished(report);
         warning
@@ -295,7 +412,10 @@ pub fn unfinished_coverage_warning(policy: &GatePolicy) -> Option<String> {
     }
     // Семейства, без которых соответствующий источник недоделанного не дойдёт до гейта.
     let required: &[(Family, &str)] = &[
-        (Family::Quality, "quality.check/completeness (заглушки/пустые блоки)"),
+        (
+            Family::Quality,
+            "quality.check/completeness (заглушки/пустые блоки)",
+        ),
         (Family::Spec, "spec.check/drift (дрейф документации)"),
         (Family::Verify, "verify/api-break (слом контракта API)"),
     ];
@@ -334,9 +454,8 @@ fn run_with_timeout(
     let (tx, rx) = mpsc::channel();
     let (ctx2, input2) = (ctx.clone(), input.clone());
     std::thread::spawn(move || {
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            cap.run(&ctx2, &input2)
-        }));
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cap.run(&ctx2, &input2)));
         // Получатель мог уже уйти по таймауту: ошибку отправки игнорируем.
         let _ = tx.send(outcome);
     });
@@ -396,6 +515,59 @@ mod tests {
         PolicyPack::default()
     }
 
+    /// РЕГРЕССИЯ. Сбой инструмента не имеет права выглядеть чистым прогоном. Прежде вердикт
+    /// вычислялся как `blocking.is_empty()`, а сбои лежали в `checks_skipped` и в вычислении
+    /// не участвовали: на машине без нужного тулчейна почти все проверки возвращали сбой,
+    /// одна дешёвая проходила чисто, и вердикт получался зелёным с баллом 100.
+    #[test]
+    fn сбой_инструмента_снимает_вердикт() {
+        let policy = GatePolicy {
+            block_at: Severity::High,
+            families: vec![],
+        };
+        let t = Thresholds::default();
+        let report = GateRunner::classify(
+            vec![],
+            vec!["quality.check/smell".into()],
+            vec![],
+            vec![("verify/test".into(), "не собирается: нет cargo".into())],
+            &policy,
+            &t,
+        );
+        assert!(report.blocking.is_empty(), "блокеров действительно нет");
+        assert!(
+            !report.passed,
+            "но вердикт не «чисто»: результата проверки нет, он неизвестен"
+        );
+    }
+
+    /// Обратная сторона того же инварианта: ОСОЗНАННЫЙ пропуск вердикт НЕ снимает.
+    /// Отсутствие мобильного кода не является причиной не выпускать серверный сервис,
+    /// иначе гейт становится непроходимым и его выключают.
+    #[test]
+    fn осознанный_пропуск_вердикт_не_снимает() {
+        let policy = GatePolicy {
+            block_at: Severity::High,
+            families: vec![],
+        };
+        let t = Thresholds::default();
+        let report = GateRunner::classify(
+            vec![],
+            vec!["quality.check/smell".into()],
+            vec![(
+                "security.scan/mobile-config".into(),
+                "нет мобильного проекта".into(),
+            )],
+            vec![],
+            &policy,
+            &t,
+        );
+        assert!(
+            report.passed,
+            "нечего проверять это законный результат, а не отсутствие результата"
+        );
+    }
+
     /// T38, защитно: passed пересчитывается безусловно и согласован с blocking даже при
     /// пустом множестве недоделанного.
     #[test]
@@ -407,8 +579,14 @@ mod tests {
         let t = Thresholds::default();
         // Один блокер, ничего недоделанного.
         let mut report = GateRunner::classify(
-            vec![finding(Severity::Critical, true, "aws-access-key", "security.scan/secret")],
+            vec![finding(
+                Severity::Critical,
+                true,
+                "aws-access-key",
+                "security.scan/secret",
+            )],
             vec!["security.scan/secret".into()],
+            vec![],
             vec![],
             &policy,
             &t,
@@ -427,14 +605,27 @@ mod tests {
         let mut findings = Vec::new();
         let mut run = Vec::new();
         let mut skipped = Vec::new();
+        let mut failed_tools = Vec::new();
 
         // Ran: находки уходят в общий список, проверка засчитана.
         let ran = CapabilityOutput {
             summary: "owasp: чисто".into(),
-            findings: vec![finding(Severity::High, true, "sql-injection", "security.scan/owasp")],
+            findings: vec![finding(
+                Severity::High,
+                true,
+                "sql-injection",
+                "security.scan/owasp",
+            )],
             ..Default::default()
         };
-        GateRunner::record_outcome("security.scan/owasp", &ran, &mut findings, &mut run, &mut skipped);
+        GateRunner::record_outcome(
+            "security.scan/owasp",
+            &ran,
+            &mut findings,
+            &mut run,
+            &mut skipped,
+            &mut failed_tools,
+        );
         assert_eq!(run, vec!["security.scan/owasp"]);
         assert_eq!(findings.len(), 1);
 
@@ -443,16 +634,31 @@ mod tests {
             skipped: Some("нет файла конституции".into()),
             ..Default::default()
         };
-        GateRunner::record_outcome("quality.check/constitution", &sk, &mut findings, &mut run, &mut skipped);
-        assert!(skipped.iter().any(|(id, r)| id == "quality.check/constitution"
-            && !r.contains("сбой инструмента")));
+        GateRunner::record_outcome(
+            "quality.check/constitution",
+            &sk,
+            &mut findings,
+            &mut run,
+            &mut skipped,
+            &mut failed_tools,
+        );
+        assert!(skipped
+            .iter()
+            .any(|(id, r)| id == "quality.check/constitution" && !r.contains("сбой инструмента")));
 
         // Failed: поломка инструмента распознана и помечена «сбой инструмента».
         let failed = CapabilityOutput {
             skipped: Some("verify/test: could not compile".into()),
             ..Default::default()
         };
-        GateRunner::record_outcome("verify/test", &failed, &mut findings, &mut run, &mut skipped);
+        GateRunner::record_outcome(
+            "verify/test",
+            &failed,
+            &mut findings,
+            &mut run,
+            &mut skipped,
+            &mut failed_tools,
+        );
         assert!(
             skipped
                 .iter()
@@ -477,7 +683,10 @@ mod tests {
         assert!(w.contains("spec.check/drift"), "дрейф доков назван: {w}");
         assert!(w.contains("verify/api-break"), "слом API назван: {w}");
         // Quality присутствует, поэтому completeness не в списке недостижимых.
-        assert!(!w.contains("quality.check/completeness"), "Quality на месте: {w}");
+        assert!(
+            !w.contains("quality.check/completeness"),
+            "Quality на месте: {w}"
+        );
     }
 
     /// T35, негатив: полная политика (Spec и Verify включены) предупреждения не даёт.
@@ -485,7 +694,12 @@ mod tests {
     fn unfinished_coverage_silent_when_families_complete() {
         let policy = GatePolicy {
             block_at: Severity::High,
-            families: vec![Family::Security, Family::Quality, Family::Spec, Family::Verify],
+            families: vec![
+                Family::Security,
+                Family::Quality,
+                Family::Spec,
+                Family::Verify,
+            ],
         };
         assert!(unfinished_coverage_warning(&policy).is_none());
         // Пустой families означает все семейства, поэтому тоже без предупреждения.
@@ -502,14 +716,20 @@ mod tests {
     fn escalate_checked_escalates_and_warns() {
         let t = Thresholds::default();
         let policy = GatePolicy {
-            block_at: Severity::Critical, // High не блокирует сам по себе
+            block_at: Severity::Critical,     // High не блокирует сам по себе
             families: vec![Family::Security], // Spec/Verify/Quality обрезаны
         };
         // Недоделанное (verify/api-break) пришло как сигнал-предупреждение.
-        let report_findings = vec![finding(Severity::High, true, "api-break", "verify/api-break")];
+        let report_findings = vec![finding(
+            Severity::High,
+            true,
+            "api-break",
+            "verify/api-break",
+        )];
         let mut report = GateRunner::classify(
             report_findings,
             vec!["verify/api-break".into()],
+            vec![],
             vec![],
             &policy,
             &t,
@@ -535,11 +755,19 @@ mod tests {
             ..Default::default()
         };
         let report = GateReport {
-            warning: vec![finding(Severity::High, true, "sql-injection", "security.scan/owasp")],
+            warning: vec![finding(
+                Severity::High,
+                true,
+                "sql-injection",
+                "security.scan/owasp",
+            )],
             ..Default::default()
         };
         let s = quality_score(&report, &t);
-        assert!(s <= 100.0, "балл не превышает 100 даже при отрицательном весе: {s}");
+        assert!(
+            s <= 100.0,
+            "балл не превышает 100 даже при отрицательном весе: {s}"
+        );
         assert_eq!(s, 100.0);
     }
 
@@ -548,7 +776,14 @@ mod tests {
     fn quality_score_clamped_to_0() {
         let t = Thresholds::default();
         let many: Vec<Finding> = (0..10)
-            .map(|_| finding(Severity::Critical, true, "aws-access-key", "security.scan/secret"))
+            .map(|_| {
+                finding(
+                    Severity::Critical,
+                    true,
+                    "aws-access-key",
+                    "security.scan/secret",
+                )
+            })
             .collect();
         let report = GateReport {
             blocking: many,
@@ -620,7 +855,10 @@ mod tests {
         let cap: std::sync::Arc<dyn crate::Capability> = std::sync::Arc::new(Hang);
         let err = run_with_timeout(cap, &ctx, &RunInput::default(), Duration::from_millis(50))
             .expect_err("зависший шаг обязан дать ошибку таймаута");
-        assert!(err.contains("лимит времени"), "ошибка называет таймаут: {err}");
+        assert!(
+            err.contains("лимит времени"),
+            "ошибка называет таймаут: {err}"
+        );
     }
 
     /// T38: run_with_pack использует ОДИН пакет для классификации и весов; явный прогон
@@ -641,6 +879,31 @@ mod tests {
                 .iter()
                 .any(|(id, _)| SECURITY_FLOOR_IDS.contains(&id.as_str())),
             "отсутствие глубокого SAST/taint должно быть видимым"
+        );
+    }
+
+    /// Явно исключённый пол безопасности не считается молчаливым пропуском: вызывающий
+    /// (путь DoD) исполняет его напрямую, и повторной пометки «не запускался» в гейте нет.
+    #[test]
+    fn excluded_floor_is_not_marked_as_silent_skip() {
+        use crate::registry::Registry;
+        let reg = Registry::new();
+        let ctx = Ctx::new(std::env::temp_dir());
+        let pack = def_pack();
+        let report = GateRunner::run_with_pack_excluding(
+            &reg,
+            &ctx,
+            &RunInput::default(),
+            &pack,
+            SECURITY_FLOOR_IDS,
+        );
+        assert!(
+            !report
+                .checks_skipped
+                .iter()
+                .any(|(id, _)| SECURITY_FLOOR_IDS.contains(&id.as_str())),
+            "исключённый пол безопасности исполняет вызывающий, гейт его не помечает: {:?}",
+            report.checks_skipped
         );
     }
 }

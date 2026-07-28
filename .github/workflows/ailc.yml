@@ -1,0 +1,16 @@
+# Сгенерировано ailc. Гейт качества/безопасности в CI.
+# ailc должен быть доступен (соберите из исходников или установите бинарь).
+name: ailc quality gate
+on: [push, pull_request]
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Definition of Done
+        run: ailc dod .
+      - name: SARIF → security tab
+        run: ailc sarif . > results.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
