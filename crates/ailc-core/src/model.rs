@@ -344,7 +344,7 @@ fn identity(ctx: &Ctx, gaps: &mut Vec<Gap>) -> Identity {
 
     // Rust: корневой Cargo.toml. Наследование через `workspace = true` разрешается тем,
     // что сведения о выпуске рабочего пространства лежат в этом же файле.
-    if let Some(text) = std::fs::read_to_string(root.join("Cargo.toml")).ok() {
+    if let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) {
         if let Ok(v) = text.parse::<toml::Value>() {
             let o = || Origin::declared("manifest.cargo", "Cargo.toml");
             for path in [["package", "name"], ["workspace", "package"]] {
@@ -651,7 +651,7 @@ fn structure(ctx: &Ctx, input: &RunInput) -> Result<Structure> {
     let syms = CodeIntelEngine::symbols(ctx, input)?;
 
     let mut s = Structure {
-        files: pmap.total_files as u32,
+        files: pmap.total_files,
         lines: pmap.total_lines as u64,
         ..Default::default()
     };

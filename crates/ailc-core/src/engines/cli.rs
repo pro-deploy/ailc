@@ -380,7 +380,7 @@ fn cli_res() -> &'static Vec<CliRe> {
 /// написание, начинающееся с дефиса (это ключ, а не команда), а также строки с символами
 /// пути и подстановки, которые обыкновенно означают шаблон, а не имя.
 fn normalize_command(raw: &str) -> Option<String> {
-    let first = raw.trim().split_whitespace().next()?;
+    let first = raw.split_whitespace().next()?;
     if first.is_empty() || first.starts_with('-') {
         return None;
     }

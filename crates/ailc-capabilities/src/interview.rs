@@ -132,9 +132,10 @@ impl Capability for Questions {
             return Ok(out);
         }
 
-        out.records.push(format!(
-            "КАК ОТВЕЧАТЬ: задай эти вопросы пользователю обычным языком, затем на каждый ответ вызови spec/answer с query вида {{\"id\":\"<идентификатор>\",\"value\":\"<ответ>\",\"source\":\"human\"}}. Если пользователь подтвердил черновик, укажи source \"confirmed\"."
-        ));
+        out.records.push(
+            "КАК ОТВЕЧАТЬ: задай эти вопросы пользователю обычным языком, затем на каждый ответ вызови spec/answer с query вида {\"id\":\"<идентификатор>\",\"value\":\"<ответ>\",\"source\":\"human\"}. Если пользователь подтвердил черновик, укажи source \"confirmed\"."
+                .to_string(),
+        );
         out.summary = format!(
             "spec/questions: закрыто {total_filled} из {total_required} обязательных разделов, задать вопросов сейчас: {asked}"
         );
