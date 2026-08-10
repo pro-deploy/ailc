@@ -1,8 +1,9 @@
-# ailc-osv-snapshot	generated_at=2026-08-03	count=59902
+# ailc-osv-snapshot	generated_at=2026-08-10	count=60332
 # поля: id	ecosystem	package	introduced	fixed	severity	summary
 # источник: официальные выгрузки OSV.dev, сборка tools/update-osv.py, записи о вредоносных пакетах (MAL-*) исключены
 CVE-2026-48491	Go	Traefik	3.7.0	3.7.3	HIGH	Traefik: SNICheck ignores wildcard TLSOptions mappings, allowing domain-fronted mTLS bypass
 CVE-2026-53622	Go	Traefik	0	3.7.3	HIGH	Traefik: HTTP/3 mTLS bypass via exact SNI TLSOptions lookup for wildcard and mixed-case hosts
+CVE-2026-65601	Go	Traefik	3.7.0	3.7.7	MEDIUM	Traefik Gateway API HTTPRoute BackendRef ExtensionRef Namespace Confusion
 CVE-2020-36559	Go	aahframe.work	0	0.12.4	HIGH	ahh vulnerable to Path Traversal
 CVE-2026-25804	Go	antrea.io/antrea	0	2.3.2	HIGH	Antrea has invalid enforcement order for network policy rules caused by integer overflow
 CVE-2026-25804	Go	antrea.io/antrea	2.4.0	2.4.3	HIGH	Antrea has invalid enforcement order for network policy rules caused by integer overflow
@@ -92,6 +93,7 @@ CVE-2026-28699	Go	code.gitea.io/gitea	0	1.26.2	HIGH	Gitea: OAuth2 access token s
 CVE-2026-28737	Go	code.gitea.io/gitea	1.25.0	1.26.0	HIGH	Gitea: Stored XSS via glTF `extensionsRequired` in Gitea 3D File Viewer
 CVE-2026-28740	Go	code.gitea.io/gitea	0	1.26.3	MEDIUM	Gitea: Git LFS object reuse allows non-Code access to authorize private source objects in code.gitea.io/gitea
 CVE-2026-28744	Go	code.gitea.io/gitea	0	1.26.2	HIGH	Gitea: Git Smart HTTP Skips Repository Token Scopes for Bearer Tokens
+CVE-2026-34966	Go	code.gitea.io/gitea	0	1.27.0	MEDIUM	Gitea: SSRF via Migration Asset Downloads Bypasses hostmatcher — Reads Internal Files and Cloud Metadata
 CVE-2026-42931	Go	code.gitea.io/gitea	0	1.27.0	MEDIUM	Gitea: Denial of Service via Unbounded io.ReadAll in NPM Package Tag Endpoint
 CVE-2026-50105	Go	code.gitea.io/gitea	0	1.27.0	MEDIUM	Gitea: RSS/Atom feed handlers bypass API-token scope & public-only confinement (incomplete fix of #37698)
 CVE-2026-54481	Go	code.gitea.io/gitea	0	1.27.0	HIGH	Gitea: Internal API HTTP client hardcodes InsecureSkipVerify:true with no config override
@@ -122,6 +124,7 @@ CVE-2026-58434	Go	code.gitea.io/gitea	0	1.27.0	LOW	Gitea: Private Repository Met
 CVE-2026-58435	Go	code.gitea.io/gitea	0	1.27.0	MEDIUM	Gitea LFS Deploy-Key Privilege Escalation
 CVE-2026-58436	Go	code.gitea.io/gitea	0	1.27.0	HIGH	Gitea: ParseAcceptLanguage quadratic-time DoS via Locale middleware on unauthenticated requests
 CVE-2026-58437	Go	code.gitea.io/gitea	0	1.27.0	HIGH	Gitea: Repository Visibility Manipulation via Git Push Options
+CVE-2026-58439	Go	code.gitea.io/gitea	0	1.27.0	HIGH	Gitea: Branch Protection Bypass via PR Retargeting Preserves Stale `official` Approval Flag
 CVE-2026-58441	Go	code.gitea.io/gitea	0	1.27.0	MEDIUM	Gitea: SSRF in restore-repo via unsanitized pull_request.yml Head.CloneURL
 CVE-2026-58442	Go	code.gitea.io/gitea	0	1.27.0	MEDIUM	Gitea: Repository migration SSRF via multi-answer DNS allow-list bypass
 CVE-2026-58443	Go	code.gitea.io/gitea	0	1.27.0	CRITICAL	Gitea: Public-only repository tokens can update private PR head branches
@@ -131,7 +134,6 @@ CVE-2026-58507	Go	code.gitea.io/gitea	0	1.27.0	MEDIUM	Gitea: Private Repository 
 CVE-2026-58510	Go	code.gitea.io/gitea	0	1.27.0	MEDIUM	Gitea: GHSA-8fwc-qjw5-rvgp ClearRepoWatches fix not applied to API EditRepo path — sister code path retains stale watch…
 CVE-2026-58511	Go	code.gitea.io/gitea	0	1.27.0	LOW	Gitea: Webhook Authorization Header Returned in Plaintext via API
 CVE-2026-59763	Go	code.gitea.io/gitea	0	1.27.0	MEDIUM	Gitea: Unbounded Arch package file metadata can cause resource amplification in Gitea package uploads
-CVE-2026-59765	Go	code.gitea.io/gitea	0	1.27.0	MEDIUM	Gitea: SSRF via Migration Asset Downloads Bypasses hostmatcher — Reads Internal Files and Cloud Metadata
 CVE-2026-59766	Go	code.gitea.io/gitea	0	1.27.0	MEDIUM	Gitea CVE-2026-20800 sibling endpoints not covered: revoked user still reads private repo objects via `/api/v1/user/sta…
 GHSA-3m6q-h5gj-7mrw	Go	code.gitea.io/gitea	0	1.25.0	MEDIUM	Gitea has insecure default SSH settings
 GHSA-rjvx-x5h2-6px5	Go	code.gitea.io/gitea	0	1.26.0	MEDIUM	Gitea: API Fork Endpoint Authorization Bypass Allows Organization Members to Bypass Repository Creation Restrictions
@@ -193,6 +195,7 @@ GHSA-x477-fq37-q5wr	Go	fortio.org/proxy	1.5.0	1.6.1	MEDIUM	Initial debug-host ha
 GO-2023-1524	Go	fortio.org/proxy	1.5.0	1.6.1	MEDIUM	Initial debug-host handler implementation could leak information and facilitate denial of service in fortio.org/proxy
 CVE-2026-23603	Go	gitea.dev	0	1.27.0	MEDIUM	Gitea: Blind SSRF in OAuth2 avatar synchronization via unvalidated OIDC picture claim in gitea.dev
 CVE-2026-28740	Go	gitea.dev	0	1.26.3	HIGH	Gitea: Git LFS object reuse allows non-Code access to authorize private source objects
+CVE-2026-34966	Go	gitea.dev	0	1.27.0	MEDIUM	Gitea: SSRF via Migration Asset Downloads Bypasses hostmatcher — Reads Internal Files and Cloud Metadata in gitea.dev
 CVE-2026-42931	Go	gitea.dev	0	1.27.0	MEDIUM	Gitea: Denial of Service via Unbounded io.ReadAll in NPM Package Tag Endpoint in gitea.dev
 CVE-2026-50105	Go	gitea.dev	0	1.27.0	MEDIUM	Gitea: RSS/Atom feed handlers bypass API-token scope & public-only confinement (incomplete fix of #37698) in gitea.dev
 CVE-2026-54481	Go	gitea.dev	0	1.27.0	MEDIUM	Gitea: Internal API HTTP client hardcodes InsecureSkipVerify:true with no config override in gitea.dev
@@ -232,7 +235,6 @@ CVE-2026-58507	Go	gitea.dev	0	1.27.0	MEDIUM	Gitea: Private Repository Existence 
 CVE-2026-58510	Go	gitea.dev	0	1.27.0	MEDIUM	Gitea: GHSA-8fwc-qjw5-rvgp ClearRepoWatches fix not applied to API EditRepo path — sister code path retains stale watch…
 CVE-2026-58511	Go	gitea.dev	0	1.27.0	MEDIUM	Gitea: Webhook Authorization Header Returned in Plaintext via API in gitea.dev
 CVE-2026-59763	Go	gitea.dev	0	1.27.0	MEDIUM	Gitea: Unbounded Arch package file metadata can cause resource amplification in Gitea package uploads in gitea.dev
-CVE-2026-59765	Go	gitea.dev	0	1.27.0	MEDIUM	Gitea: SSRF via Migration Asset Downloads Bypasses hostmatcher — Reads Internal Files and Cloud Metadata in gitea.dev
 CVE-2026-59766	Go	gitea.dev	0	1.27.0	MEDIUM	Gitea CVE-2026-20800 sibling endpoints not covered: revoked user still reads private repo objects via `/api/v1/user/sta…
 GHSA-x845-2f78-7v36	Go	github.com/0xERR0R/blocky	0.28.0	0.32.0	HIGH	Blocky DNSSEC validation bypass and validation-cache scope pollution
 GO-2026-5745	Go	github.com/0xERR0R/blocky	0.28.0	0.32.0	MEDIUM	Blocky DNSSEC validation bypass and validation-cache scope pollution in github.com/0xERR0R/blocky
@@ -2523,12 +2525,16 @@ CVE-2026-41506	Go	github.com/go-git/go-git/v5	0	5.18.0	MEDIUM	go-git: Credential
 CVE-2026-45022	Go	github.com/go-git/go-git/v5	0	5.19.0	HIGH	go-git's improper parsing of specially crafted objects may lead to inconsistent interpretation compared to upstream Git
 CVE-2026-45570	Go	github.com/go-git/go-git/v5	0	5.19.1	LOW	go-git: Improper single-quote escaping in go-git SSH transport
 CVE-2026-45571	Go	github.com/go-git/go-git/v5	0	5.19.1	MEDIUM	go-git: Crafted repositories may modify main and submodule .git directories
+CVE-2026-71556	Go	github.com/go-git/go-git/v5	0	5.19.2	HIGH	go-git: Worktree operations may follow symlinks
+CVE-2026-71557	Go	github.com/go-git/go-git/v5	0	5.19.2	MEDIUM	go-git: Malicious reference names may modify files outside the reference storage
 GHSA-w5pp-99ch-qj29	Go	github.com/go-git/go-git/v5	0	5.19.1	MEDIUM	go-git: Malformed Git object data may cause panics or resource exhaustion
 GO-2026-5693	Go	github.com/go-git/go-git/v5	0	5.19.1	MEDIUM	Go-git: Malformed Git object data may cause panics or resource exhaustion in github.com/go-git/go-git
 CVE-2026-41506	Go	github.com/go-git/go-git/v6	0	6.0.0-alpha.2	MEDIUM	go-git: Credential leak via cross-host redirect in smart HTTP transport
 CVE-2026-45022	Go	github.com/go-git/go-git/v6	6.0.0-alpha.1	6.0.0-alpha.3	HIGH	go-git's improper parsing of specially crafted objects may lead to inconsistent interpretation compared to upstream Git
 CVE-2026-45570	Go	github.com/go-git/go-git/v6	0	6.0.0-alpha.4	LOW	go-git: Improper single-quote escaping in go-git SSH transport
 CVE-2026-45571	Go	github.com/go-git/go-git/v6	0	6.0.0-alpha.4	MEDIUM	go-git: Crafted repositories may modify main and submodule .git directories
+CVE-2026-71556	Go	github.com/go-git/go-git/v6	0	6.0.0-alpha.5	HIGH	go-git: Worktree operations may follow symlinks
+CVE-2026-71557	Go	github.com/go-git/go-git/v6	0	6.0.0-alpha.5	MEDIUM	go-git: Malicious reference names may modify files outside the reference storage
 GHSA-w5pp-99ch-qj29	Go	github.com/go-git/go-git/v6	0	6.0.0-alpha.4	MEDIUM	go-git: Malformed Git object data may cause panics or resource exhaustion
 GO-2026-5693	Go	github.com/go-git/go-git/v6	0	6.0.0-alpha.4	MEDIUM	Go-git: Malformed Git object data may cause panics or resource exhaustion in github.com/go-git/go-git
 CVE-2018-1000803	Go	github.com/go-gitea/gitea	0	1.5.1	MEDIUM	Gitea Exposes Private Email Addresses
@@ -2605,6 +2611,7 @@ CVE-2025-54801	Go	github.com/gofiber/fiber/v2	0	2.52.9	HIGH	Fiber Crashes in Bod
 CVE-2025-66630	Go	github.com/gofiber/fiber/v2	0	2.52.11	CRITICAL	Fiber has an insecure fallback in utils.UUIDv4() / utils.UUID() — predictable / zero‑UUID on crypto/rand failure
 CVE-2026-25882	Go	github.com/gofiber/fiber/v2	0	2.52.12	MEDIUM	Fiber has a Denial of Service Vulnerability via Route Parameter Overflow
 CVE-2026-42554	Go	github.com/gofiber/fiber/v2	0	2.52.13	MEDIUM	Fiber vulnerable to XSS in AutoFormat Content Negotiation
+CVE-2026-45045	Go	github.com/gofiber/fiber/v2	0	2.52.14	MEDIUM	GoFiber Vulnerable to X-Real-IP Spoofing via Header.Add() in BalancerForward
 CVE-2024-38513	Go	github.com/gofiber/fiber/v2/middleware/session	0	2.52.5	CRITICAL	Session Middleware Token Injection Vulnerability
 CVE-2026-25882	Go	github.com/gofiber/fiber/v3	0	3.1.0	MEDIUM	Fiber has a Denial of Service Vulnerability via Route Parameter Overflow
 CVE-2026-25891	Go	github.com/gofiber/fiber/v3	0	3.1.0	HIGH	Fiber has an Arbitrary File Read in Static Middleware on Windows
@@ -6464,6 +6471,21 @@ CVE-2026-41176	Go	github.com/rclone/rclone	0	1.73.5	MEDIUM	Rclone: Unauthenticat
 CVE-2026-41176	Go	github.com/rclone/rclone	1.45.0	1.73.5	CRITICAL	Rclone: Unauthenticated options/set allows runtime auth bypass, leading to sensitive operations and command execution
 CVE-2026-41179	Go	github.com/rclone/rclone	1.48.0	1.73.5	CRITICAL	RClone: Unauthenticated operations/fsinfo allows attacker-controlled backend instantiation and local command execution
 CVE-2026-49980	Go	github.com/rclone/rclone	1.46.0	1.74.3	CRITICAL	Rclone: Unauthenticated command execution in `rclone rcd --rc-serve` via inline remote instantiation, bypassing CVE-202…
+CVE-2026-54572	Go	github.com/rclone/rclone	0	1.74.4	HIGH	rclone: Unvalidated symlink target in local `--links` — arbitrary file write from an untrusted remote
+CVE-2026-59732	Go	github.com/rclone/rclone	0	1.74.4	MEDIUM	rclone archive extract allows S3 destination prefix escape via crafted archive paths
+CVE-2026-59733	Go	github.com/rclone/rclone	0	1.74.4	HIGH	rclone `serve restic --private-repos` authorization bypass: `..` in the URL path lets an authenticated user read, overw…
+CVE-2026-71309	Go	github.com/rclone/rclone	1.40.0	1.75.0	HIGH	rclone: Incomplete path validation allows backend root escape in serve restic
+CVE-2026-71310	Go	github.com/rclone/rclone	0	1.75.0	MEDIUM	rclone: Unbounded HTTP CONNECT Response Headers Can Exhaust rclone Memory
+CVE-2026-71311	Go	github.com/rclone/rclone	0	1.75.0	MEDIUM	rclone: FTP Command Arguments Permit CRLF Injection When Custom Encoding Preserves Newlines
+CVE-2026-71312	Go	github.com/rclone/rclone	0	1.75.0	HIGH	rclone: PowerShell Smart-Quote Filename Injection Enables SFTP Server-Side Command Execution
+CVE-2026-71313	Go	github.com/rclone/rclone	1.51.0	1.75.0	MEDIUM	rclone: Local Encoding Path Traversal
+GHSA-3x6r-wxxg-53vv	Go	github.com/rclone/rclone	0	1.75.0	MEDIUM	rclone: Infinite Scale TUS Creation Transport Error Causes a Nil-Response Panic
+GHSA-8mxv-9xhp-86h4	Go	github.com/rclone/rclone	0	1.75.0	MEDIUM	rclone: S3 Redirect Sanitization Omits IBM IAM Bearer Tokens and SSE-C Keys
+GHSA-8v25-v8p6-qf7v	Go	github.com/rclone/rclone	0	1.74.4	MEDIUM	rclone: Path traversal in serve s3 allows reading and overwriting root-level files
+GHSA-945v-v9p3-v5xw	Go	github.com/rclone/rclone	0	1.74.4	LOW	rclone local `--metadata` applies attacker-controlled mode/uid - setuid binary planted from an untrusted remote
+GHSA-gwfq-86j8-7qhv	Go	github.com/rclone/rclone	0	1.75.0	LOW	rclone: Verbose Stack Trace Disclosure in RC API Error Responses
+GHSA-gx4c-2hqx-cw2r	Go	github.com/rclone/rclone	0	1.74.4	LOW	rclone: S3 backend does not strip X-Amz-Security-Token on a same-host HTTPS->HTTP redirect
+GHSA-h4mf-4v27-hggj	Go	github.com/rclone/rclone	0	1.75.0	MEDIUM	rclone: WebDAV Credentials Survive a Same-Host HTTPS-to-HTTP Redirect
 CVE-2024-13484	Go	github.com/redhat-developer/gitops-operator	0	1.16.2	HIGH	OpenShift GitOps Operator Namespace Isolation Break
 CVE-2025-13888	Go	github.com/redhat-developer/gitops-operator	0	1.16.2	CRITICAL	OpenShift GitOps authenticated attackers can obtain cluster root access through forged ArgoCD custom resources
 CVE-2025-29923	Go	github.com/redis/go-redis/v9	0	9.6.3	MEDIUM	Potential out of order responses when CLIENT SETINFO times out during connection establishment in github.com/redis/go-r…
@@ -6867,6 +6889,11 @@ CVE-2026-41181	Go	github.com/traefik/traefik/v2	0	2.11.44	MEDIUM	Traefik's error
 CVE-2026-41263	Go	github.com/traefik/traefik/v2	0	2.11.43	MEDIUM	Traefik: A timing side-channel vulnerability allows for valid username enumeration via BasicAuth middleware
 CVE-2026-44774	Go	github.com/traefik/traefik/v2	0	2.11.46	MEDIUM	Traefik: Gateway API TraefikService backend accepts rest@internal, allowing unauthorized exposure of the REST provider…
 CVE-2026-48020	Go	github.com/traefik/traefik/v2	0	2.11.48	HIGH	Traefik has a StripPrefix Route-Level Auth Bypass via Path Normalization
+CVE-2026-54763	Go	github.com/traefik/traefik/v2	0	2.11.51	HIGH	Traefik: Incomplete fix for CVE-2026-33433 + CVE-2026-39858 cross-cohort: headerField underscore-variant identity spoof…
+CVE-2026-54764	Go	github.com/traefik/traefik/v2	0	2.11.51	MEDIUM	Traefik: ForwardAuth middleware leaks X-Forwarded-Port spoofing via untrusted X-Forwarded-Proto when trustForwardHeader…
+CVE-2026-65600	Go	github.com/traefik/traefik/v2	0	2.11.52	CRITICAL	Traefik: Authentication Bypass via Path Traversal in ReplacePathRegex Middleware
+CVE-2026-71324	Go	github.com/traefik/traefik/v2	0	2.11.53	HIGH	Traefik: Cross-user response poisoning via proxied CONNECT on Traefik's shared backend keep-alive pool
+CVE-2026-71325	Go	github.com/traefik/traefik/v2	0	2.11.54	MEDIUM	Traefik: `allowCrossNamespace=false` bypass via `@kubernetescrd` TraefikService backendRef
 GHSA-3wqc-mwfx-672p	Go	github.com/traefik/traefik/v2	0	2.11.24	HIGH	Traefik affected by Go oauth2/jws Improper Validation of Syntactic Correctness of Input vulnerability
 GHSA-46wh-3698-f2cx	Go	github.com/traefik/traefik/v2	0	2.11.42	HIGH	Traefik: Deny Rule Bypass via Unauthenticated Malicious gRPC Requests in gRPC-Go Dependency (CVE-2026-33186)
 GHSA-4hjq-9h5c-252j	Go	github.com/traefik/traefik/v2	0	2.11.40	HIGH	Traefik: HTTP/2 frames can cause a running server to panic
@@ -6936,6 +6963,24 @@ CVE-2026-48020	Go	github.com/traefik/traefik/v3	3.7.0-ea.1	3.7.3	HIGH	Traefik ha
 CVE-2026-54761	Go	github.com/traefik/traefik/v3	0	3.6.21	MEDIUM	Traefik: Kubernetes Gateway crossProviderNamespaces bypass allows HTTPRoute outside the allowlist to expose internal Tr…
 CVE-2026-54761	Go	github.com/traefik/traefik/v3	3.7.0-ea.1	3.7.5	MEDIUM	Traefik: Kubernetes Gateway crossProviderNamespaces bypass allows HTTPRoute outside the allowlist to expose internal Tr…
 CVE-2026-54762	Go	github.com/traefik/traefik/v3	3.7.0-ea.1	3.7.5	MEDIUM	Traefik Kubernetes Ingress NGINX provider fails open when auth-secret resolution fails
+CVE-2026-54763	Go	github.com/traefik/traefik/v3	0	3.6.22	HIGH	Traefik: Incomplete fix for CVE-2026-33433 + CVE-2026-39858 cross-cohort: headerField underscore-variant identity spoof…
+CVE-2026-54763	Go	github.com/traefik/traefik/v3	3.7.0	3.7.6	HIGH	Traefik: Incomplete fix for CVE-2026-33433 + CVE-2026-39858 cross-cohort: headerField underscore-variant identity spoof…
+CVE-2026-54764	Go	github.com/traefik/traefik/v3	0	3.6.22	MEDIUM	Traefik: ForwardAuth middleware leaks X-Forwarded-Port spoofing via untrusted X-Forwarded-Proto when trustForwardHeader…
+CVE-2026-54764	Go	github.com/traefik/traefik/v3	3.7.0	3.7.6	MEDIUM	Traefik: ForwardAuth middleware leaks X-Forwarded-Port spoofing via untrusted X-Forwarded-Proto when trustForwardHeader…
+CVE-2026-54765	Go	github.com/traefik/traefik/v3	3.7.0	3.7.6	MEDIUM	Traefik: Gateway HTTPRoute backendRef filters can leak backend context across routes sharing a Service:port
+CVE-2026-65600	Go	github.com/traefik/traefik/v3	0	3.6.23	CRITICAL	Traefik: Authentication Bypass via Path Traversal in ReplacePathRegex Middleware
+CVE-2026-65600	Go	github.com/traefik/traefik/v3	3.7.0	3.7.7	CRITICAL	Traefik: Authentication Bypass via Path Traversal in ReplacePathRegex Middleware
+CVE-2026-65602	Go	github.com/traefik/traefik/v3	3.6.0	3.6.23	MEDIUM	Traefik CRD IngressRouteTCP ServersTransport Cross-Provider Namespace Bypass
+CVE-2026-65602	Go	github.com/traefik/traefik/v3	3.7.0	3.7.7	MEDIUM	Traefik CRD IngressRouteTCP ServersTransport Cross-Provider Namespace Bypass
+CVE-2026-67309	Go	github.com/traefik/traefik/v3	3.7.0	3.7.8	HIGH	Traefik: Kubernetes Ingress NGINX RewriteTarget Path Traversal Allows Route-Level Authentication Bypass
+CVE-2026-71324	Go	github.com/traefik/traefik/v3	0	3.6.24	HIGH	Traefik: Cross-user response poisoning via proxied CONNECT on Traefik's shared backend keep-alive pool
+CVE-2026-71324	Go	github.com/traefik/traefik/v3	3.7.0	3.7.9	HIGH	Traefik: Cross-user response poisoning via proxied CONNECT on Traefik's shared backend keep-alive pool
+CVE-2026-71325	Go	github.com/traefik/traefik/v3	3.0.0	3.6.25	MEDIUM	Traefik: `allowCrossNamespace=false` bypass via `@kubernetescrd` TraefikService backendRef
+CVE-2026-71325	Go	github.com/traefik/traefik/v3	3.7.0	3.7.10	MEDIUM	Traefik: `allowCrossNamespace=false` bypass via `@kubernetescrd` TraefikService backendRef
+CVE-2026-71326	Go	github.com/traefik/traefik/v3	3.6.11	3.6.25	LOW	Traefik: BasicAuth singleflight key collision allows authenticated identity spoofing
+CVE-2026-71326	Go	github.com/traefik/traefik/v3	3.7.0	3.7.10	LOW	Traefik: BasicAuth singleflight key collision allows authenticated identity spoofing
+CVE-2026-71327	Go	github.com/traefik/traefik/v3	3.0.0	3.6.25	HIGH	Traefik: Gateway API route identity collision allows cross-namespace backend hijacking
+CVE-2026-71327	Go	github.com/traefik/traefik/v3	3.7.0	3.7.10	HIGH	Traefik: Gateway API route identity collision allows cross-namespace backend hijacking
 GHSA-3wqc-mwfx-672p	Go	github.com/traefik/traefik/v3	0	3.3.6	HIGH	Traefik affected by Go oauth2/jws Improper Validation of Syntactic Correctness of Input vulnerability
 GHSA-3wqc-mwfx-672p	Go	github.com/traefik/traefik/v3	3.4.0-rc1	3.4.0-rc2	HIGH	Traefik affected by Go oauth2/jws Improper Validation of Syntactic Correctness of Input vulnerability
 GHSA-46wh-3698-f2cx	Go	github.com/traefik/traefik/v3	3.0.0-beta3	3.6.12	HIGH	Traefik: Deny Rule Bypass via Unauthenticated Malicious gRPC Requests in gRPC-Go Dependency (CVE-2026-33186)
@@ -7325,7 +7370,6 @@ CVE-2026-29193	Go	github.com/zitadel/zitadel/v2	4.0.0	4.12.1	HIGH	ZITADEL: Login
 CVE-2026-53487	Go	github.com/zxh326/kite	0	0.12.3	MEDIUM	Kite has an authenticated cluster RBAC bypass in /api/v1/overview
 GHSA-c534-2w9c-x7fm	Go	github.com/zxh326/kite	0.6.9	0.14.1	MEDIUM	Kite Kubernetes proxy path traversal allows authenticated users to bypass RBAC and read cluster-wide resources
 CVE-2026-45152	Go	gitlab.com/uniget-org/cli	0	0.27.1	HIGH	uniget is Vulnerable to Command Injection in tool.Check Leading to Arbitrary Code Execution
-CVE-2026-58439	Go	go-gitea/gitea	0	1.27.0	HIGH	Gitea: Branch Protection Bypass via PR Retargeting Preserves Stale `official` Approval Flag
 CVE-2021-22133	Go	go.elastic.co/apm	0	1.11.0	LOW	Information Disclosure in go.elastic.co/apm
 CVE-2018-1099	Go	go.etcd.io/etcd	0	3.4.0	MEDIUM	DNS Rebinding in etcd
 CVE-2018-16886	Go	go.etcd.io/etcd	0	0.5.0-alpha.5.0.20190108173120-83c051b701d3	HIGH	go.etcd.io/etcd Authentication Bypass
@@ -7951,7 +7995,7 @@ CVE-2026-4740	Go	open-cluster-management.io/ocm	0	1.2.1	HIGH	Open Cluster Manage
 CVE-2026-48978	Go	oras.land/oras-go/v2	0	2.6.1	LOW	oras-go: Malicious registry can hijack Bearer token realm to exfiltrate credentials and refresh tokens
 CVE-2026-50151	Go	oras.land/oras-go/v2	0	2.6.1	HIGH	oras-go blob upload vulnerable to credential forwarding via unvalidated Location header
 CVE-2026-50162	Go	oras.land/oras-go/v2	0	2.6.1	MEDIUM	oras-go has file store write outside workingDir via symlink traversal
-CVE-2026-50163	Go	oras.land/oras-go/v2	0	2.6.2	MEDIUM	Hardlink path traversal during tar extraction in oras.land/oras-go
+CVE-2026-50163	Go	oras.land/oras-go/v2	0	2.6.2	HIGH	`oras-go` tar extraction: Hardlink entry with relative Linkname escapes extract dir via process CWD resolution
 GHSA-vh4v-2xq2-g5cg	Go	oras.land/oras-go/v2	0	2.6.1	MEDIUM	ORAS Go forwards registry credentials across registry redirects
 GO-2026-5884	Go	oras.land/oras-go/v2	0	2.6.1	MEDIUM	ORAS Go forwards registry credentials across registry redirects in oras.land/oras-go
 CVE-2026-46415	Go	pkg.jsn.cam/caddy-defender	0	0.10.1	HIGH	Caddy Defender trusted proxy client IP bypass
@@ -8379,6 +8423,7 @@ CVE-2019-11287	Hex	RabbitMQ	3.8.0	3.8.1	HIGH	Pivotal RabbitMQ is vulnerable to a
 CVE-2024-25718	Hex	Samly	0	1.4.0	CRITICAL	Samly access control vulnerability
 CVE-2026-42793	Hex	absinthe	1.5.0	1.10.2	MEDIUM	Atom table exhaustion via attacker-controlled GraphQL SDL names in absinthe
 CVE-2026-43967	Hex	absinthe	1.2.0	1.10.2	MEDIUM	Quadratic fragment-name uniqueness check causes denial of service in absinthe
+CVE-2026-67585	Hex	absinthe_federation	0.1.0	0.9.3	MEDIUM	Atom Exhaustion via _entities Representation Keys in DivvyPayHQ absinthe_federation
 CVE-2026-42794	Hex	absinthe_plug	1.2.0	1.5.10	MEDIUM	Reflected XSS via backslash bypass in GraphiQL js_escape in absinthe_plug
 CVE-2017-1000212	Hex	alchemist.vim	0	1.3.2	CRITICAL	alchemist.vim vulnerable to remote code execution
 CVE-2025-68113	Hex	altcha	0	1.0.0	MEDIUM	ALTCHA Proof-of-Work Vulnerable to Challenge Splicing and Replay
@@ -8389,6 +8434,8 @@ CVE-2025-48043	Hex	ash	0.1.0	3.6.2	MEDIUM	Bypass and runtime policies that can n
 CVE-2025-48044	Hex	ash	3.6.3	3.7.1	MEDIUM	Authorization bypass when bypass policy condition evaluates to true
 CVE-2026-34593	Hex	ash	0	3.22.0	HIGH	Ash.Type.Module.cast_input/2 atom exhaustion via unchecked Module.concat allows BEAM VM crash
 CVE-2026-55736	Hex	ash	3.0.0	3.29.3	MEDIUM	Private action arguments can be set by user input in Ash
+CVE-2026-69659	Hex	ash	1.17.0	3.31.1	MEDIUM	Memory exhaustion via unbounded deserialization of keyset pagination cursors in Ash.Page.Keyset
+CVE-2026-70395	Hex	ash	1.52.0-rc.11	3.31.1	MEDIUM	Predicate injection in manage_relationship belongs_to lookup discloses secret lookup keys in Ash
 CVE-2025-25202	Hex	ash_authentication	4.1.0	4.4.9	MEDIUM	Ash Authentication has flawed token revocation checking logic in actions generated by `mix ash_authentication.install`
 CVE-2025-32782	Hex	ash_authentication	0	4.7.0	MEDIUM	ash_authentication has email link auto-click account confirmation vulnerability
 CVE-2026-49757	Hex	ash_authentication	0.1.0	4.14.0	MEDIUM	OAuth2/OIDC account takeover in AshAuthentication via email-based user matching
@@ -8460,9 +8507,24 @@ CVE-2019-1000013	Hex	hex_core	0	0.4.0	HIGH	Hex authenticity of signed packages n
 CVE-2026-21619	Hex	hex_core	0	0.12.1	LOW	hex_core has Unsafe Deserialization of Erlang Terms
 CVE-2026-21619	Hex	hex_core	0.1.0	0.12.1	MEDIUM	Unsafe Deserialization of Erlang Terms in hex_core
 CVE-2026-58226	Hex	hpax	0.1.1	1.0.4	MEDIUM	Unauthenticated denial-of-service via unbounded HPACK integer decoding in hpax
+CVE-2026-66370	Hex	html_sanitize_ex	0.3.1	1.5.3	MEDIUM	html_sanitize_ex HTML5 scrubber keeps attacker-supplied form-association attributes, allowing form hijacking
+CVE-2026-66829	Hex	html_sanitize_ex	0.3.1	1.5.3	MEDIUM	html_sanitize_ex HTML5 scrubber keeps attacker-supplied meta refresh, allowing forced cross-origin redirection
+CVE-2026-66843	Hex	html_sanitize_ex	0.3.1	1.5.3	MEDIUM	html_sanitize_ex HTML5 scrubber keeps attacker-supplied `<object>` elements, allowing untrusted content embedding
+CVE-2026-68747	Hex	html_sanitize_ex	0.3.1	1.5.4	MEDIUM	CSS sanitizer allowlist bypass in html_sanitize_ex via non-declaration input
+CVE-2026-68749	Hex	html_sanitize_ex	0.3.1	1.5.3	MEDIUM	Quadratic regex backtracking in the html_sanitize_ex CSS scrubber allows CPU-exhaustion denial of service
+CVE-2026-68750	Hex	html_sanitize_ex	0.3.1	1.5.3	MEDIUM	Quadratic sibling re-flattening in the html_sanitize_ex traversal engine allows CPU-exhaustion denial of service
 CVE-2023-50966	Hex	jose	0	1.11.7	MEDIUM	erlang-jose vulnerable to denial of service via large p2c value
 CVE-2023-35174	Hex	livebook	0.8.0	0.8.2	HIGH	Livebook Desktop's protocol handler can be exploited to execute arbitrary command on Windows
 CVE-2023-35174	Hex	livebook	0.9.0	0.9.3	HIGH	Livebook Desktop's protocol handler can be exploited to execute arbitrary command on Windows
+CVE-2026-66297	Hex	livebook	0.13.0	0.18.7	MEDIUM	Unescaped deployment environment variables in generated setup commands
+CVE-2026-66297	Hex	livebook	0.19.0	0.19.9	MEDIUM	Unescaped deployment environment variables in generated setup commands
+CVE-2026-66298	Hex	livebook	0.19.0	0.19.9	MEDIUM	JS-view sandboxed output can synthesize keyboard events to trigger unconfirmed global shortcuts
+CVE-2026-66298	Hex	livebook	0.5.0	0.18.7	MEDIUM	JS-view sandboxed output can synthesize keyboard events to trigger unconfirmed global shortcuts
+CVE-2026-66881	Hex	livebook	0.11.0	0.18.7	MEDIUM	Path traversal in imported file_entries name allows arbitrary file write via URL-type entry download
+CVE-2026-66881	Hex	livebook	0.19.0	0.19.9	MEDIUM	Path traversal in imported file_entries name allows arbitrary file write via URL-type entry download
+CVE-2026-66885	Hex	livebook	0.15.0	0.18.7	MEDIUM	Livebook Teams identity callback lacks state binding, allowing login CSRF
+CVE-2026-66885	Hex	livebook	0.19.0	0.19.9	MEDIUM	Livebook Teams identity callback lacks state binding, allowing login CSRF
+CVE-2026-68746	Hex	livebook	0.19.7	0.19.9	MEDIUM	Livebook Teams identity check fails open when the deployment group is unresolvable, allowing unauthenticated access
 CVE-2026-53426	Hex	mdex	0.4.3	0.13.2	MEDIUM	Atom-table exhaustion denial-of-service via JSON parse_document in MDEx
 CVE-2026-53427	Hex	mdex	0.11.3	0.12.3	MEDIUM	Cross-site scripting in MDEx via unescaped highlight_lines_class code-fence attribute
 CVE-2026-53428	Hex	mdex	0.11.0	0.12.3	MEDIUM	Unbounded memory allocation in highlight_lines range expansion in mdex
@@ -8489,11 +8551,14 @@ CVE-2026-59252	Hex	mpp	0.2.0	0.6.0	MEDIUM	Missing gas_limit validation in mpp Te
 CVE-2026-59694	Hex	mpp	0.2.0	0.6.0	MEDIUM	Unbounded access list in mpp Tempo fee-payer inflates gas cost per payment
 CVE-2026-59695	Hex	mpp	0.2.0	0.6.0	MEDIUM	Unbounded max_fee_per_gas in mpp Tempo fee-payer enables single-request wallet drain
 CVE-2026-33872	Hex	nodejs	0	3.1.4	HIGH	elixir-nodejs has Cross-User Data Leakage or Information Disclosure due to Worker Protocol Race Condition
+CVE-2026-66296	Hex	oaskit	0.1.0	0.14.1	MEDIUM	Reflected XSS in oaskit's default HTML error handler
 CVE-2026-48592	Hex	oban_web	2.12.0	2.12.5	MEDIUM	Missing authorization check on save-job event handler in oban_web
 CVE-2026-48593	Hex	oban_web	2.12.0	2.12.5	MEDIUM	Unbounded range expansion in cron describe causes memory exhaustion in oban_web
 CVE-2024-31209	Hex	oidcc	3.0.0	3.0.2	MEDIUM	OpenID Connect client Atom Exhaustion in provider configuration worker ets table location
 CVE-2024-31209	Hex	oidcc	3.1.0	3.1.2	MEDIUM	OpenID Connect client Atom Exhaustion in provider configuration worker ets table location
 CVE-2024-31209	Hex	oidcc	3.2.0-beta.1	3.2.0-beta.3	MEDIUM	OpenID Connect client Atom Exhaustion in provider configuration worker ets table location
+CVE-2026-66883	Hex	oidcc_plug	0.1.0-alpha.3	0.5.0	MEDIUM	Oidcc.Plug.Authorize user agent session binding inert due to case-sensitive header lookup
+CVE-2026-66884	Hex	oidcc_plug	0.2.0-beta.1	0.5.0	MEDIUM	Oidcc.Plug.AuthorizationCallback accepts callbacks with no authorize session or no state parameter, defeating CSRF prot…
 CVE-2020-15150	Hex	paginator	0	1.0.0	CRITICAL	Remote Code Execution in paginator
 CVE-2017-1000163	Hex	phoenix	0	1.0.6	MEDIUM	Phoenix Arbitrary URL Redirect
 CVE-2017-1000163	Hex	phoenix	1.1.0	1.1.8	MEDIUM	Phoenix Arbitrary URL Redirect
@@ -8551,6 +8616,7 @@ CVE-2026-8468	Hex	plug	1.4.0	1.15.4	MEDIUM	Unbounded buffer accumulation in mult
 CVE-2026-32688	Hex	plug_cowboy	2.0.0	2.8.1	MEDIUM	Atom table exhaustion via HTTP/2 :scheme pseudo-header in plug_cowboy
 CVE-2026-32687	Hex	postgrex	0.16.0	0.22.2	MEDIUM	SQL injection via channel name in Postgrex.Notifications.listen/3 and unlisten/3
 CVE-2026-58225	Hex	postgrex	0.16.0	0.22.3	MEDIUM	SQL injection via unescaped dollar-quote in Postgrex.Notifications reconnect replay causes notification denial of servi…
+CVE-2026-66838	Hex	postgrex	0.19.3	0.22.4	MEDIUM	SQL injection via the :comment option in Postgrex.stream/4
 CVE-2020-5205	Hex	pow	0	1.0.16	MEDIUM	Session fixation
 CVE-2023-42446	Hex	pow	1.0.14	1.0.34	MEDIUM	Pow Mnesia cache doesn't invalidate all expired keys on startup
 CVE-2019-16764	Hex	pow_assent	0	0.4.4	MEDIUM	Denial of service
@@ -8788,7 +8854,7 @@ CVE-2026-54076	Maven	com.arcadedb:arcadedb-engine	0	26.6.1	HIGH	ArcadeDB: Read-o
 CVE-2026-54077	Maven	com.arcadedb:arcadedb-engine	0	26.6.1	HIGH	ArcadeDB: IMPORT DATABASE allows SSRF and arbitrary local file read by authenticated users
 CVE-2026-67340	Maven	com.arcadedb:arcadedb-engine	0	26.7.2	HIGH	ArcadeDB: Trigger scripts run with java.lang.* allowed, enabling OS command execution (RCE)
 CVE-2026-67341	Maven	com.arcadedb:arcadedb-engine	0	26.7.2	HIGH	ArcadeDB: Scripting authorization gate (GHSA-48qw-824m-86pr) bypassed via SQL DEFINE FUNCTION ... LANGUAGE js
-CVE-2026-44221	Maven	com.arcadedb:arcadedb-server	0	26.4.2	CRITICAL	ArcadeDB vulnerable to cross-database authorization bypass and unsecured newly-created databases
+CVE-2026-44221	Maven	com.arcadedb:arcadedb-server	21.10.1	26.4.2	CRITICAL	ArcadeDB vulnerable to cross-database authorization bypass and unsecured newly-created databases
 CVE-2026-67342	Maven	com.arcadedb:arcadedb-server	0	26.7.2	HIGH	ArcadeDB has cross-database IDOR: /ts/*, /batch/*, Prometheus and Grafana handlers bypass authorization
 GHSA-48qw-824m-86pr	Maven	com.arcadedb:arcadedb-server	0	26.7.1	HIGH	ArcadeDB: Privilege escalation via reader role in /api/v1/command JS scripting language — arbitrary host file read
 CVE-2021-26077	Maven	com.atlassian.connect:atlassian-connect-spring-boot	1.1.0	2.1.3	HIGH	Improper Authentication in Atlassian Connect Spring Boot
@@ -8894,11 +8960,10 @@ CVE-2023-35925	Maven	com.fastasyncworldedit:FastAsyncWorldEdit-Bukkit	0	2.6.3	ME
 CVE-2023-35925	Maven	com.fastasyncworldedit:FastAsyncWorldEdit-Core	0	2.6.3	MEDIUM	FastAsyncWorldEdit vulnerable to Uncontrolled Resource Consumption
 CVE-2025-49128	Maven	com.fasterxml.jackson.core:jackson-core	2.0.0	2.13.0	MEDIUM	Jackson-core Vulnerable to Memory Disclosure via Source Snippet in JsonLocation
 CVE-2025-52999	Maven	com.fasterxml.jackson.core:jackson-core	0	2.15.0	HIGH	jackson-core can throw a StackoverflowError when processing deeply nested data
-GHSA-72hv-8253-57qq	Maven	com.fasterxml.jackson.core:jackson-core	2.0.0	2.18.6	MEDIUM	jackson-core: Number Length Constraint Bypass in Async Parser Leads to Potential DoS Condition
-GHSA-72hv-8253-57qq	Maven	com.fasterxml.jackson.core:jackson-core	2.19.0	2.21.1	MEDIUM	jackson-core: Number Length Constraint Bypass in Async Parser Leads to Potential DoS Condition
+CVE-2026-18401	Maven	com.fasterxml.jackson.core:jackson-core	2.15.0	2.18.6	MEDIUM	jackson-core: Number Length Constraint Bypass in Async Parser Leads to Potential DoS Condition
+CVE-2026-18401	Maven	com.fasterxml.jackson.core:jackson-core	2.19.0	2.21.1	MEDIUM	jackson-core: Number Length Constraint Bypass in Async Parser Leads to Potential DoS Condition
 GHSA-r7wm-3cxj-wff9	Maven	com.fasterxml.jackson.core:jackson-core	0	2.18.8	HIGH	jackson-core: Async parser maxNumberLength bypass via chunked digit accumulation (incomplete fix for GHSA-72hv-8253-57q…
 GHSA-r7wm-3cxj-wff9	Maven	com.fasterxml.jackson.core:jackson-core	2.19.0	2.21.4	HIGH	jackson-core: Async parser maxNumberLength bypass via chunked digit accumulation (incomplete fix for GHSA-72hv-8253-57q…
-GHSA-r7wm-3cxj-wff9	Maven	com.fasterxml.jackson.core:jackson-core	2.22.0	2.22.1	HIGH	jackson-core: Async parser maxNumberLength bypass via chunked digit accumulation (incomplete fix for GHSA-72hv-8253-57q…
 CVE-2017-15095	Maven	com.fasterxml.jackson.core:jackson-databind	2.0.0	2.6.7.3	CRITICAL	jackson-databind vulnerable to deserialization flaw leading to unauthenticated remote code execution
 CVE-2017-15095	Maven	com.fasterxml.jackson.core:jackson-databind	2.7.0	2.7.9.2	CRITICAL	jackson-databind vulnerable to deserialization flaw leading to unauthenticated remote code execution
 CVE-2017-15095	Maven	com.fasterxml.jackson.core:jackson-databind	2.8.0	2.8.11	CRITICAL	jackson-databind vulnerable to deserialization flaw leading to unauthenticated remote code execution
@@ -9076,9 +9141,9 @@ CVE-2026-54517	Maven	com.fasterxml.jackson.core:jackson-databind	3.0.0	3.1.4	MED
 CVE-2026-54518	Maven	com.fasterxml.jackson.core:jackson-databind	2.21.0	2.21.4	MEDIUM	jackson-databind has a @JsonView bypass for unwrapped creator parameters
 CVE-2026-59888	Maven	com.fasterxml.jackson.core:jackson-databind	2.15.0	2.18.8	MEDIUM	jackson-databind: @JsonIgnore on a Record property is bypassed with a PropertyNamingStrategy
 CVE-2026-59888	Maven	com.fasterxml.jackson.core:jackson-databind	2.19.0	2.21.4	MEDIUM	jackson-databind: @JsonIgnore on a Record property is bypassed with a PropertyNamingStrategy
-CVE-2026-59889	Maven	com.fasterxml.jackson.core:jackson-databind	2.18.0	2.18.9	MEDIUM	jackson-databind: @JsonView ypassed for @JsonUnwrapped container properties on deserialization
-CVE-2026-59889	Maven	com.fasterxml.jackson.core:jackson-databind	2.21.0	2.21.5	MEDIUM	jackson-databind: @JsonView ypassed for @JsonUnwrapped container properties on deserialization
-CVE-2026-59889	Maven	com.fasterxml.jackson.core:jackson-databind	2.22.0	2.22.1	MEDIUM	jackson-databind: @JsonView ypassed for @JsonUnwrapped container properties on deserialization
+CVE-2026-59889	Maven	com.fasterxml.jackson.core:jackson-databind	2.18.0	2.18.9	MEDIUM	jackson-databind: @JsonView bypassed for @JsonUnwrapped container properties on deserialization
+CVE-2026-59889	Maven	com.fasterxml.jackson.core:jackson-databind	2.21.0	2.21.5	MEDIUM	jackson-databind: @JsonView bypassed for @JsonUnwrapped container properties on deserialization
+CVE-2026-59889	Maven	com.fasterxml.jackson.core:jackson-databind	2.22.0	2.22.1	MEDIUM	jackson-databind: @JsonView bypassed for @JsonUnwrapped container properties on deserialization
 GHSA-mhm7-754m-9p8w	Maven	com.fasterxml.jackson.core:jackson-databind	2.18.0	2.18.9	MEDIUM	jackson-databind: `@JsonView` bypass for creator properties with `@JsonTypeInfo(include=As.EXTERNAL_PROPERTY)`
 GHSA-mhm7-754m-9p8w	Maven	com.fasterxml.jackson.core:jackson-databind	2.21.0	2.21.5	MEDIUM	jackson-databind: `@JsonView` bypass for creator properties with `@JsonTypeInfo(include=As.EXTERNAL_PROPERTY)`
 CVE-2020-28491	Maven	com.fasterxml.jackson.dataformat:jackson-dataformat-cbor	2.12.0rc1	2.12.1	HIGH	Denial of Service (DoS) in Jackson Dataformat CBOR
@@ -10024,6 +10089,8 @@ CVE-2018-1000850	Maven	com.squareup.retrofit2:retrofit	2.0.0	2.5.0	HIGH	Director
 CVE-2024-58103	Maven	com.squareup.wire:wire-runtime	0	5.2.0	MEDIUM	Wire has Uncontrolled Recursion on Nested Groups
 CVE-2026-45799	Maven	com.squareup.wire:wire-runtime	0	6.3.0	HIGH	Wire: skipGroup() missing negative-length check allows 10-byte payload to crash any Wire-decoding service
 CVE-2026-45799	Maven	com.squareup.wire:wire-runtime	7.0.0-alpha01	7.0.0-alpha03	HIGH	Wire: skipGroup() missing negative-length check allows 10-byte payload to crash any Wire-decoding service
+CVE-2026-45799	Maven	com.squareup.wire:wire-runtime-jvm	0	6.3.0	HIGH	Wire: skipGroup() missing negative-length check allows 10-byte payload to crash any Wire-decoding service
+CVE-2026-45799	Maven	com.squareup.wire:wire-runtime-jvm	7.0.0-alpha01	7.0.0-alpha03	HIGH	Wire: skipGroup() missing negative-length check allows 10-byte payload to crash any Wire-decoding service
 CVE-2021-43570	Maven	com.starkbank.ellipticcurve:starkbank-ecdsa	0	1.0.1	CRITICAL	Improper Verification of Cryptographic Signature in starkbank-ecdsa
 GHSA-9wx7-jrvc-28mm	Maven	com.starkbank:ecdsa-java	1.0.0	1.0.1	HIGH	Signature verification vulnerability in Stark Bank ecdsa libraries
 CVE-2021-28170	Maven	com.sun.el:el-ri	0	3.0.4	MEDIUM	Improper Input Validation in Jakarta Expression Language
@@ -10613,6 +10680,14 @@ CVE-2020-8570	Maven	io.kubernetes:client-java	0	9.0.2	HIGH	Path Traversal in the
 CVE-2020-8570	Maven	io.kubernetes:client-java	10.0.0	10.0.1	HIGH	Path Traversal in the Java Kubernetes Client
 CVE-2021-25738	Maven	io.kubernetes:client-java	0	11.0.1	MEDIUM	Code injection in Kubernetes Java Client
 CVE-2022-46178	Maven	io.metersphere:metersphere	0	2.5.1	HIGH	Path Traversal In MeterSpere leads to upload file to any path
+CVE-2026-40983	Maven	io.micrometer:micrometer-core	1.15.0	1.15.12	HIGH	Micrometer gRPC server instrumentation DoS
+CVE-2026-40983	Maven	io.micrometer:micrometer-core	1.16.0	1.16.6	HIGH	Micrometer gRPC server instrumentation DoS
+CVE-2026-40984	Maven	io.micrometer:micrometer-core	1.15.0	1.15.12	HIGH	Micrometer HTTP server instrumentations DoS
+CVE-2026-40984	Maven	io.micrometer:micrometer-core	1.16.0	1.16.6	HIGH	Micrometer HTTP server instrumentations DoS
+CVE-2026-40984	Maven	io.micrometer:micrometer-jetty11	1.15.0	1.15.12	HIGH	Micrometer HTTP server instrumentations DoS
+CVE-2026-40984	Maven	io.micrometer:micrometer-jetty11	1.16.0	1.16.6	HIGH	Micrometer HTTP server instrumentations DoS
+CVE-2026-40984	Maven	io.micrometer:micrometer-jetty12	1.15.0	1.15.12	HIGH	Micrometer HTTP server instrumentations DoS
+CVE-2026-40984	Maven	io.micrometer:micrometer-jetty12	1.16.0	1.16.6	HIGH	Micrometer HTTP server instrumentations DoS
 CVE-2023-36820	Maven	io.micronaut.security:micronaut-security-oauth2	3.1.0	3.1.2	MEDIUM	io.micronaut.security:micronaut-security-oauth2 has invalid IdTokenClaimsValidator logic on aud
 CVE-2023-36820	Maven	io.micronaut.security:micronaut-security-oauth2	3.10.0	3.10.2	MEDIUM	io.micronaut.security:micronaut-security-oauth2 has invalid IdTokenClaimsValidator logic on aud
 CVE-2023-36820	Maven	io.micronaut.security:micronaut-security-oauth2	3.11.0	3.11.1	MEDIUM	io.micronaut.security:micronaut-security-oauth2 has invalid IdTokenClaimsValidator logic on aud
@@ -10765,6 +10840,8 @@ CVE-2026-48006	Maven	io.netty:netty-codec-redis	0	4.1.135.Final	HIGH	Netty's Lac
 CVE-2026-48006	Maven	io.netty:netty-codec-redis	4.2.0.Final	4.2.15.Final	HIGH	Netty's Lack of Lifecycle Cleanup Leads to Pooled ByteBuf Leak in RedisArrayAggregator
 CVE-2026-50011	Maven	io.netty:netty-codec-redis	0	4.1.135.Final	HIGH	Netty: Unbounded pre-allocation in RedisArrayAggregator from RESP array length
 CVE-2026-50011	Maven	io.netty:netty-codec-redis	4.2.0.Final	4.2.15.Final	HIGH	Netty: Unbounded pre-allocation in RedisArrayAggregator from RESP array length
+CVE-2026-56818	Maven	io.netty:netty-codec-redis	0	4.1.136.Final	MEDIUM	Netty: RedisArrayAggregator max-elements failure leaves retained partial aggregate state
+CVE-2026-56818	Maven	io.netty:netty-codec-redis	4.2.0-Final	4.2.16.Final	MEDIUM	Netty: RedisArrayAggregator max-elements failure leaves retained partial aggregate state
 CVE-2025-59419	Maven	io.netty:netty-codec-smtp	0	4.1.128.Final	HIGH	Netty has SMTP Command Injection Vulnerability that Allows Email Forgery
 CVE-2025-59419	Maven	io.netty:netty-codec-smtp	4.2.0.Alpha1	4.2.7.Final	HIGH	Netty has SMTP Command Injection Vulnerability that Allows Email Forgery
 CVE-2026-44891	Maven	io.netty:netty-codec-stomp	0	4.1.136.Final	HIGH	Netty: Denial of Service via Unbounded Headers in StompSubframeDecoder
@@ -10949,12 +11026,12 @@ CVE-2026-32613	Maven	io.spinnaker.echo:echo-pipelinetriggers	2026.0-0	2026.0.1	C
 CVE-2026-25534	Maven	io.spinnaker.orca:orca-core	0	2025.2.4	CRITICAL	Spinnaker clouddriver and orca URL validation bypass via underscores in hostnames
 CVE-2026-25534	Maven	io.spinnaker.orca:orca-core	2025.3.0	2025.3.1	CRITICAL	Spinnaker clouddriver and orca URL validation bypass via underscores in hostnames
 CVE-2026-25534	Maven	io.spinnaker.orca:orca-core	2025.4.0	2025.4.1	CRITICAL	Spinnaker clouddriver and orca URL validation bypass via underscores in hostnames
-CVE-2026-44795	Maven	io.spinnaker.orca:orca-core	0	2025.3.3	HIGH	Spinnaker has uon-safe yaml deserialization, allowing RCE when using specific types
-CVE-2026-44795	Maven	io.spinnaker.orca:orca-core	2025.4.0	2025.4.4	HIGH	Spinnaker has uon-safe yaml deserialization, allowing RCE when using specific types
-CVE-2026-44795	Maven	io.spinnaker.orca:orca-core	2026.0.0	2026.0.3	HIGH	Spinnaker has uon-safe yaml deserialization, allowing RCE when using specific types
-CVE-2026-44795	Maven	io.spinnaker.rosco:rosco-core	0	2025.3.3	HIGH	Spinnaker has uon-safe yaml deserialization, allowing RCE when using specific types
-CVE-2026-44795	Maven	io.spinnaker.rosco:rosco-core	2025.4.0	2025.4.4	HIGH	Spinnaker has uon-safe yaml deserialization, allowing RCE when using specific types
-CVE-2026-44795	Maven	io.spinnaker.rosco:rosco-core	2026.0.0	2026.0.3	HIGH	Spinnaker has uon-safe yaml deserialization, allowing RCE when using specific types
+CVE-2026-44795	Maven	io.spinnaker.orca:orca-core	0	2025.3.3	HIGH	Spinnaker has non-safe yaml deserialization, allowing RCE when using specific types
+CVE-2026-44795	Maven	io.spinnaker.orca:orca-core	2025.4.0	2025.4.4	HIGH	Spinnaker has non-safe yaml deserialization, allowing RCE when using specific types
+CVE-2026-44795	Maven	io.spinnaker.orca:orca-core	2026.0.0	2026.0.3	HIGH	Spinnaker has non-safe yaml deserialization, allowing RCE when using specific types
+CVE-2026-44795	Maven	io.spinnaker.rosco:rosco-core	0	2025.3.3	HIGH	Spinnaker has non-safe yaml deserialization, allowing RCE when using specific types
+CVE-2026-44795	Maven	io.spinnaker.rosco:rosco-core	2025.4.0	2025.4.4	HIGH	Spinnaker has non-safe yaml deserialization, allowing RCE when using specific types
+CVE-2026-44795	Maven	io.spinnaker.rosco:rosco-core	2026.0.0	2026.0.3	HIGH	Spinnaker has non-safe yaml deserialization, allowing RCE when using specific types
 CVE-2018-18853	Maven	io.spray:spray-json_2.10	0	1.3.5	HIGH	Uncontrolled Resource Consumption in spray-json when parsing decimal digit fields
 CVE-2018-18854	Maven	io.spray:spray-json_2.10	0	1.3.5	HIGH	Uncontrolled Resource Consumption in spray-json
 CVE-2018-18855	Maven	io.spray:spray-json_2.10	0	1.3.5	MEDIUM	Uncontrolled Resource Consumption in Spray JSON
@@ -11706,6 +11783,8 @@ CVE-2025-48795	Maven	org.apache.cxf:cxf-core	0	3.5.11	MEDIUM	Apache CXF is vulne
 CVE-2025-48795	Maven	org.apache.cxf:cxf-core	3.6.0	3.6.6	MEDIUM	Apache CXF is vulnerable to DoS attacks as entire files are read into memory and logged
 CVE-2025-48795	Maven	org.apache.cxf:cxf-core	4.0.0	4.0.7	MEDIUM	Apache CXF is vulnerable to DoS attacks as entire files are read into memory and logged
 CVE-2025-48795	Maven	org.apache.cxf:cxf-core	4.1.0	4.1.1	MEDIUM	Apache CXF is vulnerable to DoS attacks as entire files are read into memory and logged
+CVE-2026-50645	Maven	org.apache.cxf:cxf-core	0	4.1.7	HIGH	Apache cxf-core: No restriction on attachment headers per message
+CVE-2026-50645	Maven	org.apache.cxf:cxf-core	4.2.0	4.2.2	HIGH	Apache cxf-core: No restriction on attachment headers per message
 CVE-2024-28752	Maven	org.apache.cxf:cxf-rt-databinding-aegis	0	3.5.8	CRITICAL	SSRF vulnerability using the Aegis DataBinding in Apache CXF
 CVE-2024-28752	Maven	org.apache.cxf:cxf-rt-databinding-aegis	3.6.0	3.6.3	CRITICAL	SSRF vulnerability using the Aegis DataBinding in Apache CXF
 CVE-2024-28752	Maven	org.apache.cxf:cxf-rt-databinding-aegis	4.0.0	4.0.4	CRITICAL	SSRF vulnerability using the Aegis DataBinding in Apache CXF
@@ -16681,6 +16760,7 @@ CVE-2023-5072	Maven	org.json:json	0	20231013	HIGH	Java: DoS Vulnerability in JSO
 CVE-2015-6748	Maven	org.jsoup:jsoup	1.6.0	1.8.3	MEDIUM	Improper Neutralization of Input During Web Page Generation in Jsoup
 CVE-2021-37714	Maven	org.jsoup:jsoup	0	1.14.2	HIGH	Uncaught Exception in jsoup
 CVE-2022-36033	Maven	org.jsoup:jsoup	0	1.15.3	MEDIUM	jsoup may not sanitize code injection XSS attempts if SafeList.preserveRelativeLinks is enabled
+CVE-2026-71497	Maven	org.jsoup:jsoup	1.14.3	1.23.1	MEDIUM	jsoup: Cleaner may expose markup with custom raw-text elements
 CVE-2025-53103	Maven	org.junit.platform:junit-platform-reporting	5.12.0	5.13.2	MEDIUM	junit-platform-reporting can leak Git credentials through its OpenTestReportGeneratingListener
 CVE-2015-8031	Maven	org.jvnet.hudson.main:hudson-core	0	3.3.2	CRITICAL	Hudson XML API susceptible to External Entity Injection Vunerability prior to v3.3.2
 CVE-2017-1000102	Maven	org.jvnet.hudson.plugins:analysis-core	0	1.92	MEDIUM	Persistent XSS vulnerability in Static Analysis Utilities
@@ -17129,7 +17209,7 @@ CVE-2021-25959	Maven	org.opencrx:opencrx-gradle	4.0.0	5.2.0	MEDIUM	Cross-site Sc
 CVE-2015-1778	Maven	org.opendaylight.odlparent:opendaylight-karaf-resources	0	0.2.3-Helium-SR3	CRITICAL	Opendaylight will authenticate any username and password combination
 CVE-2015-1611	Maven	org.opendaylight.openflowplugin:openflowplugin	0	0.0.6-Helium-SR3	HIGH	OpenFlow plugin for OpenDaylight allows spoofing the SDN topology
 CVE-2015-1612	Maven	org.opendaylight.openflowplugin:openflowplugin	0	0.0.6-Helium-SR3	HIGH	OpenFlow plugin for OpenDaylight LLDP Relay
-CVE-2024-42467	Maven	org.openhab.ui.bundles:org.openhab.ui.cometvisu	0	4.2.1	HIGH	CometVisu Backend for openHAB affected by SSRF/XSS
+CVE-2024-42467	Maven	org.openhab.ui.bundles:org.openhab.ui.cometvisu	3.4.0.M4	4.2.1	HIGH	CometVisu Backend for openHAB affected by SSRF/XSS
 CVE-2024-42468	Maven	org.openhab.ui.bundles:org.openhab.ui.cometvisu	0	4.2.1	MEDIUM	CometVisu Backend for openHAB has a path traversal vulnerability
 CVE-2024-42469	Maven	org.openhab.ui.bundles:org.openhab.ui.cometvisu	0	4.2.1	CRITICAL	CometVisu Backend for openHAB affected by RCE through path traversal
 CVE-2024-42470	Maven	org.openhab.ui.bundles:org.openhab.ui.cometvisu	0	4.2.1	MEDIUM	CometVisu Backend for openHAB has a sensitive information disclosure vulnerability
@@ -17591,6 +17671,7 @@ CVE-2020-5413	Maven	org.springframework.integration:spring-integration-core	4.3.
 CVE-2020-5413	Maven	org.springframework.integration:spring-integration-core	5.1.0	5.1.12	CRITICAL	Code execution in Spring Integration
 CVE-2020-5413	Maven	org.springframework.integration:spring-integration-core	5.2.0	5.2.8	CRITICAL	Code execution in Spring Integration
 CVE-2020-5413	Maven	org.springframework.integration:spring-integration-core	5.3.0	5.3.2	CRITICAL	Code execution in Spring Integration
+CVE-2026-40987	Maven	org.springframework.integration:spring-integration-file	6.5.0	6.5.9	HIGH	Spring Integration File Support: FTP/SFTP/SMB server can write arbitrary files anywhere on the client filesystem
 CVE-2026-40987	Maven	org.springframework.integration:spring-integration-file	7.0.0	7.0.5	HIGH	Spring Integration File Support: FTP/SFTP/SMB server can write arbitrary files anywhere on the client filesystem
 CVE-2019-3772	Maven	org.springframework.integration:spring-integration-ws	0	4.3.19	LOW	Improper Restriction of XML External Entity Reference in org.springframework.integration:spring-integration-ws and org.…
 CVE-2019-3772	Maven	org.springframework.integration:spring-integration-ws	5.0.0	5.0.11	LOW	Improper Restriction of XML External Entity Reference in org.springframework.integration:spring-integration-ws and org.…
@@ -17875,6 +17956,8 @@ CVE-2024-38809	Maven	org.springframework:spring-web	6.1.0	6.1.12	MEDIUM	Spring F
 CVE-2024-38820	Maven	org.springframework:spring-web	6.1.0	6.1.14	MEDIUM	Spring Framework DataBinder Case Sensitive Match Exception
 CVE-2025-41234	Maven	org.springframework:spring-web	6.1.0	6.1.21	MEDIUM	Spring Framework vulnerable to a reflected file download (RFD)
 CVE-2025-41234	Maven	org.springframework:spring-web	6.2.0	6.2.8	MEDIUM	Spring Framework vulnerable to a reflected file download (RFD)
+CVE-2026-41854	Maven	org.springframework:spring-web	6.2.0	6.2.19	MEDIUM	Spring Framework Server-Side Request Forgery via UriComponentsBuilder
+CVE-2026-41854	Maven	org.springframework:spring-web	7.0.0	7.0.8	MEDIUM	Spring Framework Server-Side Request Forgery via UriComponentsBuilder
 CVE-2020-5397	Maven	org.springframework:spring-webflux	5.2.0	5.2.3	MEDIUM	CSRF attack via CORS preflight requests with Spring MVC or Spring WebFlux
 CVE-2020-5398	Maven	org.springframework:spring-webflux	5.0.0.RELEASE	5.0.16.RELEASE	HIGH	RFD attack via Content-Disposition header sourced from request input by Spring MVC or Spring WebFlux Application
 CVE-2020-5398	Maven	org.springframework:spring-webflux	5.1.0.RELEASE	5.1.13.RELEASE	HIGH	RFD attack via Content-Disposition header sourced from request input by Spring MVC or Spring WebFlux Application
@@ -18160,7 +18243,7 @@ CVE-2023-31126	Maven	org.xwiki.commons:xwiki-commons-xml	14.6-rc-1	14.10.4	CRITI
 CVE-2023-36471	Maven	org.xwiki.commons:xwiki-commons-xml	14.6-rc-1	14.10.6	CRITICAL	org.xwiki.commons:xwiki-commons-xml's HTML sanitizer allows form elements in restricted
 CVE-2023-36471	Maven	org.xwiki.commons:xwiki-commons-xml	15.0-rc-1	15.2-rc-1	CRITICAL	org.xwiki.commons:xwiki-commons-xml's HTML sanitizer allows form elements in restricted
 CVE-2025-58365	Maven	org.xwiki.contrib.blog:application-blog-ui	0	9.14	HIGH	XWiki Blog Application: Privilege Escalation (PR) from account through blog content
-CVE-2025-66024	Maven	org.xwiki.contrib.blog:application-blog-ui	0	9.15.7	HIGH	XWiki Blog Application home page vulnerable to Stored XSS via Post Title
+CVE-2025-66024	Maven	org.xwiki.contrib.blog:application-blog-ui	9.15	9.15.7	HIGH	XWiki Blog Application home page vulnerable to Stored XSS via Post Title
 CVE-2023-49280	Maven	org.xwiki.contrib.changerequest:application-changerequest-default	0.1	1.10	HIGH	Data leak of password hash through change requests
 CVE-2023-45138	Maven	org.xwiki.contrib.changerequest:application-changerequest-ui	0.11	1.9.2	CRITICAL	XWiki Change Request Application UI XSS and remote code execution through change request title
 CVE-2025-31487	Maven	org.xwiki.contrib.jira:jira-macro-default	4.2	8.5.6	HIGH	The XWiki JIRA extension allows data leak through an XXE attack by using a fake JIRA server
@@ -18880,11 +18963,10 @@ CVE-2008-2025	Maven	struts:struts	0	1.2.9-162.31.1	MEDIUM	Apache Struts Cross-si
 CVE-2024-22588	Maven	tech.kwik:kwik	0	0.8	MEDIUM	Kwik does not discard unused encryption keys
 CVE-2025-23020	Maven	tech.kwik:kwik	0	0.10.1	MEDIUM	Kwik hash collision vulnerability
 CVE-2024-23688	Maven	tech.pegasys.discovery:discovery	0	0.4.5	LOW	Discovery uses the same AES/GCM Nonce throughout the session
+CVE-2026-18401	Maven	tools.jackson.core:jackson-core	3.0.0	3.1.0	MEDIUM	jackson-core: Number Length Constraint Bypass in Async Parser Leads to Potential DoS Condition
 CVE-2026-29062	Maven	tools.jackson.core:jackson-core	3.0.0	3.1.0	HIGH	jackson-core has Nesting Depth Constraint Bypass in `UTF8DataInputJsonParser` potentially allowing Resource Exhaustion
 GHSA-2m67-wjpj-xhg9	Maven	tools.jackson.core:jackson-core	3.0.0	3.1.1	HIGH	Jackson Core: Document length constraint bypass in blocking, async, and DataInput parsers
-GHSA-72hv-8253-57qq	Maven	tools.jackson.core:jackson-core	3.0.0	3.1.0	MEDIUM	jackson-core: Number Length Constraint Bypass in Async Parser Leads to Potential DoS Condition
 GHSA-r7wm-3cxj-wff9	Maven	tools.jackson.core:jackson-core	3.0.0	3.1.4	HIGH	jackson-core: Async parser maxNumberLength bypass via chunked digit accumulation (incomplete fix for GHSA-72hv-8253-57q…
-GHSA-r7wm-3cxj-wff9	Maven	tools.jackson.core:jackson-core	3.2.0	3.2.1	HIGH	jackson-core: Async parser maxNumberLength bypass via chunked digit accumulation (incomplete fix for GHSA-72hv-8253-57q…
 CVE-2026-54512	Maven	tools.jackson.core:jackson-databind	3.0.0	3.1.4	HIGH	jackson-databind has a PolymorphicTypeValidator bypass via generic type parameters that allows arbitrary class instanti…
 CVE-2026-54513	Maven	tools.jackson.core:jackson-databind	3.0.0	3.1.4	HIGH	jackson-databind has an array subtype allowlist bypass in BasicPolymorphicTypeValidator (allowIfSubTypeIsArray)
 CVE-2026-54514	Maven	tools.jackson.core:jackson-databind	2.19.0	2.21.4	MEDIUM	jackson-databind: InetSocketAddress deserialization triggers eager DNS resolution (SSRF)
@@ -18894,8 +18976,8 @@ CVE-2026-54516	Maven	tools.jackson.core:jackson-databind	3.0.0	3.1.4	MEDIUM	jack
 CVE-2026-54517	Maven	tools.jackson.core:jackson-databind	3.0.0	3.1.4	MEDIUM	jackson-databind has @JsonView bypass for setterless creator properties
 CVE-2026-54518	Maven	tools.jackson.core:jackson-databind	3.0.0	3.1.4	MEDIUM	jackson-databind has a @JsonView bypass for unwrapped creator parameters
 CVE-2026-59888	Maven	tools.jackson.core:jackson-databind	3.0.0	3.1.4	MEDIUM	jackson-databind: @JsonIgnore on a Record property is bypassed with a PropertyNamingStrategy
-CVE-2026-59889	Maven	tools.jackson.core:jackson-databind	3.0.0	3.1.5	MEDIUM	jackson-databind: @JsonView ypassed for @JsonUnwrapped container properties on deserialization
-CVE-2026-59889	Maven	tools.jackson.core:jackson-databind	3.2.0	3.2.1	MEDIUM	jackson-databind: @JsonView ypassed for @JsonUnwrapped container properties on deserialization
+CVE-2026-59889	Maven	tools.jackson.core:jackson-databind	3.0.0	3.1.5	MEDIUM	jackson-databind: @JsonView bypassed for @JsonUnwrapped container properties on deserialization
+CVE-2026-59889	Maven	tools.jackson.core:jackson-databind	3.2.0	3.2.1	MEDIUM	jackson-databind: @JsonView bypassed for @JsonUnwrapped container properties on deserialization
 CVE-2023-31579	Maven	top.tangyh.basic:lamp-core	0	3.8.1	HIGH	Dromara Lamp-Cloud Use of Hard-coded Cryptographic Key
 CVE-2023-31579	Maven	top.tangyh.basic:lamp-util	0	3.8.1	HIGH	Dromara Lamp-Cloud Use of Hard-coded Cryptographic Key
 CVE-2022-23553	Maven	us.springett:alpine	0	1.10.4	HIGH	Alpine allows URL access filter bypass
@@ -25183,6 +25265,9 @@ CVE-2025-31485	Packagist	api-platform/core	4.1.0-alpha.1	4.1.5	HIGH	GraphQL gran
 CVE-2026-49858	Packagist	api-platform/core	2.6.0	4.1.29	MEDIUM	API Platform Core vulnerable to cross-user attribute leak in JSON:API and HAL item normalizers due to missing isCacheKe…
 CVE-2026-49858	Packagist	api-platform/core	4.2.0	4.2.25	MEDIUM	API Platform Core vulnerable to cross-user attribute leak in JSON:API and HAL item normalizers due to missing isCacheKe…
 CVE-2026-49858	Packagist	api-platform/core	4.3.0	4.3.8	MEDIUM	API Platform Core vulnerable to cross-user attribute leak in JSON:API and HAL item normalizers due to missing isCacheKe…
+CVE-2026-54164	Packagist	api-platform/core	0	4.1.30	MEDIUM	API Platform Core: Relation IRIs are not type-checked: a related resource can be denormalised as the wrong resource typ…
+CVE-2026-54164	Packagist	api-platform/core	4.2.0	4.2.26	MEDIUM	API Platform Core: Relation IRIs are not type-checked: a related resource can be denormalised as the wrong resource typ…
+CVE-2026-54164	Packagist	api-platform/core	4.3.0	4.3.12	MEDIUM	API Platform Core: Relation IRIs are not type-checked: a related resource can be denormalised as the wrong resource typ…
 CVE-2025-31481	Packagist	api-platform/graphql	0	3.4.17	HIGH	GraphQL query operations security can be bypassed
 CVE-2025-31481	Packagist	api-platform/graphql	4.0.0-alpha.1	4.0.22	HIGH	GraphQL query operations security can be bypassed
 CVE-2025-31481	Packagist	api-platform/graphql	4.1.0-alpha.1	4.1.5	HIGH	GraphQL query operations security can be bypassed
@@ -25616,6 +25701,10 @@ CVE-2024-29904	Packagist	codeigniter4/framework	0	4.4.7	HIGH	CodeIgniter4 DoS Vu
 CVE-2025-24013	Packagist	codeigniter4/framework	0	4.5.8	MEDIUM	Missing validation of header name and value in codeigniter4/framework
 CVE-2025-54418	Packagist	codeigniter4/framework	0	4.6.2	CRITICAL	CodeIgniter4's ImageMagick Handler has Command Injection Vulnerability
 CVE-2026-48062	Packagist	codeigniter4/framework	0	4.7.3	CRITICAL	CodeIgniter4 has a validation bypass when uploading file extensions via `ext_in` rule
+CVE-2026-63220	Packagist	codeigniter4/framework	0	4.7.4	MEDIUM	CodeIgniter: Spoofable forwarded HTTPS headers in IncomingRequest::isSecure()
+CVE-2026-63221	Packagist	codeigniter4/framework	4.3.0	4.7.4	CRITICAL	CodeIgniter: SQL injection in Query Builder deleteBatch() when used with where() conditions
+CVE-2026-63222	Packagist	codeigniter4/framework	0	4.7.4	HIGH	CodeIgniter: Path traversal in UploadedFile::move() when using client-provided filenames
+CVE-2026-63223	Packagist	codeigniter4/framework	0	4.7.4	CRITICAL	CodeIgniter: Uploaded file extension validation bypass in `is_image` and `mime_in` rules
 CVE-2022-35943	Packagist	codeigniter4/shield	1.0.0-beta	1.0.0-beta.2	MEDIUM	CodeIgniter Shield Vulnerable to SameSite Attackers Bypassing the CSRF Protection
 CVE-2023-27580	Packagist	codeigniter4/shield	0	1.0.0-beta.4	MEDIUM	Password Shucking Vulnerability
 CVE-2023-48707	Packagist	codeigniter4/shield	0	1.0.0-beta.8	MEDIUM	Cleartext Storage of Sensitive Information in HMAC SHA256 Authentication
@@ -25862,6 +25951,9 @@ CVE-2025-57758	Packagist	contao/contao	5.0.0	5.3.38	MEDIUM	Contao applies improp
 CVE-2025-57758	Packagist	contao/contao	5.4.0-RC1	5.6.1	MEDIUM	Contao applies improper access control in the back end voters
 CVE-2025-57759	Packagist	contao/contao	5.3.0	5.3.38	MEDIUM	Contao does not properly manage privileges for page and article fields
 CVE-2025-57759	Packagist	contao/contao	5.4.0-RC1	5.6.1	MEDIUM	Contao does not properly manage privileges for page and article fields
+CVE-2026-55824	Packagist	contao/contao	4.13.0	5.3.47	LOW	Contao crawler leaks auth credentials to external hosts
+CVE-2026-55824	Packagist	contao/contao	5.4.0	5.7.7	LOW	Contao crawler leaks auth credentials to external hosts
+CVE-2026-55825	Packagist	contao/contao	5.7.0	5.7.7	LOW	Contao: Possible path traversal in job download URIs
 CVE-2012-4383	Packagist	contao/core	0	2.11.4	HIGH	Contao core SQL Injection Vulnerability
 CVE-2015-0269	Packagist	contao/core	2.0.0	3.2.19	MEDIUM	Contao Core directory traversal vulnerability
 CVE-2015-0269	Packagist	contao/core	3.4.0	3.4.4	MEDIUM	Contao Core directory traversal vulnerability
@@ -25940,6 +26032,9 @@ CVE-2025-65960	Packagist	contao/core-bundle	5.4.0-RC1	5.6.5	MEDIUM	Contao is vul
 CVE-2025-65961	Packagist	contao/core-bundle	4.0.0	4.13.57	LOW	Contao is vulnerable to cross-site scripting in templates
 CVE-2025-65961	Packagist	contao/core-bundle	5.0.0-RC1	5.3.42	LOW	Contao is vulnerable to cross-site scripting in templates
 CVE-2025-65961	Packagist	contao/core-bundle	5.4.0-RC1	5.6.5	LOW	Contao is vulnerable to cross-site scripting in templates
+CVE-2026-55824	Packagist	contao/core-bundle	4.13.0	5.3.47	LOW	Contao crawler leaks auth credentials to external hosts
+CVE-2026-55824	Packagist	contao/core-bundle	5.4.0	5.7.7	LOW	Contao crawler leaks auth credentials to external hosts
+CVE-2026-55825	Packagist	contao/core-bundle	5.7.0	5.7.7	LOW	Contao: Possible path traversal in job download URIs
 CVE-2017-16558	Packagist	contao/listing-bundle	4.0.0	4.4.8	CRITICAL	Contao SQL injection in the backend and listing module
 CVE-2026-22242	Packagist	coreshop/core-shop	0	4.1.8	MEDIUM	CoreShop Vulnerable to SQL Injection via Admin Reports
 CVE-2026-23959	Packagist	coreshop/core-shop	0	4.1.9	MEDIUM	CoreShop Vulnerable to SQL Injection via Admin customer-company-modifier
@@ -26026,6 +26121,8 @@ CVE-2025-68455	Packagist	craftcms/cms	4.0.0-RC1	4.16.17	HIGH	Craft CMS vulnerabl
 CVE-2025-68455	Packagist	craftcms/cms	5.0.0-RC1	5.8.21	HIGH	Craft CMS vulnerable to potential authenticated Remote Code Execution via malicious attached Behavior
 CVE-2025-68456	Packagist	craftcms/cms	3.0.0	4.16.17	HIGH	Unauthenticated Craft CMS users can trigger a database backup
 CVE-2025-68456	Packagist	craftcms/cms	5.0.0-RC1	5.8.21	HIGH	Unauthenticated Craft CMS users can trigger a database backup
+CVE-2026-14793	Packagist	craftcms/cms	4.0.0-RC1	4.18.1	MEDIUM	Craft CMS: Missing authorization check allows non-admin control panel users to reorder Global Sets
+CVE-2026-14793	Packagist	craftcms/cms	5.0.0-RC1	5.10.3	MEDIUM	Craft CMS: Missing authorization check allows non-admin control panel users to reorder Global Sets
 CVE-2026-25491	Packagist	craftcms/cms	5.0.0-RC1	5.8.22	LOW	Craft CMS Vulnerable to Stored XSS in Entry Types Name
 CVE-2026-25493	Packagist	craftcms/cms	4.0.0-RC1	4.16.18	MEDIUM	Craft CMS Vulnerable to SSRF in GraphQL Asset Mutation via HTTP Redirect
 CVE-2026-25493	Packagist	craftcms/cms	5.0.0-RC1	5.8.22	MEDIUM	Craft CMS Vulnerable to SSRF in GraphQL Asset Mutation via HTTP Redirect
@@ -26127,7 +26224,23 @@ CVE-2026-56393	Packagist	craftcms/cms	4.0.0-RC1	4.17.0-beta.1	LOW	Craft CMS Vuln
 CVE-2026-56393	Packagist	craftcms/cms	5.0.0-RC1	5.9.0-beta.1	LOW	Craft CMS Vulnerable to Stored XSS in Settings Names and Field Options
 CVE-2026-56394	Packagist	craftcms/cms	4.0.0-RC1	4.17.7	LOW	Craft CMS has authenticated path traversal in `assets/icon`, allowing local `.svg` file read
 CVE-2026-56394	Packagist	craftcms/cms	5.0.0-RC1	5.9.13	LOW	Craft CMS has authenticated path traversal in `assets/icon`, allowing local `.svg` file read
+GHSA-265m-7826-wjqm	Packagist	craftcms/cms	4.0.0-RC1	4.18.2	HIGH	Craft CMS: Authenticated RCE via `condition.config` JSON cleanse bypass
+GHSA-265m-7826-wjqm	Packagist	craftcms/cms	5.0.0-RC1	5.10.6	HIGH	Craft CMS: Authenticated RCE via `condition.config` JSON cleanse bypass
+GHSA-2rp4-x2j7-qmcc	Packagist	craftcms/cms	5.0.0-RC1	5.10.8	MEDIUM	Craft CMS: Stored XSS in the control panel via unescaped draft name
+GHSA-596p-6jv8-775v	Packagist	craftcms/cms	4.0.0-RC1	4.18.2	MEDIUM	Craft CMS: Authenticated leak of secret environment variables
+GHSA-596p-6jv8-775v	Packagist	craftcms/cms	5.0.0-RC1	5.10.6	MEDIUM	Craft CMS: Authenticated leak of secret environment variables
+GHSA-7hxc-f267-h5q7	Packagist	craftcms/cms	4.0.0-RC1	4.18.2	LOW	Craft CMS: Incorrect path validation could potentially lead to path traversal
+GHSA-7hxc-f267-h5q7	Packagist	craftcms/cms	5.0.0-RC1	5.10.6	LOW	Craft CMS: Incorrect path validation could potentially lead to path traversal
+GHSA-957r-qf9p-67xw	Packagist	craftcms/cms	4.0.0-RC1	4.18.2	MEDIUM	Craft CMS: Arbitrary file read via SplFileObject in non-sandboxed template contexts
+GHSA-957r-qf9p-67xw	Packagist	craftcms/cms	5.0.0-RC1	5.10.6	MEDIUM	Craft CMS: Arbitrary file read via SplFileObject in non-sandboxed template contexts
+GHSA-f5wm-88jv-g5hx	Packagist	craftcms/cms	4.0.0-RC1	4.18.3	HIGH	Craft CMS: Authenticated RCE through Twig sandbox escape
+GHSA-f5wm-88jv-g5hx	Packagist	craftcms/cms	5.0.0-RC1	5.10.7	HIGH	Craft CMS: Authenticated RCE through Twig sandbox escape
+GHSA-p8x7-9vfw-p7vc	Packagist	craftcms/cms	5.0.0-RC1	5.10.8	HIGH	Craft CMS: Arbitrary user password reset leading to administrator account takeover
+GHSA-rvmm-v933-jgxq	Packagist	craftcms/cms	4.0.0-RC1	4.18.1	MEDIUM	Craft CMS: Missing authorization check allows non-admin control panel users access to user registration metrics
+GHSA-rvmm-v933-jgxq	Packagist	craftcms/cms	5.0.0-RC1	5.10.3	MEDIUM	Craft CMS: Missing authorization check allows non-admin control panel users access to user registration metrics
 GHSA-wf98-vxv9-jqfv	Packagist	craftcms/cms	0	3.7.29	LOW	XSS Injection Vulnerability
+GHSA-wg23-69c2-gjc8	Packagist	craftcms/cms	5.0.0-RC1	5.10.5	CRITICAL	Craft CMS: Passkey login accepts replayed WebAuthn assertions
+GHSA-xxpx-f366-4xpq	Packagist	craftcms/cms	5.0.0-RC1	5.10.6	MEDIUM	Craft CMS:Authorization bypass: view-only Categories user can modify category structure via structures/move-element
 CVE-2026-25482	Packagist	craftcms/commerce	4.0.0-RC1	4.10.1	MEDIUM	Craft Commerce has Stored DOM XSS in Order Status Name (Reflects in "Recent Orders" Dashboard Widget)
 CVE-2026-25482	Packagist	craftcms/commerce	5.0.0	5.5.2	MEDIUM	Craft Commerce has Stored DOM XSS in Order Status Name (Reflects in "Recent Orders" Dashboard Widget)
 CVE-2026-25483	Packagist	craftcms/commerce	4.0.0-RC1	4.10.1	MEDIUM	Craft Commerce has Stored XSS via Order Status Message with potential database exfiltration
@@ -27062,11 +27175,13 @@ CVE-2025-3131	Packagist	drupal/eca	2.1.0	2.1.7	MEDIUM	This module enables you to
 CVE-2026-15083	Packagist	drupal/eca	0	2.1.20	MEDIUM	The Events, Conditions, Actions (ECA) module's Render submodule enables you to build render arrays and render inline Tw…
 CVE-2026-15083	Packagist	drupal/eca	3.0.0	3.0.12	MEDIUM	The Events, Conditions, Actions (ECA) module's Render submodule enables you to build render arrays and render inline Tw…
 CVE-2026-15083	Packagist	drupal/eca	3.1.0	3.1.4	MEDIUM	The Events, Conditions, Actions (ECA) module's Render submodule enables you to build render arrays and render inline Tw…
+CVE-2026-18985	Packagist	drupal/edit_in_place_field	0	2.1.1	MEDIUM	This module provides formatters to allow in-place editing in a View or other display (full content, teaser...).  The mo…
 DRUPAL-CONTRIB-2019-063	Packagist	drupal/elf	0	1.2.0	MEDIUM	The External Link Filter module provides an input filter that replaces external links by a local link that redirects to…
 CVE-2024-13256	Packagist	drupal/email_contact	0	2.0.4	MEDIUM	The Email Contact module provides email field display formatters that can display the field as a link to the contact fo…
 CVE-2025-12760	Packagist	drupal/email_tfa	0	2.0.6	MEDIUM	The Email TFA module provides additional email-based two-factor authentication for Drupal logins.  In certain scenarios…
 CVE-2025-31676	Packagist	drupal/email_tfa	2.0.0	2.0.3	MEDIUM	This module enables you to do Two-Factor Authentication by email, using a user registered email to send a verification…
 DRUPAL-CONTRIB-2022-042	Packagist	drupal/embed	0	1.5.0	MEDIUM	The Drupal Embed module provides a filter to allow embedding various embeddable items like entities in content fields.…
+CVE-2026-18986	Packagist	drupal/entity_browser	0	2.16.0	MEDIUM	The Entity Browser module allows you to select entities from entity reference fields using a custom entity browser widg…
 DRUPAL-CONTRIB-2023-002	Packagist	drupal/entity_browser	0	2.9.0	MEDIUM	The Entity Browser module allows you to select entities from entity reference fields using a custom entity browser widg…
 DRUPAL-CONTRIB-2022-044	Packagist	drupal/entity_browser_block	0	1.2.0	MEDIUM	Entity Browser Block provides a Block Plugin for every Entity Browser on your site.  The module didn't sufficiently che…
 DRUPAL-CONTRIB-2018-040	Packagist	drupal/entity_delete	0	1.4.0	MEDIUM	This module enables you to delete any types of entities in bulk.  The module doesn't sufficiently verify access permiss…
@@ -28102,6 +28217,10 @@ CVE-2026-67339	Packagist	guzzlehttp/guzzle	0	7.14.2	MEDIUM	Guzzle: Proxy-Authori
 CVE-2026-67353	Packagist	guzzlehttp/guzzle	0	7.15.1	MEDIUM	Guzzle: Unbounded response cookies risk denial of service
 CVE-2026-67354	Packagist	guzzlehttp/guzzle	0	7.15.1	MEDIUM	Guzzle: URI fragments disclosed in redirect Referer headers
 CVE-2026-67355	Packagist	guzzlehttp/guzzle	0	7.15.1	MEDIUM	Guzzle: Host-only cookie scope is not preserved
+CVE-2026-69245	Packagist	guzzlehttp/guzzle	0	7.15.2	MEDIUM	Guzzle: Noncanonical cookie domain keeps subdomain scope
+CVE-2026-69245	Packagist	guzzlehttp/guzzle	8.0.0	8.0.1	MEDIUM	Guzzle: Noncanonical cookie domain keeps subdomain scope
+CVE-2026-69246	Packagist	guzzlehttp/guzzle	0	7.15.2	HIGH	Guzzle: Noncanonical host can bypass host-based checks
+CVE-2026-69246	Packagist	guzzlehttp/guzzle	8.0.0	8.0.1	HIGH	Guzzle: Noncanonical host can bypass host-based checks
 CVE-2026-53723	Packagist	guzzlehttp/guzzle-services	0	1.5.4	MEDIUM	guzzlehttp/guzzle-services' XML Request Serialization Vulnerable to XML Injection via CDATA Terminator
 CVE-2025-21617	Packagist	guzzlehttp/oauth-subscriber	0	0.8.1	MEDIUM	Guzzle OAuth Subscriber has insufficient nonce entropy
 CVE-2022-24775	Packagist	guzzlehttp/psr7	0	1.8.4	MEDIUM	Improper Input Validation in guzzlehttp/psr7
@@ -28458,7 +28577,13 @@ CVE-2019-10010	Packagist	league/commonmark	0	0.18.3	MEDIUM	Moderate severity vul
 CVE-2025-46734	Packagist	league/commonmark	1.5.0	2.7.0	MEDIUM	league/commonmark contains a XSS vulnerability in Attributes extension
 CVE-2026-30838	Packagist	league/commonmark	2.0.0	2.8.1	MEDIUM	CommonMark has DisallowedRawHtml extension bypass via whitespace in HTML tag names
 CVE-2026-33347	Packagist	league/commonmark	2.3.0	2.8.2	MEDIUM	league/commonmark has an embed extension allowed_domains bypass
+CVE-2026-71478	Packagist	league/commonmark	1.5.0	2.9.0	MEDIUM	league/commonmark: AttributesExtension href/src unsafe-link filter bypass via embedded control bytes
+CVE-2026-71488	Packagist	league/commonmark	0.6.0	2.9.0	HIGH	league/commonmark: Quadratic-time denial of service when parsing crafted Markdown
 GHSA-c2pc-g5qf-rfrf	Packagist	league/commonmark	0	2.6.0	HIGH	league/commonmark's quadratic complexity bugs may lead to a denial of service
+GHSA-g2gp-3wwq-f4ph	Packagist	league/commonmark	1.5.0	2.9.0	HIGH	league/commonmark: Denial of service via adjacent inline attribute blocks
+GHSA-jfm3-95jq-q3rf	Packagist	league/commonmark	1.5.0	2.9.0	HIGH	league/commonmark:  Denial of service via duplicate footnote definitions
+GHSA-mh25-x5hq-wrqp	Packagist	league/commonmark	2.0.0	2.9.0	HIGH	league/commonmark: Denial of service via colliding heading slugs
+GHSA-mj63-m3rc-8ppr	Packagist	league/commonmark	2.0.0	2.9.0	MEDIUM	league/commonmark: Denial of service via deeply nested XML output
 CVE-2021-32708	Packagist	league/flysystem	0	1.1.4	CRITICAL	Time-of-check Time-of-use (TOCTOU) Race Condition in league/flysystem
 CVE-2021-32708	Packagist	league/flysystem	2.0.0	2.1.1	CRITICAL	Time-of-check Time-of-use (TOCTOU) Race Condition in league/flysystem
 CVE-2023-37260	Packagist	league/oauth2-server	8.3.2	8.4.2	HIGH	league/oauth2-server key exposed in exception message when passing as a string and providing an invalid pass phrase
@@ -32948,6 +33073,7 @@ CVE-2017-5197	Packagist	silverstripe/cms	0	3.4.4	MEDIUM	Silverstripe CMS XSS Vul
 CVE-2017-5197	Packagist	silverstripe/cms	3.5.0	3.5.2	MEDIUM	Silverstripe CMS XSS Vulnerability
 CVE-2019-12204	Packagist	silverstripe/cms	4.4.0	4.4.4	CRITICAL	Missing warning can lead to unauthenticated admin access in SilverStripe
 CVE-2022-37421	Packagist	silverstripe/cms	4.0.0	4.11.3	MEDIUM	Silverstipe CMS Stored XSS in custom meta tags
+CVE-2026-54717	Packagist	silverstripe/cms	0	6.2.1	MEDIUM	Silverstripe: XSS in breadcrumbs in page list view
 GHSA-3mm9-2p44-rw39	Packagist	silverstripe/cms	3.0.0	3.0.12	HIGH	Silverstripe SiteTree Creation Permission Vulnerability
 GHSA-3mm9-2p44-rw39	Packagist	silverstripe/cms	3.1.0	3.1.11	HIGH	Silverstripe SiteTree Creation Permission Vulnerability
 GHSA-6hh6-59j2-qrxw	Packagist	silverstripe/cms	3.1.0	3.1.10	MEDIUM	Silverstripe History XSS Vulnerability
@@ -33198,14 +33324,18 @@ CVE-2023-49087	Packagist	simplesamlphp/saml2	5.0.0-alpha.12	5.0.0-alpha.13	HIGH	
 CVE-2024-52806	Packagist	simplesamlphp/saml2	0	4.6.14	MEDIUM	SimpleSAMLphp SAML2 has an XXE in parsing SAML messages
 CVE-2025-27773	Packagist	simplesamlphp/saml2	0	4.17.0	HIGH	The SimpleSAMLphp SAML2 library incorrectly verifies signatures for HTTP-Redirect binding
 CVE-2025-27773	Packagist	simplesamlphp/saml2	5.0.0-alpha.1	5.0.0-alpha.20	HIGH	The SimpleSAMLphp SAML2 library incorrectly verifies signatures for HTTP-Redirect binding
-CVE-2026-49283	Packagist	simplesamlphp/saml2	0	4.20.2	HIGH	SimpleSAMLphp HTTP-Artifact TLS validator confusion allows cross-IdP authentication bypass
+CVE-2026-49283	Packagist	simplesamlphp/saml2	0	4.19.3	HIGH	SimpleSAMLphp HTTP-Artifact TLS validator confusion allows cross-IdP authentication bypass
+CVE-2026-49283	Packagist	simplesamlphp/saml2	4.20.0	4.20.2	HIGH	SimpleSAMLphp HTTP-Artifact TLS validator confusion allows cross-IdP authentication bypass
 CVE-2026-49283	Packagist	simplesamlphp/saml2	5.0.0	5.0.6	HIGH	SimpleSAMLphp HTTP-Artifact TLS validator confusion allows cross-IdP authentication bypass
 CVE-2026-49283	Packagist	simplesamlphp/saml2	6.0.0	6.2.1	HIGH	SimpleSAMLphp HTTP-Artifact TLS validator confusion allows cross-IdP authentication bypass
-CVE-2026-49289	Packagist	simplesamlphp/saml2	0	4.20.3	HIGH	SimpleSAMLphp has Possible DoS via XPath Transform
+CVE-2026-49289	Packagist	simplesamlphp/saml2	0	4.19.3	HIGH	SimpleSAMLphp has Possible DoS via XPath Transform
+CVE-2026-49289	Packagist	simplesamlphp/saml2	4.20.0	4.20.3	HIGH	SimpleSAMLphp has Possible DoS via XPath Transform
 CVE-2024-52806	Packagist	simplesamlphp/saml2-legacy	0	4.6.14	MEDIUM	SimpleSAMLphp SAML2 has an XXE in parsing SAML messages
 CVE-2025-27773	Packagist	simplesamlphp/saml2-legacy	0	4.17.0	HIGH	The SimpleSAMLphp SAML2 library incorrectly verifies signatures for HTTP-Redirect binding
-CVE-2026-49283	Packagist	simplesamlphp/saml2-legacy	0	4.20.2	HIGH	SimpleSAMLphp HTTP-Artifact TLS validator confusion allows cross-IdP authentication bypass
-CVE-2026-49289	Packagist	simplesamlphp/saml2-legacy	0	4.20.3	HIGH	SimpleSAMLphp has Possible DoS via XPath Transform
+CVE-2026-49283	Packagist	simplesamlphp/saml2-legacy	0	4.19.3	HIGH	SimpleSAMLphp HTTP-Artifact TLS validator confusion allows cross-IdP authentication bypass
+CVE-2026-49283	Packagist	simplesamlphp/saml2-legacy	4.20.0	4.20.2	HIGH	SimpleSAMLphp HTTP-Artifact TLS validator confusion allows cross-IdP authentication bypass
+CVE-2026-49289	Packagist	simplesamlphp/saml2-legacy	0	4.19.3	HIGH	SimpleSAMLphp has Possible DoS via XPath Transform
+CVE-2026-49289	Packagist	simplesamlphp/saml2-legacy	4.20.0	4.20.3	HIGH	SimpleSAMLphp has Possible DoS via XPath Transform
 CVE-2011-4625	Packagist	simplesamlphp/simplesamlphp	0	1.8.1	HIGH	simpleSAMLphp incorrectly handles XML encryption
 CVE-2016-3124	Packagist	simplesamlphp/simplesamlphp	0	1.14.1	MEDIUM	SimpleSAMLphp Information leakage issue in the sanitycheck module
 CVE-2016-9955	Packagist	simplesamlphp/simplesamlphp	0	1.14.11	MEDIUM	Incorrect signature verification in SimpleSAMLphp
@@ -33278,6 +33408,9 @@ CVE-2023-28447	Packagist	smarty/smarty	0	3.1.48	HIGH	smarty Cross-site Scripting
 CVE-2023-28447	Packagist	smarty/smarty	4.0.0	4.3.1	HIGH	smarty Cross-site Scripting vulnerability in Javascript escaping
 CVE-2024-35226	Packagist	smarty/smarty	3.0.0	4.5.3	HIGH	Smarty vulnerable to PHP Code Injection by malicious attribute in extends-tag
 CVE-2024-35226	Packagist	smarty/smarty	5.0.0	5.1.1	HIGH	Smarty vulnerable to PHP Code Injection by malicious attribute in extends-tag
+CVE-2026-62992	Packagist	smarty/smarty	0	4.5.7	MEDIUM	Smarty: Symlink path traversal out of trusted directories
+CVE-2026-62992	Packagist	smarty/smarty	5.0.0	5.8.2	MEDIUM	Smarty: Symlink path traversal out of trusted directories
+CVE-2026-62996	Packagist	smarty/smarty	5.0.0	5.8.4	MEDIUM	Smarty Security stream restriction bypass through stream: resource
 CVE-2019-10118	Packagist	snipe/snipe-it	0	4.6.14	MEDIUM	Snipe-IT XSS Vulnerability
 CVE-2021-3858	Packagist	snipe/snipe-it	0	5.3.0	MEDIUM	Cross-Site Request Forgery in snipe-it
 CVE-2021-3863	Packagist	snipe/snipe-it	0	5.3.0	MEDIUM	Cross-site Scripting in snipe-it
@@ -33361,6 +33494,8 @@ GHSA-2jx3-65f3-xr8r	Packagist	spomky-labs/otphp	0	11.4.3	MEDIUM	spomky-labs/otph
 GHSA-g7m4-839x-ch6v	Packagist	spomky-labs/otphp	0	11.4.3	HIGH	spomky-labs/otphp: Unbounded digits parameter in a provisioning URI triggers an uncaught DivisionByZeroError in OTP gen…
 CVE-2019-15521	Packagist	spoon/library	0	1.4.1	CRITICAL	Spoon Library as used in Fork CMS allows PHP object injection
 CVE-2018-17057	Packagist	spoonity/tcpdf	0	6.2.22	CRITICAL	TCPDF vulnerable to attackers triggering deserialization of arbitrary data
+CVE-2026-67434	Packagist	squizlabs/php_codesniffer	0	3.13.6	HIGH	PHP_CodeSniffer gitblame report command injection via crafted filename
+CVE-2026-67434	Packagist	squizlabs/php_codesniffer	4.0.0	4.0.2	HIGH	PHP_CodeSniffer gitblame report command injection via crafted filename
 GHSA-3988-h75v-hwf6	Packagist	squizlabs/php_codesniffer	3.0.0	3.0.1	HIGH	Arbitrary shell execution
 GHSA-mhfv-8rc9-w38c	Packagist	squizlabs/php_codesniffer	1.0.0	2.8.1	HIGH	Arbitrary shell execution
 CVE-2020-11055	Packagist	ssddanbrown/bookstack	0.18.0	0.29.2	MEDIUM	Cross-Site Scripting in BookStack
@@ -33454,6 +33589,18 @@ CVE-2026-54243	Packagist	statamic/cms	0	5.73.24	MEDIUM	Statamic Vulnerable to CS
 CVE-2026-54243	Packagist	statamic/cms	6.0.0	6.20.1	MEDIUM	Statamic Vulnerable to CSV formula injection in form submission exports
 CVE-2026-54244	Packagist	statamic/cms	0	5.74.0	LOW	Statamic CMS's incorrect authorization lets view-only users submit Live Preview content reserved for editors
 CVE-2026-54244	Packagist	statamic/cms	6.0.0	6.20.3	LOW	Statamic CMS's incorrect authorization lets view-only users submit Live Preview content reserved for editors
+CVE-2026-64662	Packagist	statamic/cms	0	5.74.1	MEDIUM	Statamic: Missing authorization on navigation endpoint allows disclosure of restricted entries
+CVE-2026-64662	Packagist	statamic/cms	6.0.0	6.24.0	MEDIUM	Statamic: Missing authorization on navigation endpoint allows disclosure of restricted entries
+CVE-2026-64663	Packagist	statamic/cms	0	5.74.1	MEDIUM	Statamic: Unsafe method invocation via Antlers template resolution allows data destruction
+CVE-2026-64663	Packagist	statamic/cms	6.0.0	6.24.0	MEDIUM	Statamic: Unsafe method invocation via Antlers template resolution allows data destruction
+CVE-2026-64664	Packagist	statamic/cms	0	5.74.1	MEDIUM	Statamic: Missing authorization on Control Panel endpoint allows disclosure of user existence
+CVE-2026-64664	Packagist	statamic/cms	6.0.0	6.24.0	MEDIUM	Statamic: Missing authorization on Control Panel endpoint allows disclosure of user existence
+CVE-2026-64665	Packagist	statamic/cms	0	5.74.1	HIGH	Statamic: Account takeover via OAuth email matching without email-verification check
+CVE-2026-64665	Packagist	statamic/cms	6.0.0	6.24.0	HIGH	Statamic: Account takeover via OAuth email matching without email-verification check
+CVE-2026-71434	Packagist	statamic/cms	0	5.74.3	MEDIUM	Statamic: Missing file upload validation on frontend forms allows uploading disallowed file types
+CVE-2026-71434	Packagist	statamic/cms	6.0.0	6.24.2	MEDIUM	Statamic: Missing file upload validation on frontend forms allows uploading disallowed file types
+CVE-2026-71435	Packagist	statamic/cms	0	5.74.3	MEDIUM	Statamic: Stored Cross-Site Scripting in Automagic Form Notification Email Template
+CVE-2026-71435	Packagist	statamic/cms	6.0.0	6.24.2	MEDIUM	Statamic: Stored Cross-Site Scripting in Automagic Form Notification Email Template
 CVE-2018-9109	Packagist	studio-42/elfinder	0	2.1.36	CRITICAL	elFinder Path Traversal vulnerability
 CVE-2018-9110	Packagist	studio-42/elfinder	2.1.12	2.1.37	CRITICAL	Directory Traversal in Studio 42 elFinder
 CVE-2019-5884	Packagist	studio-42/elfinder	0	2.1.45	MEDIUM	Sensitive Data Exposure in elFinder
@@ -36295,11 +36442,14 @@ CVE-2026-54277	PyPI	aiohttp	0	3.14.1	MEDIUM	aiohttp: C HTTP Parser Bypasses max_
 CVE-2026-54278	PyPI	aiohttp	0	3.14.1	MEDIUM	aiohttp: Unread Compressed Request Bodies Bypass client_max_size During Cleanup
 CVE-2026-54279	PyPI	aiohttp	0	3.14.1	LOW	aiohttp: Host-Only Cookies Become Domain Cookies After CookieJar Persistence
 CVE-2026-54280	PyPI	aiohttp	0	3.14.1	LOW	aiohttp: Payload Response Resources Are Not Closed After Mid-Body Disconnect
+CVE-2026-59881	PyPI	aiohttp	0	3.14.2	MEDIUM	AIOHTTP: WebSocket client accepts compressed frames without negotiated permessage-deflate
+CVE-2026-69243	PyPI	aiohttp	0	3.14.2	MEDIUM	AIOHTTP: HTTP request smuggling via WebSocket upgrade
+CVE-2026-69244	PyPI	aiohttp	0	3.14.3	HIGH	AIOHTTP: Out-of-bounds heap read in C HTTP response parser error path (malformed chunked response)
 GHSA-pjjw-qhg8-p2p9	PyPI	aiohttp	0	3.8.6	MEDIUM	aiohttp has vulnerable dependency that is vulnerable to request smuggling
 CVE-2018-1000519	PyPI	aiohttp-session	0	2.4.0	HIGH	aiohttp-session Session Fixation vulnerability
 CVE-2018-1000814	PyPI	aiohttp-session	0	2.7.0	HIGH	aiohttp-session creates non-expiring sessions
 CVE-2025-62611	PyPI	aiomysql	0	0.3.0	HIGH	aiomysql allows arbitrary access to client files through vulnerability of a malicious MySQL server
-GHSA-7m8f-hgjq-8gc9	PyPI	aiosend	0	3.0.6	HIGH	aiosend: Deserialization of request body before signature verification (Pre-auth DoS) in webhook handler
+CVE-2026-70646	PyPI	aiosend	0	3.0.7	HIGH	aiosend: Deserialization of request body before signature verification (Pre-auth DoS) in webhook handler
 CVE-2024-27305	PyPI	aiosmtpd	0	1.4.5	MEDIUM	aiosmtpd vulnerable to SMTP smuggling
 CVE-2024-34083	PyPI	aiosmtpd	0	1.4.6	MEDIUM	aiosmtpd STARTTLS unencrypted commands injection
 CVE-2026-53533	PyPI	aiosmtplib	0	5.1.1	MEDIUM	aiosmtplib vulnerable to SMTP command injection via CR/LF in sender/recipient address
@@ -36824,6 +36974,7 @@ CVE-2010-4340	PyPI	apache-libcloud	0	0.4.0	HIGH	Apache Libcloud does not verify 
 CVE-2010-4340	PyPI	apache-libcloud	0	0.4.2	MEDIUM	libcloud before 0.4.1 does not verify SSL certificates for HTTPS connections, which allows remote attackers to spoof ce…
 CVE-2012-3446	PyPI	apache-libcloud	0	0.11.1	MEDIUM	Apache Libcloud vulnerable to certificate impersonation
 CVE-2013-6480	PyPI	apache-libcloud	0.12.3	0.13.3	LOW	Libcloud does not properly scrub data when destroying a DigitalOcean node
+CVE-2026-64640	PyPI	apache-polaris	0	1.7.0	MEDIUM	Apache Polaris did not consistently validate storage locations supplied during table and view registration.  An authent…
 CVE-2023-37924	PyPI	apache-submarine	0.7.0	0.8.0	CRITICAL	SQL injection in Apache Submarine
 CVE-2023-46302	PyPI	apache-submarine	0.7.0	0.8.0	CRITICAL	Deserialization of Untrusted Data in apache-submarine
 CVE-2019-12413	PyPI	apache-superset	0	0.31.0	MEDIUM	Users able to query database metadata in Apache Superset
@@ -36997,6 +37148,7 @@ CVE-2025-3047	PyPI	aws-sam-cli	0	1.133.0	MEDIUM	AWS SAM CLI Path Traversal allow
 CVE-2025-3048	PyPI	aws-sam-cli	0	1.134.0	MEDIUM	AWS SAM CLI Path Traversal allows file copy to local cache
 GHSA-rjc6-vm4h-85cg	PyPI	aws-sam-cli	0	1.122.0	MEDIUM	Sensitive Information Exposure Through Insecure Logging For Secrets Like Metadata.DockerBuildArgs
 CVE-2026-13769	PyPI	awscli	0	1.44.78	MEDIUM	AWS CLI: Overly permissive File Permissions
+CVE-2026-18654	PyPI	awscli	0	1.45.28	MEDIUM	AWS CLI: Disabled SSH host key verification in Amazon AWS CLI EMR helper commands
 GHSA-747p-wmpv-9c78	PyPI	awscli	1.13.0	1.44.38	MEDIUM	AWS CLI: cli_history database does not restrict file permissions on Unix systems
 CVE-2021-40828	PyPI	awsiotsdk	0	1.5.18	MEDIUM	Improper certificate management in AWS IoT Device SDK v2
 CVE-2021-40829	PyPI	awsiotsdk	0	1.6.1	HIGH	Improper certificate management in AWS IoT Device SDK v2
@@ -37064,7 +37216,8 @@ GHSA-r82c-j4mq-5xfw	PyPI	bitlyshortener	0	0.5.0	HIGH	Update bitlyshortener to >=
 GHSA-rcrv-228c-gprj	PyPI	bitlyshortener	0	0.6.0	MEDIUM	Invalid URL generation in bitlyshortener
 CVE-2024-21503	PyPI	black	0	24.3.0	MEDIUM	Black vulnerable to Regular Expression Denial of Service (ReDoS)
 CVE-2026-31900	PyPI	black	0	26.3.0	MEDIUM	Black is the uncompromising Python code formatter. Black provides a GitHub action for formatting code. This action supp…
-CVE-2026-32274	PyPI	black	0	26.3.1	HIGH	Black: Arbitrary file writes from unsanitized user input in cache file name
+CVE-2026-32274	PyPI	black	0	26.3.1	MEDIUM	Black is the uncompromising Python code formatter. Prior to 26.3.1, Black writes a cache file, the name of which is com…
+CVE-2026-32274	PyPI	black	24.3.0	26.3.1	HIGH	Black: Arbitrary file writes from unsanitized user input in cache file name
 CVE-2020-27589	PyPI	blackduck	0.0.25	0.0.53	HIGH	Improper Certificate Validation in blackduck
 CVE-2026-22779	PyPI	blacksheep	0	2.4.6	MEDIUM	BlackSheep's ClientSession is vulnerable to CRLF injection
 CVE-2020-26943	PyPI	blazar-dashboard	0	1.3.1	MEDIUM	Arbitrary Code Execution in blazar-dashboard
@@ -37384,6 +37537,9 @@ CVE-2024-26130	PyPI	cryptography	38.0.0	42.0.4	HIGH	cryptography NULL pointer de
 CVE-2026-26007	PyPI	cryptography	0	46.0.5	HIGH	cryptography Vulnerable to a Subgroup Attack Due to Missing Subgroup Validation for SECT Curves
 CVE-2026-34073	PyPI	cryptography	0	46.0.6	LOW	cryptography has incomplete DNS name constraint enforcement on peer names
 CVE-2026-39892	PyPI	cryptography	45.0.0	46.0.7	MEDIUM	Cryptography vulnerable to buffer overflow if non-contiguous buffers were passed to APIs
+CVE-2026-69247	PyPI	cryptography	44.0.0	50.0.0	HIGH	cryptography: PKCS#7 EnvelopedData decryption exposes a Bleichenbacher oracle through distinguishable errors and timing
+CVE-2026-69248	PyPI	cryptography	0	49.0.0	MEDIUM	python-cryptography verifier accepts wildcard DNS names allowing escape from permittedSubtrees
+CVE-2026-69249	PyPI	cryptography	0	49.0.0	HIGH	python-cryptography: Duplicate self-signed intermediates can cause exponential path-building
 GHSA-39hc-v87j-747x	PyPI	cryptography	37.0.0	38.0.3	MEDIUM	Vulnerable OpenSSL included in cryptography wheels
 GHSA-537c-gmf6-5ccf	PyPI	cryptography	0.5.0	48.0.1	HIGH	Vulnerable OpenSSL included in cryptography wheels
 GHSA-5cpq-8wj7-hf2v	PyPI	cryptography	0.5	41.0.0	LOW	Vulnerable OpenSSL included in cryptography wheels
@@ -38004,7 +38160,9 @@ CVE-2026-33034	PyPI	django	6.0	6.0.4	HIGH	Django: SGI requests with a missing or
 CVE-2026-35192	PyPI	django	5.2	5.2.14	LOW	Django Uses Persistent Cookies Containing Sensitive Information
 CVE-2026-35192	PyPI	django	6.0	6.0.5	LOW	Django Uses Persistent Cookies Containing Sensitive Information
 CVE-2026-35193	PyPI	django	5.2	5.2.15	MEDIUM	An issue was discovered in Django 5.2 before 5.2.15 and 6.0 before 6.0.6. `django.middleware.cache.UpdateCacheMiddlewar…
+CVE-2026-35193	PyPI	django	5.2.0	5.2.15	LOW	Django: UpdateCacheMiddleware may disclose private cached responses by omitting Authorization from Vary
 CVE-2026-35193	PyPI	django	6.0	6.0.6	MEDIUM	An issue was discovered in Django 5.2 before 5.2.15 and 6.0 before 6.0.6. `django.middleware.cache.UpdateCacheMiddlewar…
+CVE-2026-35193	PyPI	django	6.0.0	6.0.6	LOW	Django: UpdateCacheMiddleware may disclose private cached responses by omitting Authorization from Vary
 CVE-2026-3902	PyPI	django	4.2	4.2.30	HIGH	Django vulnerable to ASGI header spoofing via underscore/hyphen conflation
 CVE-2026-3902	PyPI	django	5.2	5.2.13	HIGH	Django vulnerable to ASGI header spoofing via underscore/hyphen conflation
 CVE-2026-3902	PyPI	django	6.0	6.0.4	HIGH	Django vulnerable to ASGI header spoofing via underscore/hyphen conflation
@@ -38014,24 +38172,36 @@ CVE-2026-4277	PyPI	django	6.0	6.0.4	LOW	Django vulnerable to privilege abuse in 
 CVE-2026-4292	PyPI	django	4.2	4.2.30	LOW	Django vulnerable to privilege abuse in ModelAdmin.list_editable
 CVE-2026-4292	PyPI	django	5.2	5.2.13	LOW	Django vulnerable to privilege abuse in ModelAdmin.list_editable
 CVE-2026-4292	PyPI	django	6.0	6.0.4	LOW	Django vulnerable to privilege abuse in ModelAdmin.list_editable
+CVE-2026-48587	PyPI	django	0	5.2.15	LOW	Django: has_vary_header may expose cached responses when Vary values contain whitespace
 CVE-2026-48587	PyPI	django	5.2	5.2.15	MEDIUM	An issue was discovered in Django 5.2 before 5.2.15 and 6.0 before 6.0.6. `django.utils.cache.has_vary_header()` in Dja…
 CVE-2026-48587	PyPI	django	6.0	6.0.6	MEDIUM	An issue was discovered in Django 5.2 before 5.2.15 and 6.0 before 6.0.6. `django.utils.cache.has_vary_header()` in Dja…
+CVE-2026-48587	PyPI	django	6.0.0	6.0.6	LOW	Django: has_vary_header may expose cached responses when Vary values contain whitespace
+CVE-2026-48588	PyPI	django	0	5.2.16	LOW	Django: cache middleware may expose private responses when unrelated request cookies are present
 CVE-2026-48588	PyPI	django	5.2	5.2.16	MEDIUM	An issue was discovered in Django 6.0 before 6.0.7 and 5.2 before 5.2.16. `UpdateCacheMiddleware` and the `cache_page()…
 CVE-2026-48588	PyPI	django	6.0	6.0.7	MEDIUM	An issue was discovered in Django 6.0 before 6.0.7 and 5.2 before 5.2.16. `UpdateCacheMiddleware` and the `cache_page()…
+CVE-2026-48588	PyPI	django	6.0.0	6.0.7	LOW	Django: cache middleware may expose private responses when unrelated request cookies are present
+CVE-2026-53877	PyPI	django	0	5.2.16	MEDIUM	Django: GDALRaster may over-read heap memory when constructed from bytes
 CVE-2026-53877	PyPI	django	5.2	5.2.16	MEDIUM	An issue was discovered in Django 6.0 before 6.0.7 and 5.2 before 5.2.16. `django.contrib.gis.gdal.GDALRaster` over-rea…
 CVE-2026-53877	PyPI	django	6.0	6.0.7	MEDIUM	An issue was discovered in Django 6.0 before 6.0.7 and 5.2 before 5.2.16. `django.contrib.gis.gdal.GDALRaster` over-rea…
+CVE-2026-53877	PyPI	django	6.0.0	6.0.7	MEDIUM	Django: GDALRaster may over-read heap memory when constructed from bytes
+CVE-2026-53878	PyPI	django	0	5.2.16	MEDIUM	Django: DomainNameValidator permits newline characters that may enable HTTP header injection
 CVE-2026-53878	PyPI	django	5.2	5.2.16	MEDIUM	An issue was discovered in Django 6.0 before 6.0.7 and 5.2 before 5.2.16. `DomainNameValidator` does not prohibit newli…
 CVE-2026-53878	PyPI	django	6.0	6.0.7	MEDIUM	An issue was discovered in Django 6.0 before 6.0.7 and 5.2 before 5.2.16. `DomainNameValidator` does not prohibit newli…
+CVE-2026-53878	PyPI	django	6.0.0	6.0.7	MEDIUM	Django: DomainNameValidator permits newline characters that may enable HTTP header injection
 CVE-2026-5766	PyPI	django	5.2	5.2.14	MEDIUM	Django has an Improper Handling of Length Parameter Inconsistency
 CVE-2026-5766	PyPI	django	6.0	6.0.5	MEDIUM	Django has an Improper Handling of Length Parameter Inconsistency
+CVE-2026-6873	PyPI	django	0	5.2.15	LOW	Django: signed cookies are vulnerable to salt namespace collisions
 CVE-2026-6873	PyPI	django	5.2	5.2.15	MEDIUM	An issue was discovered in Django 6.0 before 6.0.6 and 5.2 before 5.2.15. `django.http.HttpRequest.get_signed_cookie` i…
 CVE-2026-6873	PyPI	django	6.0	6.0.6	MEDIUM	An issue was discovered in Django 6.0 before 6.0.6 and 5.2 before 5.2.15. `django.http.HttpRequest.get_signed_cookie` i…
+CVE-2026-6873	PyPI	django	6.0.0	6.0.6	LOW	Django: signed cookies are vulnerable to salt namespace collisions
 CVE-2026-6907	PyPI	django	5.2	5.2.14	LOW	Django Uses Cache Containing Sensitive Information
 CVE-2026-6907	PyPI	django	6.0	6.0.5	LOW	Django Uses Cache Containing Sensitive Information
 CVE-2026-7666	PyPI	django	5.2	5.2.15	LOW	Django fails to prevent reuse of a partially-initialized connection after a failed `STARTTLS` handshake
 CVE-2026-7666	PyPI	django	6.0	6.0.6	LOW	Django fails to prevent reuse of a partially-initialized connection after a failed `STARTTLS` handshake
+CVE-2026-8404	PyPI	django	0	5.2.15	LOW	Django: UpdateCacheMiddleware may disclose cached responses due to case-sensitive Cache-Control handling
 CVE-2026-8404	PyPI	django	5.2	5.2.15	MEDIUM	An issue was discovered in Django 5.2 before 5.2.15 and 6.0 before 6.0.6. `django.middleware.cache.UpdateCacheMiddlewar…
 CVE-2026-8404	PyPI	django	6.0	6.0.6	MEDIUM	An issue was discovered in Django 5.2 before 5.2.15 and 6.0 before 6.0.6. `django.middleware.cache.UpdateCacheMiddlewar…
+CVE-2026-8404	PyPI	django	6.0.0	6.0.6	LOW	Django: UpdateCacheMiddleware may disclose cached responses due to case-sensitive Cache-Control handling
 CVE-2017-20182	PyPI	django-ajax-utilities	0	1.2.8	MEDIUM	Cross-site Scripting in django-ajax-utilities
 CVE-2025-65430	PyPI	django-allauth	0	65.13.0	MEDIUM	django-allauth does not reject access tokens for inactive users
 CVE-2025-65431	PyPI	django-allauth	0	65.13.0	MEDIUM	django-allauth's Okta and NetIQ implementations used a mutable identifier for authorization decisions
@@ -38437,11 +38607,20 @@ CVE-2026-67323	PyPI	gitpython	0	3.1.51	HIGH	GitPython: command injection via ung
 CVE-2026-67324	PyPI	gitpython	3.1.50	3.1.51	HIGH	GitPython unsafe clone option gate bypass through joined short options
 CVE-2026-67325	PyPI	gitpython	0	3.1.51	HIGH	GitPython: Command Injection via git long-option prefix abbreviation bypass of CVE-2026-42215 blocklist
 CVE-2026-67326	PyPI	gitpython	0	3.1.50	HIGH	GitPython: Newline injection in config_writer() section parameter bypasses CVE-2026-42215 patch, enabling RCE via core.…
-GHSA-3rp5-jjmw-4wv2	PyPI	gitpython	0	3.1.53	HIGH	GitPython: git-config section-name injection enables arbitrary config directives (core.sshCommand RCE)
+CVE-2026-69097	PyPI	gitpython	0	3.1.53	HIGH	GitPython: git-config section-name injection enables arbitrary config directives (core.sshCommand RCE)
+GHSA-3f7w-8rr8-f37f	PyPI	gitpython	0	3.1.57	HIGH	GitPython: Unguarded git option forwarding in IndexFile.checkout() and TagReference.create() enables arbitrary file ove…
+GHSA-4gmw-gg2m-w46p	PyPI	gitpython	0	3.1.58	HIGH	GitPython: Unguarded git read-tree option forwarding in IndexFile.from_tree/reset/merge_tree enables arbitrary file ove…
+GHSA-539m-9xh6-q6rr	PyPI	gitpython	0	3.1.57	MEDIUM	GitPython: Incomplete unsafe_git_archive_options denylist omits --add-file / --add-virtual-file, enabling arbitrary fil…
 GHSA-6p8h-3wgx-97gf	PyPI	gitpython	0	3.1.54	HIGH	GitPython: Incomplete unsafe_git_clone_options denylist omits --template enabling arbitrary command execution via clone…
 GHSA-94p4-4cq8-9g67	PyPI	gitpython	0	3.1.55	HIGH	GitPython: Environment-variable exfiltration via Repo.create_remote() / Remote.add() URL (incomplete fix of GHSA-rwj8-p…
+GHSA-9rj7-rf2p-w77r	PyPI	gitpython	0	3.1.58	HIGH	GitPython: Unguarded git option forwarding in Repo.init enables arbitrary command execution via --template clone hooks
 GHSA-fjr4-x663-mwxc	PyPI	gitpython	0	3.1.54	HIGH	GitPython: Arbitrary file overwrite via git diff --output argument injection in Diffable.diff (key- and value-controlle…
+GHSA-hh9p-6wh2-4mfc	PyPI	gitpython	0	3.1.58	MEDIUM	GitPython: Arbitrary file read via --pathspec-from-file in IndexFile.remove() and Head.checkout()
+GHSA-hmq2-w58f-27jc	PyPI	gitpython	0	3.1.58	HIGH	GitPython: Arbitrary Git Repository Creation Outside the Working Tree via Unvalidated .gitmodules Submodule Name in Git…
+GHSA-jm78-9fvv-mhgr	PyPI	gitpython	0	3.1.58	HIGH	GitPython: git-config OPTION-name injection via =/#/whitespace bypasses name validator, enabling forged core.sshCommand…
+GHSA-p538-c434-8v24	PyPI	gitpython	0	3.1.56	MEDIUM	GitPython: Arbitrary file truncation via git rev-list --output argument injection in unguarded Commit.count
 GHSA-r9mr-m37c-5fr3	PyPI	gitpython	0	3.1.54	HIGH	GitPython: Unsafe git option guard bypass via single-character kwarg value token smuggling enables arbitrary command ex…
+GHSA-wvpp-8hx9-p66j	PyPI	gitpython	0	3.1.58	HIGH	GitPython: Unsafe git option guard bypass via split_single_char_options=False short-option token smuggling enables comm…
 CVE-2012-4573	PyPI	glance	0	11.0.0a0	MEDIUM	OpenStack Glance arbitrary deletion of non-protected images
 CVE-2012-5482	PyPI	glance	0	11.0.0a0	MEDIUM	OpenStack Glance arbitrary deletion of non-protected images
 CVE-2013-0212	PyPI	glance	2012.1	2012.2.3	MEDIUM	OpenStack Glance logs user name and password in cleartext
@@ -38575,6 +38754,7 @@ CVE-2024-1135	PyPI	gunicorn	0	22.0.0	HIGH	Request smuggling leading to endpoint 
 CVE-2024-6827	PyPI	gunicorn	0	22.0.0	HIGH	Gunicorn HTTP Request/Response Smuggling vulnerability
 CVE-2025-43859	PyPI	h11	0	0.16.0	CRITICAL	h11 accepts some malformed Chunked-Encoding bodies
 CVE-2025-57804	PyPI	h2	0	4.3.0	MEDIUM	h2 allows HTTP Request Smuggling due to illegal characters in headers
+CVE-2026-71554	PyPI	h2	0	4.4.1	MEDIUM	h2: Duplicate Host header could facilitate request smuggling
 CVE-2023-6569	PyPI	h2o	0	3.46.0.1	CRITICAL	External Control of File Name or Path in h2oai/h2o-3
 CVE-2024-10553	PyPI	h2o	0	3.46.0.6	CRITICAL	H2O Deserialization of Untrusted Data Vulnerability
 CVE-2026-3960	PyPI	h2o	0	3.46.0.10	MEDIUM	A critical remote code execution vulnerability exists in the unauthenticated REST API endpoint /99/ImportSQLTable in H2…
@@ -38919,10 +39099,22 @@ CVE-2025-9906	PyPI	keras	0	3.11.0	HIGH	Keras is vulnerable to Deserialization of
 CVE-2026-0897	PyPI	keras	3.0.0	3.12.1	HIGH	Keras vulnerable to DoS via Malicious .keras Model (HDF5 Shape Bomb Causes Petabyte Allocation in KerasFileEditor)
 CVE-2026-0897	PyPI	keras	3.0.0	3.13.1	MEDIUM	Allocation of Resources Without Limits or Throttling in the HDF5 weight loading component in Google Keras 3.0.0 through…
 CVE-2026-0897	PyPI	keras	3.13.0	3.13.2	HIGH	Keras vulnerable to DoS via Malicious .keras Model (HDF5 Shape Bomb Causes Petabyte Allocation in KerasFileEditor)
-CVE-2026-11816	PyPI	keras	0	3.14.0	MEDIUM	Keras versions prior to 3.14.0 are vulnerable to a path traversal issue in the archive extraction utilities located in…
+CVE-2026-11816	PyPI	keras	0	3.14.0	HIGH	Keras archive extraction utilities allow path traversal and arbitrary file writes
+CVE-2026-12479	PyPI	keras	0	3.12.3	MEDIUM	Keras: DiskIOStore permits path traversal through crafted layer names
+CVE-2026-12479	PyPI	keras	3.13.0	3.15.0	MEDIUM	Keras: DiskIOStore permits path traversal through crafted layer names
+CVE-2026-12480	PyPI	keras	0	3.12.3	MEDIUM	Keras: HDF5 virtual datasets can disclose local files
+CVE-2026-12480	PyPI	keras	3.13.0	3.15.0	MEDIUM	Keras: HDF5 virtual datasets can disclose local files
+CVE-2026-12481	PyPI	keras	0	3.12.3	HIGH	Keras: Lambda deserialization can bypass safe mode and execute code
+CVE-2026-12481	PyPI	keras	3.13.0	3.15.0	HIGH	Keras: Lambda deserialization can bypass safe mode and execute code
+CVE-2026-12482	PyPI	keras	0	3.12.3	LOW	Keras: tar extraction permits symlink-based path traversal
+CVE-2026-12482	PyPI	keras	3.13.0	3.15.0	LOW	Keras: tar extraction permits symlink-based path traversal
+CVE-2026-12484	PyPI	keras	0	3.12.3	HIGH	Keras: TorchModuleWrapper can deserialize unsafe PyTorch pickle data
+CVE-2026-12484	PyPI	keras	3.13.0	3.15.0	HIGH	Keras: TorchModuleWrapper can deserialize unsafe PyTorch pickle data
 CVE-2026-1462	PyPI	keras	0	3.13.2	HIGH	Keras has an untrusted deserialization vulnerability
 CVE-2026-1669	PyPI	keras	3.0.0	3.12.1	HIGH	Keras has a Local File Disclosure via HDF5 External Storage During Keras Weight Loading
 CVE-2026-1669	PyPI	keras	3.13.0	3.13.2	HIGH	Keras has a Local File Disclosure via HDF5 External Storage During Keras Weight Loading
+CVE-2026-9335	PyPI	keras	0	3.12.3	MEDIUM	Keras: HDF5 links can disclose local file contents
+CVE-2026-9335	PyPI	keras	3.13.0	3.15.0	MEDIUM	Keras: HDF5 links can disclose local file contents
 CVE-2017-15111	PyPI	keycloak-httpd-client-install	0	0.8	MEDIUM	keycloak-httpd-client-install symlink attack vulnerability
 CVE-2017-15112	PyPI	keycloak-httpd-client-install	0	0.8	HIGH	keycloak-httpd-client-install Insecure Secrets
 CVE-2022-1053	PyPI	keylime	0	6.4.0	CRITICAL	Tenant and Verifier might not use the same registrar data
@@ -39166,9 +39358,11 @@ CVE-2026-48776	PyPI	langgraph	0	0.3.15	MEDIUM	LangGraph Python SDK is used to co
 CVE-2025-64439	PyPI	langgraph-checkpoint	0	3.0.0	HIGH	LangGraph Checkpoint affected by RCE in "json" mode of JsonPlusSerializer
 CVE-2026-27794	PyPI	langgraph-checkpoint	0	4.0.0	MEDIUM	LangGraph: BaseCache Deserialization of Untrusted Data may lead to Remote Code Execution
 CVE-2026-48775	PyPI	langgraph-checkpoint	0	4.1.1	MEDIUM	LangGraph Checkpoint: Unsafe JSON deserialization in checkpoint loading
+CVE-2026-71433	PyPI	langgraph-checkpoint-postgres	0	3.1.1	MEDIUM	LangGraph: Namespace prefix matching crosses segment boundaries in Postgres and SQLite stores
 CVE-2025-64104	PyPI	langgraph-checkpoint-sqlite	0	2.0.11	HIGH	LangGraph SQLite Checkpoint Filter Key SQL Injection POC for SqliteStore
 CVE-2025-67644	PyPI	langgraph-checkpoint-sqlite	0	3.0.1	HIGH	LangGraph's SQLite is vulnerable to SQL injection via metadata filter key in SQLite checkpointer list method
 CVE-2025-8709	PyPI	langgraph-checkpoint-sqlite	0	2.0.11	HIGH	LangGraph's SQLite store implementation has a SQL Injection Vulnerability
+CVE-2026-71433	PyPI	langgraph-checkpoint-sqlite	0	3.1.1	MEDIUM	LangGraph: Namespace prefix matching crosses segment boundaries in Postgres and SQLite stores
 CVE-2026-48776	PyPI	langgraph-sdk	0	0.3.15	MEDIUM	LangGraph SDK has unsafe URL path construction
 CVE-2025-46724	PyPI	langroid	0	0.53.15	CRITICAL	Langroid has a Code Injection vulnerability in TableChatAgent
 CVE-2025-46725	PyPI	langroid	0	0.53.15	HIGH	Langroid has a Code Injection vulnerability in LanceDocChatAgent through vector_store
@@ -39221,6 +39415,7 @@ CVE-2024-43598	PyPI	lightgbm	0	4.6.0	MEDIUM	LightGBM Remote Code Execution Vulne
 CVE-2024-43598	PyPI	lightgbm	1.0.0	4.6.0	HIGH	LightGBM Remote Code Execution Vulnerability
 CVE-2024-5452	PyPI	lightning	0	2.3.3	CRITICAL	Remote code execution in pytorch lightning
 CVE-2024-5980	PyPI	lightning	0	2.3.3	CRITICAL	pytorch-lightning vulnerable to Arbitrary File Write via /v1/runs API endpoint
+CVE-2026-58659	PyPI	lightning	0	2022.6.15	MEDIUM	PyTorch Lightning through 2.6.5, fixed in commit d710d68, contains a remote code execution vulnerability in the _load_s…
 CVE-2025-6773	PyPI	lightrag-hku	0	1.3.8	MEDIUM	HKUDS LightRAG allows Path Traversal via function upload_to_input_dir
 CVE-2026-30762	PyPI	lightrag-hku	0	1.4.13	HIGH	LightRAG: Hardcoded JWT Signing Secret Allows Authentication Bypass
 CVE-2026-39413	PyPI	lightrag-hku	0	1.4.14	MEDIUM	lightrag-hku: JWT Algorithm Confusion Vulnerability
@@ -39895,6 +40090,7 @@ CVE-2026-49986	PyPI	neuro-cortex-memory	0	3.18.0	HIGH	Cortex has Untrusted Proje
 CVE-2013-2255	PyPI	neutron	0	7.0.0a0	MEDIUM	OpenStack Keystone and other components vulnerable to Improper Certificate Validation
 CVE-2014-0056	PyPI	neutron	2012.2	2013.2.3	MEDIUM	OpenStack Neutron Improper Authentication vulnerability
 CVE-2015-3221	PyPI	neutron	0	2014.2.4	MEDIUM	OpenStack Neutron Improper Input Validation vulnerability
+CVE-2015-3221	PyPI	neutron	2000	2014.2.4	MEDIUM	OpenStack Neutron Improper Input Validation vulnerability
 CVE-2015-3221	PyPI	neutron	2015.1.0	2015.1.1	MEDIUM	OpenStack Neutron Improper Input Validation vulnerability
 CVE-2015-5240	PyPI	neutron	0	7.0.0	LOW	OpenStack Neutron Race condition vulnerability
 CVE-2015-8914	PyPI	neutron	0	7.0.5	CRITICAL	OpenStack Neutron allows remote attackers to bypass an intended ICMPv6-spoofing protection mechanism
@@ -40297,6 +40493,7 @@ CVE-2026-54016	PyPI	open-webui	0	0.9.6	MEDIUM	Open WebUI BOLA: `search_knowledge
 CVE-2026-54017	PyPI	open-webui	0	0.9.6	HIGH	Open WebUI: Path traversal / SSRF in terminal server proxy via encoded path traversal
 CVE-2026-54018	PyPI	open-webui	0	0.9.6	HIGH	Open WebUI: SSRF Protection Bypass in Playwright Web Loader via HTTP Redirects
 CVE-2026-54019	PyPI	open-webui	0	0.9.6	MEDIUM	Open WebUI: RAG ACL Bypass in Milvus Multitenancy Mode
+CVE-2026-54020	PyPI	open-webui	0	0.11.0	MEDIUM	Open WebUI: DNS Rebinding SSRF Bypass
 CVE-2026-54021	PyPI	open-webui	0	0.9.6	MEDIUM	Open WebUI: Authenticated users can target arbitrary configured Ollama backends via unguarded url_idx path parameter
 CVE-2026-54022	PyPI	open-webui	0	0.8.11	MEDIUM	Open WebUI: Any authenticated user can read other users' private notes via Socket.IO
 CVE-2026-56398	PyPI	open-webui	0	0.9.5	HIGH	Open WebUI vulnerable to stored XSS via OAuth picture claim stored as SVG data URI in profile_image_url
@@ -40319,6 +40516,22 @@ CVE-2026-59226	PyPI	open-webui	0.9.0	0.10.0	LOW	Open WebUI: Scheduled automation
 CVE-2026-59227	PyPI	open-webui	0.8.11	0.10.0	MEDIUM	Open WebUI: POST /api/v1/images/edit bypasses the global image-edit switch and the per-user image-generation permission
 CVE-2026-59714	PyPI	open-webui	0.9.5	0.10.0	HIGH	Open WebUI: Cross-channel message overwrite via chat completion API (single-model and multimodel message_ids)
 CVE-2026-59715	PyPI	open-webui	0.6.16	0.10.0	LOW	Open WebUI: Unauthenticated WebSocket Access to Collaborative Document Handlers (ydoc:awareness:update, ydoc:document:l…
+CVE-2026-70479	PyPI	open-webui	0.9.6	0.11.0	HIGH	Open WebUI: SSRF into internal services via unvalidated sub-resource requests in the Playwright web loader
+CVE-2026-70480	PyPI	open-webui	0.6.34	0.11.0	MEDIUM	Open WebUI: Client-side SSRF via unrestricted external resource loading in Vega/Vega-Lite chart rendering
+CVE-2026-70481	PyPI	open-webui	0.5.0	0.11.0	MEDIUM	Open WebUI: Any member with write access to a standard channel can edit or delete other members' messages
+CVE-2026-70482	PyPI	open-webui	0.8.0	0.11.0	HIGH	Open WebUI: Account takeover via OAuth token exchange accepting tokens issued to any client
+CVE-2026-70483	PyPI	open-webui	0.9.6	0.11.0	LOW	Open WebUI: Any authenticated user can cancel another user's chat generation via the chat delete endpoint
+CVE-2026-70484	PyPI	open-webui	0.7.0	0.11.0	MEDIUM	Open WebUI: Users denied the image-generation permission can still generate images via chat completions
+CVE-2026-70485	PyPI	open-webui	0.9.0	0.11.0	HIGH	Open WebUI: Any authenticated user can reach internal services and cloud metadata via NAT64-encoded URLs
+CVE-2026-70486	PyPI	open-webui	0.9.0	0.11.0	HIGH	Open WebUI: Same-origin XSS to account takeover via terminal file-preview iframe hardcoding allow-same-origin
+CVE-2026-70487	PyPI	open-webui	0.8.8	0.11.0	MEDIUM	Open WebUI: Cross-user file content disclosure via request-scoped direct model knowledge metadata
+CVE-2026-70488	PyPI	open-webui	0.9.6	0.11.0	MEDIUM	Open WebUI: Deletion of directories and file embeddings in other knowledge bases via sync cleanup
+CVE-2026-70489	PyPI	open-webui	0.9.0	0.11.0	MEDIUM	Open WebUI: Instance-wide stall via automation recurrence rules that force multi-second parsing
+CVE-2026-70490	PyPI	open-webui	0.8.8	0.11.0	MEDIUM	Open WebUI: Unapproved accounts can open terminal sessions via a WebSocket auth path missing the role check
+CVE-2026-70491	PyPI	open-webui	0	0.11.0	MEDIUM	Open WebUI: Tool source code disclosed to read-only users via the tool list and get endpoints
+CVE-2026-70492	PyPI	open-webui	0.10.0	0.11.0	HIGH	Open WebUI: Stored XSS via unescaped KaTeX render-error fallback in rendered messages
+CVE-2026-70493	PyPI	open-webui	0.9.6	0.11.0	MEDIUM	Open WebUI: Any authenticated user can stall a worker via a knowledge-search pattern that backtracks catastrophically
+CVE-2026-70494	PyPI	open-webui	0.10.0	0.11.0	HIGH	Open WebUI: A folder write-collaborator can permanently delete the owner's chats by deleting a shared subfolder
 GHSA-6wj5-5pgr-jwq8	PyPI	open-webui	0	0.4.7	HIGH	Open WebUI Unauthenticated Multipart Boundary Denial of Service (DoS) Vulnerability in api/chat/file
 CVE-2020-15141	PyPI	openapi-python-client	0	0.5.3	LOW	Path Traversal in openapi-python-client
 CVE-2020-15142	PyPI	openapi-python-client	0	0.5.3	HIGH	openapi-python-client Arbitrary Code Generation vulnerability
@@ -40520,7 +40733,7 @@ CVE-2014-7231	PyPI	oslo-utils	0	0.2.0	LOW	OpenStack Oslo utility sensitive infor
 CVE-2022-0718	PyPI	oslo-utils	0	4.10.1	MEDIUM	python-oslo-utils has improper password parsing
 CVE-2018-10406	PyPI	osxcollector	0	1.10	HIGH	Yelp OSXCollector Improper Certificate Validation
 CVE-2026-47211	PyPI	ouroboros-ai	0	0.39.0	HIGH	ouroboros-ai Vulnerable to Remote Code Execution via Untrusted Project-Directory .env
-GHSA-jv2h-4p9v-wf5w	PyPI	ouroboros-ai	0	0.42.1	HIGH	ouroboros-ai: Incomplete fix of CVE-2026-47211: untrusted project .env can still reach RCE via omitted execution-routin…
+CVE-2026-66065	PyPI	ouroboros-ai	0	0.42.1	HIGH	ouroboros-ai: Incomplete fix of CVE-2026-47211: untrusted project .env can still reach RCE via omitted execution-routin…
 CVE-2014-0161	PyPI	ovirt-engine-sdk-python	0	3.4.0.7	HIGH	ovirt-engine-sdk-python improper validation of hostname in x.509 certificate
 CVE-2014-0161	PyPI	ovirt-engine-sdk-python	3.5.0.0	3.5.0.4	HIGH	ovirt-engine-sdk-python improper validation of hostname in x.509 certificate
 CVE-2017-16618	PyPI	owlmixin	0	2.0.0	CRITICAL	Unsafe deserialization in owlmixin
@@ -41496,6 +41709,7 @@ CVE-2023-32309	PyPI	pymdown-extensions	1.5	10.0	HIGH	Any file can be included wi
 CVE-2025-68142	PyPI	pymdown-extensions	0	10.16.1	LOW	PyMdown Extensions has a ReDOS bug in its Figure Capture extension
 CVE-2026-46338	PyPI	pymdown-extensions	10.0.1	10.21.3	MEDIUM	Regression in pymdownx.snippets reintroduces sibling-prefix path traversal bypass despite restrict_base_path
 CVE-2026-61632	PyPI	pymdown-extensions	0	11.0.0	MEDIUM	PyMdown Extensions: Path traversal in the b64 extension lets <img src> read files outside base_path
+CVE-2026-67422	PyPI	pymdown-extensions	0	11.0.1	HIGH	pymdown-extensions: exponential-backtracking ReDoS in caret, tilde, betterem, and magiclink inline processors
 CVE-2013-2132	PyPI	pymongo	0	2.5.2	MEDIUM	Use of NullPointerException Catch to Detect NULL Pointer Dereference in Pymongo
 CVE-2024-5629	PyPI	pymongo	0	4.6.3	MEDIUM	PyMongo Out-of-bounds Read in the bson module
 CVE-2026-53720	PyPI	pymonocypher	0	4.0.2.8	MEDIUM	pymonocypher: Potential heap buffer overflow on nb_blocks in argon2i_32 when provided buffer is too small
@@ -41548,6 +41762,8 @@ CVE-2026-59935	PyPI	pypdf	0	6.14.2	HIGH	pypdf: Possible infinite loop for not te
 CVE-2026-59936	PyPI	pypdf	0	6.14.1	HIGH	pypdf: Possible infinite loop for not terminated inline images
 CVE-2026-59937	PyPI	pypdf	0	6.14.0	MEDIUM	pypdf: Possible long runtimes for repeated malformed cross-reference entries
 CVE-2026-59938	PyPI	pypdf	0	6.14.0	MEDIUM	pypdf: Possible large memory usage for wrong image dimensions
+CVE-2026-71852	PyPI	pypdf	0	6.15.0	MEDIUM	pypdf: Possible long runtimes/large memory usage for large CID font width ranges
+CVE-2026-71870	PyPI	pypdf	0	6.15.0	MEDIUM	pypdf: Possible large memory usage for large /ToUnicode streams
 CVE-2022-24859	PyPI	pypdf2	0	1.27.5	MEDIUM	Manipulated inline images can cause Infinite Loop in PyPDF2
 CVE-2023-36464	PyPI	pypdf2	2.2.0	3.9.0	MEDIUM	pypdf and PyPDF2 possible Infinite Loop when a comment isn't followed by a character
 CVE-2023-36807	PyPI	pypdf2	2.10.5	2.10.6	MEDIUM	PyPDF2 vulnerable to possible Infinite Loop when reading malformed objects
@@ -48890,6 +49106,7 @@ CVE-2026-33210	RubyGems	json	2.14.0	2.15.2.1	HIGH	Ruby JSON has a format string 
 CVE-2026-33210	RubyGems	json	2.16.0	2.17.1.2	HIGH	Ruby JSON has a format string injection vulnerability
 CVE-2026-33210	RubyGems	json	2.18.0	2.19.2	HIGH	Ruby JSON has a format string injection vulnerability
 CVE-2026-54696	RubyGems	json	2.9.0	2.19.9	LOW	Ruby json: JSON generator heap buffer overflow when streaming to an IO
+CVE-2026-71847	RubyGems	json	2.20.0	2.21.2	LOW	Ruby JSON: JSON::ResumableParser#partial_value dereferences a freed input buffer and crashes on truncated duplicate-key…
 CVE-2018-1000539	RubyGems	json-jwt	0.5.1	1.9.4	MEDIUM	Json-jwt did not verify the cryptographic signature for data
 CVE-2019-18848	RubyGems	json-jwt	0	1.11.0	HIGH	JSON-jwt Gem lacked element count during splitting of JWE string
 CVE-2023-51774	RubyGems	json-jwt	0	1.15.3.1	MEDIUM	json-jwt allows bypass of identity checks via a sign/encryption confusion attack
@@ -50670,6 +50887,10 @@ RUSTSEC-2022-0002	crates.io	dashmap	5.0.0	5.1.0	MEDIUM	Unsoundness in `dashmap` 
 GHSA-pfr9-2p92-qrhq	crates.io	dbn	0	0.22.1	MEDIUM	Databento Binary Encoding (DBN) has a heap buffer overflow using c_chars_to_str function
 RUSTSEC-2024-0377	crates.io	dbn	0.0.0-0	0.22.1-0	MEDIUM	Heap Buffer overflow using c_chars_to_str function
 CVE-2026-22696	crates.io	dcap-qvl	0	0.3.9	CRITICAL	dcap-qvl has Missing Verification for QE Identity
+RUSTSEC-2026-0238	crates.io	dcrypt-algorithms	0.0.0-0	2.0.0	MEDIUM	Low-level GCM ignores the operation nonce
+RUSTSEC-2026-0242	crates.io	dcrypt-api	0.0.0-0	2.0.0	MEDIUM	Safe ErrorRegistry APIs can cause undefined behavior
+RUSTSEC-2026-0240	crates.io	dcrypt-sign	0.0.0-0	2.0.0	MEDIUM	Ed25519 identity public keys permit universal signature forgery
+RUSTSEC-2026-0239	crates.io	dcrypt-symmetric	0.0.0-0	2.0.0	MEDIUM	Streaming AEAD does not authenticate stream structure
 CVE-2026-45310	crates.io	deepseek-tui	0	0.8.22	HIGH	DeepSeek TUI has SSRF via HTTP Redirect Bypass in fetch_url Tool
 CVE-2026-45311	crates.io	deepseek-tui	0.3.0	0.8.23	CRITICAL	DeepSeek TUI: run_tests Tool Enables RCE via Malicious Repository Without Approval
 CVE-2026-45373	crates.io	deepseek-tui	0	0.8.26	HIGH	DeepSeek TUI has SSRF‌ IPV6 bypass
@@ -50839,6 +51060,7 @@ CVE-2020-36465	crates.io	generic-array	0.13.0	0.13.3	HIGH	Use after free in gene
 CVE-2020-36465	crates.io	generic-array	0.8.0	0.9.1	HIGH	Use after free in generic-array
 CVE-2020-36465	crates.io	generic-array	0.8.0	0.8.4	MEDIUM	arr! macro erases lifetimes
 CVE-2020-36465	crates.io	generic-array	0.9.0	0.9.1	MEDIUM	arr! macro erases lifetimes
+RUSTSEC-2026-0244	crates.io	gettext-rs	0.0.0-0	0.8.0	MEDIUM	`setlocale` and `TextDomain::init` are unsound as they access environment with no synchronization
 CVE-2020-36211	crates.io	gfwx	0	0.3.0	HIGH	Data races in gfwx
 CVE-2020-36211	crates.io	gfwx	0.0.0-0	0.3.0	MEDIUM	ImageChunkMut needs bounds on its Send and Sync traits
 CVE-2021-36376	crates.io	git-delta	0	0.8.3	HIGH	Relative Path Traversal in git-delta
@@ -51671,6 +51893,9 @@ GHSA-vfvv-c25p-m7mm	crates.io	rkyv	0.8.0	0.8.16	MEDIUM	rkyv: Panic safety bugs i
 RUSTSEC-2026-0001	crates.io	rkyv	0.0.0-0	0.7.46	MEDIUM	Potential Undefined Behaviors in `Arc<T>`/`Rc<T>` impls of `from_value` on OOM
 RUSTSEC-2026-0001	crates.io	rkyv	0.8.0	0.8.13	MEDIUM	Potential Undefined Behaviors in `Arc<T>`/`Rc<T>` impls of `from_value` on OOM
 RUSTSEC-2026-0122	crates.io	rkyv	0.8.0	0.8.16	MEDIUM	Potential use-after-free due to lack of panic safety in `InlineVec::clear` and `SerVec::clear`
+RUSTSEC-2026-0233	crates.io	rkyv	0.8.0-rc.1	0.8.17	MEDIUM	Crafted archives can cause a use-after-free during deserialization
+RUSTSEC-2026-0234	crates.io	rkyv	0.8.0-rc.1	0.8.17	MEDIUM	Insufficient archive validation can cause out-of-bounds reads in archives containing hash tables
+RUSTSEC-2026-0235	crates.io	rkyv	0.7.0-pre.2	0.8.17	MEDIUM	Insufficient archive validation can cause out-of-bounds reads in archives containing Rc/Arc
 CVE-2026-42559	crates.io	rmcp	0	1.4.0	HIGH	rmcp Streamable HTTP server transport has a DNS rebinding vulnerability
 CVE-2026-42559	crates.io	rmcp	0.0.0-0	1.4.0	MEDIUM	DNS rebinding vulnerability in rmcp Streamable HTTP server transport
 GHSA-255r-3prx-mf99	crates.io	rmp-serde	0	1.1.1	MEDIUM	`rmp-serde` `Raw` and `RawRef` may crash when receiving invalid UTF-8
@@ -51724,6 +51949,7 @@ CVE-2026-46705	crates.io	russh	0.34.0-beta.1	0.61.0	MEDIUM	russh server userauth
 CVE-2026-48107	crates.io	russh	0.37.0	0.61.0	MEDIUM	Russh: Unchecked keyboard-interactive prompt count in client auth path
 CVE-2026-48108	crates.io	russh	0.34.0-beta.1	0.61.0	MEDIUM	Russh: SSH identification parsing accepted non-canonical client banners and did not bound pre-banner input
 CVE-2026-48110	crates.io	russh	0.34.0	0.61.0	HIGH	Russh SSH message fields were decoded through allocation-first parsers before field-specific bounds
+CVE-2026-68930	crates.io	russh	0	0.62.5	MEDIUM	Russh: Channel-scoped server callbacks can be reached without an open channel
 GHSA-5xvq-cp9x-6p6r	crates.io	russh	0	0.62.4	MEDIUM	Russh: Pre-auth remote panic via all-zero Curve25519 peer public value (encode_mpint OOB)
 GHSA-cqjc-rmpq-xprq	crates.io	russh	0	0.62.4	MEDIUM	Russh: Post-auth remote panic via pty-req with more than 130 terminal-mode records
 GHSA-g9hv-x236-4qp3	crates.io	russh	0	0.62.4	MEDIUM	Russh: client wrong-length X25519 `clone_from_slice` panic (pre-auth DoS)
@@ -52243,6 +52469,7 @@ CVE-2021-45680	crates.io	vec-const	0.0.0-0	2.0.0	MEDIUM	vec-const attempts to co
 CVE-2023-28448	crates.io	versionize	0.0.0-0	0.1.10	MEDIUM	`Versionize::deserialize` implementation for `FamStructWrapper<T>` is lacking bound checks, potentially leading to out…
 CVE-2023-28448	crates.io	versionize	0.1.1	0.1.10	MEDIUM	Versionize::deserialize implementation for FamStructWrapper<T> is lacking bound checks, potentially leading to out of b…
 RUSTSEC-2026-0181	crates.io	vibeio-http	0.0.0-0	0.3.2	MEDIUM	DoS vulnerability in HTTP/1.x chunked encoding parser triggered by maliciously crafted chunk lengths
+RUSTSEC-2026-0236	crates.io	viperjs	0.0.0-0	0.2.2	MEDIUM	A `BigInt` division panics, and two neighbouring operations answer wrongly in silence
 RUSTSEC-2025-0162	crates.io	vku	0.0.0-0	0.4.0	MEDIUM	`VMABuffer::set_data` may allow out-of-bounds writes from safe code
 CVE-2020-13759	crates.io	vm-memory	0	0.1.1	HIGH	Improper Synchronization and Race Condition in vm-memory
 CVE-2020-13759	crates.io	vm-memory	0.0.0-0	0.1.1	MEDIUM	Improper Synchronization and Race Condition in vm-memory
@@ -52632,6 +52859,9 @@ CVE-2026-54266	npm	@angular/common	22.0.0-next.0	22.0.1	HIGH	@angular/common: We
 CVE-2026-54268	npm	@angular/common	20.0.0-next.0	20.3.25	HIGH	@angular/common: Denial of Service (DoS) via OOM in Date Formatting (formatDate)
 CVE-2026-54268	npm	@angular/common	21.0.0-next.0	21.2.17	HIGH	@angular/common: Denial of Service (DoS) via OOM in Date Formatting (formatDate)
 CVE-2026-54268	npm	@angular/common	22.0.0-next.0	22.0.1	HIGH	@angular/common: Denial of Service (DoS) via OOM in Date Formatting (formatDate)
+CVE-2026-68945	npm	@angular/common	20.0.0-next.0	20.3.27	HIGH	Angular: Cache-Key Ambiguity in HttpTransferCache Leading to Cross-Request Response Reuse and State Poisoning
+CVE-2026-68945	npm	@angular/common	21.0.0-next.0	21.2.19	HIGH	Angular: Cache-Key Ambiguity in HttpTransferCache Leading to Cross-Request Response Reuse and State Poisoning
+CVE-2026-68945	npm	@angular/common	22.0.0-next.0	22.0.2	HIGH	Angular: Cache-Key Ambiguity in HttpTransferCache Leading to Cross-Request Response Reuse and State Poisoning
 CVE-2025-66412	npm	@angular/compiler	19.0.0-next.0	19.2.17	HIGH	Angular Stored XSS Vulnerability via SVG Animation, SVG URL and MathML Attributes
 CVE-2025-66412	npm	@angular/compiler	20.0.0-next.0	20.3.15	HIGH	Angular Stored XSS Vulnerability via SVG Animation, SVG URL and MathML Attributes
 CVE-2025-66412	npm	@angular/compiler	21.0.0-next.0	21.0.2	HIGH	Angular Stored XSS Vulnerability via SVG Animation, SVG URL and MathML Attributes
@@ -52650,6 +52880,9 @@ CVE-2026-50557	npm	@angular/compiler	22.0.0-next.0	22.0.0-rc.2	MEDIUM	Angular: T
 CVE-2026-54265	npm	@angular/compiler	20.0.0-next.0	20.3.25	MEDIUM	@angular/compiler: Two-Way Property Binding Sanitization Bypass (XSS)
 CVE-2026-54265	npm	@angular/compiler	21.0.0-next.0	21.2.17	MEDIUM	@angular/compiler: Two-Way Property Binding Sanitization Bypass (XSS)
 CVE-2026-54265	npm	@angular/compiler	22.0.0-next.0	22.0.1	MEDIUM	@angular/compiler: Two-Way Property Binding Sanitization Bypass (XSS)
+CVE-2026-69151	npm	@angular/compiler	20.0.0-next.0	20.3.27	HIGH	Angular i18n: Cross-Site Scripting (XSS) via event-handler attributes
+CVE-2026-69151	npm	@angular/compiler	21.0.0-next.0	21.2.19	HIGH	Angular i18n: Cross-Site Scripting (XSS) via event-handler attributes
+CVE-2026-69151	npm	@angular/compiler	22.0.0-next.0	22.0.1	HIGH	Angular i18n: Cross-Site Scripting (XSS) via event-handler attributes
 CVE-2021-4231	npm	@angular/core	0	10.2.5	MEDIUM	Angular vulnerable to Cross-site Scripting
 CVE-2021-4231	npm	@angular/core	11.0.0	11.0.5	MEDIUM	Angular vulnerable to Cross-site Scripting
 CVE-2021-4231	npm	@angular/core	11.1.0-next.0	11.1.0-next.3	MEDIUM	Angular vulnerable to Cross-site Scripting
@@ -52676,6 +52909,9 @@ CVE-2026-52725	npm	@angular/core	22.0.0-next.0	22.0.0-rc.2	MEDIUM	@angular/core:
 CVE-2026-54267	npm	@angular/core	20.0.0-next.0	20.3.25	HIGH	Angular Client Hydration DOM Clobbering & Response-Cache Poisoning
 CVE-2026-54267	npm	@angular/core	21.0.0-next.0	21.2.17	HIGH	Angular Client Hydration DOM Clobbering & Response-Cache Poisoning
 CVE-2026-54267	npm	@angular/core	22.0.0-next.0	22.0.1	HIGH	Angular Client Hydration DOM Clobbering & Response-Cache Poisoning
+CVE-2026-69151	npm	@angular/core	20.0.0-next.0	20.3.27	HIGH	Angular i18n: Cross-Site Scripting (XSS) via event-handler attributes
+CVE-2026-69151	npm	@angular/core	21.0.0-next.0	21.2.19	HIGH	Angular i18n: Cross-Site Scripting (XSS) via event-handler attributes
+CVE-2026-69151	npm	@angular/core	22.0.0-next.0	22.0.1	HIGH	Angular i18n: Cross-Site Scripting (XSS) via event-handler attributes
 CVE-2025-59052	npm	@angular/platform-server	16.0.0-next.0	18.2.14	HIGH	Angular SSR: Global Platform Injector Race Condition Leads to Cross-Request Data Leakage
 CVE-2025-59052	npm	@angular/platform-server	19.0.0-next.0	19.2.15	HIGH	Angular SSR: Global Platform Injector Race Condition Leads to Cross-Request Data Leakage
 CVE-2025-59052	npm	@angular/platform-server	20.0.0-next.0	20.3.0	HIGH	Angular SSR: Global Platform Injector Race Condition Leads to Cross-Request Data Leakage
@@ -52700,6 +52936,9 @@ CVE-2026-50556	npm	@angular/platform-server	19.0.0-next.0	19.2.25	HIGH	@angular/
 CVE-2026-50556	npm	@angular/platform-server	20.0.0-next.0	20.3.24	HIGH	@angular/platform-server: Missing `<noscript>` Raw-Text Serialization Escaping leads to Cross-Site Scripting (XSS) in A…
 CVE-2026-50556	npm	@angular/platform-server	21.0.0-next.0	21.2.16	HIGH	@angular/platform-server: Missing `<noscript>` Raw-Text Serialization Escaping leads to Cross-Site Scripting (XSS) in A…
 CVE-2026-50556	npm	@angular/platform-server	22.0.0-next.0	22.0.0-rc.2	HIGH	@angular/platform-server: Missing `<noscript>` Raw-Text Serialization Escaping leads to Cross-Site Scripting (XSS) in A…
+CVE-2026-69149	npm	@angular/platform-server	20.0.0-next.0	20.3.27	HIGH	Angular SSR: Missing Fallback Raw-Content Serialization Escaping leads to Cross-Site Scripting (XSS)
+CVE-2026-69149	npm	@angular/platform-server	21.0.0-next.0	21.2.19	HIGH	Angular SSR: Missing Fallback Raw-Content Serialization Escaping leads to Cross-Site Scripting (XSS)
+CVE-2026-69149	npm	@angular/platform-server	22.0.0-next.0	22.0.7	HIGH	Angular SSR: Missing Fallback Raw-Content Serialization Escaping leads to Cross-Site Scripting (XSS)
 CVE-2026-50169	npm	@angular/service-worker	19.0.0-next.0	19.2.23	MEDIUM	Angular Service Worker Policy-Bypass & Credential-Stripping Vulnerabilities
 CVE-2026-50169	npm	@angular/service-worker	20.0.0-next.0	20.3.22	MEDIUM	Angular Service Worker Policy-Bypass & Credential-Stripping Vulnerabilities
 CVE-2026-50169	npm	@angular/service-worker	21.0.0-next.0	21.2.15	MEDIUM	Angular Service Worker Policy-Bypass & Credential-Stripping Vulnerabilities
@@ -53421,7 +53660,7 @@ GHSA-4xrh-5m3m-328w	npm	@hulumi/policies	0	1.3.2	HIGH	@hulumi/policies: CIS 1.16
 GHSA-59f3-7227-wmh4	npm	@hulumi/policies	0	1.3.2	HIGH	@hulumi/policies: Stack-wide evidence bypassed Cloudflare and deployment-governance guardrails
 GHSA-g43v-9x7q-83pq	npm	@hulumi/policies	0	1.3.2	HIGH	@hulumi/policies: HULUMI-H1 SecureBucket parent spoof bypass
 GHSA-q2f7-m237-v562	npm	@hulumi/policies	0	1.3.2	CRITICAL	@hulumi/policies: GitHub OIDC trust policy bypass via AWS set-qualified condition operators
-CVE-2026-54658	npm	@hypequery/clickhouse	0	2.0.2	CRITICAL	@hypequery/clickhouse has SQL Injection in parameter escaping that allows arbitrary SQL execution
+CVE-2026-54658	npm	@hypequery/clickhouse	0	2.5.1	CRITICAL	@hypequery/clickhouse has SQL Injection in parameter escaping that allows arbitrary SQL execution
 CVE-2024-52809	npm	@intlify/core	10.0.0	10.0.5	MEDIUM	vue-i18n has cross-site scripting vulnerability with prototype pollution
 CVE-2024-52809	npm	@intlify/core	9.3.0	9.14.2	MEDIUM	vue-i18n has cross-site scripting vulnerability with prototype pollution
 CVE-2025-27597	npm	@intlify/core	9.1.0	9.1.11	HIGH	Vue I18n Allows Prototype Pollution in `handleFlatJson`
@@ -53604,6 +53843,7 @@ GHSA-hxwm-x553-x359	npm	@npmcli/git	0	2.0.8	MEDIUM	Arbitrary Command Injection d
 CVE-2019-13506	npm	@nuxt/devalue	0	1.2.3	MEDIUM	Cross-Site Scripting in @nuxt/devalue
 CVE-2024-23657	npm	@nuxt/devtools	0	1.3.9	HIGH	Nuxt Devtools has a Path Traversal: '../filedir'
 CVE-2025-52662	npm	@nuxt/devtools	0	2.6.4	MEDIUM	Nuxt DevTools vulnerable to cross-site scripting (XSS)
+CVE-2026-71319	npm	@nuxt/devtools	0	3.3.1	CRITICAL	Unauthenticated Nuxt DevTools RPC allows arbitrary command execution on the developer's host
 CVE-2024-42352	npm	@nuxt/icon	0	1.4.5	HIGH	Nuxt Icon affected by a Server-Side Request Forgery (SSRF)
 CVE-2026-46342	npm	@nuxt/nitro-server	3.20.0	3.21.6	LOW	Nuxt: `__nuxt_island` endpoint does not bind responses to request props, enabling shared-cache poisoning
 CVE-2026-46342	npm	@nuxt/nitro-server	4.2.0	4.4.6	LOW	Nuxt: `__nuxt_island` endpoint does not bind responses to request props, enabling shared-cache poisoning
@@ -53614,6 +53854,7 @@ CVE-2026-45670	npm	@nuxt/rspack-builder	3.15.4	3.21.6	MEDIUM	Nuxt: Dev server ex
 CVE-2026-45670	npm	@nuxt/rspack-builder	4.0.0-alpha.1	4.4.6	MEDIUM	Nuxt: Dev server exposes built source over LAN to malicious sites (incomplete fix for GHSA-4gf7-ff8x-hq99)
 CVE-2026-49993	npm	@nuxt/rspack-builder	3.15.4	3.21.7	MEDIUM	@nuxt/webpack-builder and @nuxt/rspack-builder dev server same-origin check bypassed when Sec-Fetch-Site, Origin, and R…
 CVE-2026-49993	npm	@nuxt/rspack-builder	4.0.0	4.4.7	MEDIUM	@nuxt/webpack-builder and @nuxt/rspack-builder dev server same-origin check bypassed when Sec-Fetch-Site, Origin, and R…
+GHSA-gj2h-2fpw-fhv9	npm	@nuxt/ui	0	4.8.1	MEDIUM	@nuxt/ui: UAuthForm / UForm SSR markup omits `method`, leaking credentials via GET if submitted before hydration
 CVE-2025-24360	npm	@nuxt/vite-builder	3.8.1	3.15.3	MEDIUM	Opening a malicious website while running a Nuxt dev server could allow read-only access to code
 CVE-2025-24361	npm	@nuxt/webpack-builder	3.0.0	3.15.3	MEDIUM	Opening a malicious website while running a Nuxt dev server could allow read-only access to code
 CVE-2026-45670	npm	@nuxt/webpack-builder	3.15.4	3.21.6	MEDIUM	Nuxt: Dev server exposes built source over LAN to malicious sites (incomplete fix for GHSA-4gf7-ff8x-hq99)
@@ -53837,6 +54078,7 @@ CVE-2025-61686	npm	@remix-run/node	0	2.17.2	CRITICAL	React Router has Path Trave
 CVE-2025-59057	npm	@remix-run/react	1.15.0	2.17.1	HIGH	React Router has XSS Vulnerability
 CVE-2026-21884	npm	@remix-run/react	0	2.17.3	HIGH	React Router SSR XSS in ScrollRestoration
 CVE-2026-22029	npm	@remix-run/router	0	1.23.2	HIGH	React Router vulnerable to XSS via Open Redirects
+CVE-2026-40181	npm	@remix-run/router	1.3.0	1.23.3	MEDIUM	React Router's same-origin redirect with path starting // causes open redirect via protocol-relative URL reinterpretati…
 CVE-2026-22030	npm	@remix-run/server-runtime	0	2.17.3	MEDIUM	React Router has CSRF issue in Action/Server Action Request Processing
 CVE-2026-42342	npm	@remix-run/server-runtime	2.10.0	2.17.5	HIGH	React Router vulnerable to DoS via unbounded path expansion in __manifest endpoint
 CVE-2026-53663	npm	@remix-run/server-runtime	2.17.3	2.17.5	LOW	React Router: Potential CSRF via PUT/PATCH/DELETE document requests
@@ -54098,6 +54340,7 @@ CVE-2025-67647	npm	@sveltejs/kit	2.19.0	2.49.5	HIGH	SvelteKit is vulnerable to d
 CVE-2026-22803	npm	@sveltejs/kit	2.49.0	2.49.5	HIGH	@sveltejs/kit has memory amplification DoS vulnerability in Remote Functions binary form deserializer (application/x-sv…
 CVE-2026-40073	npm	@sveltejs/kit	0	2.57.1	HIGH	@sveltejs/adapter-node has a BODY_SIZE_LIMIT bypass
 CVE-2026-40074	npm	@sveltejs/kit	0	2.57.1	MEDIUM	@sveltejs/kit: Unvalidated redirect in handle hook causes Denial-of-Service
+CVE-2026-66062	npm	@sveltejs/kit	0	2.70.2	MEDIUM	SvelteKit: ReDoS (O(n^2)) in content negotiation — unauthenticated DoS via the Accept header
 GHSA-866w-xmhq-wj7x	npm	@sveltejs/kit	0	2.69.1	MEDIUM	SvelteKit: Prototype pollution in file input deletion path in remote-function forms
 GHSA-88qp-p4qg-rqm6	npm	@sveltejs/kit	2.49.0	2.52.2	MEDIUM	CPU exhaustion in SvelteKit remote form deserialization (experimental only)
 GHSA-fpg4-jhqr-589c	npm	@sveltejs/kit	2.49.0	2.53.3	LOW	SvelteKit  has deserialization expansion in unvalidated `form` remote function leading to Denial of Service (experiment…
@@ -54258,6 +54501,7 @@ CVE-2025-53832	npm	@translated/lara-mcp	0	0.0.12	HIGH	@translated/lara-mcp vulne
 CVE-2025-43855	npm	@trpc/server	11.0.0	11.1.1	HIGH	tRPC 11 WebSocket DoS Vulnerability
 CVE-2025-68130	npm	@trpc/server	10.27.0	10.45.3	HIGH	tRPC has possible prototype pollution in `experimental_nextAppDirCaller`
 CVE-2025-68130	npm	@trpc/server	11.0.0	11.8.0	HIGH	tRPC has possible prototype pollution in `experimental_nextAppDirCaller`
+CVE-2026-53950	npm	@tryghost/activitypub	0	3.1.0	HIGH	XSS in Ghost's ActivityPub client
 CVE-2024-34448	npm	@tryghost/members-csv	0	5.82.0	HIGH	Ghost allows CSV Injection during member CSV export
 CVE-2024-43409	npm	@tryghost/portal	1.22.2	2.39.0	MEDIUM	Ghost's improper authentication allows access to member information and actions
 CVE-2026-24778	npm	@tryghost/portal	2.29.1	2.51.5	HIGH	Ghost vulnerable to XSS via malicious Portal preview links
@@ -54753,6 +54997,10 @@ CVE-2026-33750	npm	brace-expansion	2.0.0	2.0.3	MEDIUM	brace-expansion: Zero-step
 CVE-2026-33750	npm	brace-expansion	3.0.0	3.0.2	MEDIUM	brace-expansion: Zero-step sequence causes process hang and memory exhaustion
 CVE-2026-33750	npm	brace-expansion	4.0.0	5.0.5	MEDIUM	brace-expansion: Zero-step sequence causes process hang and memory exhaustion
 CVE-2026-45149	npm	brace-expansion	5.0.0	5.0.6	MEDIUM	brace-expansion: Large numeric range defeats documented `max` DoS protection
+CVE-2026-69152	npm	brace-expansion	0	1.1.18	HIGH	brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation
+CVE-2026-69152	npm	brace-expansion	2.0.0	2.1.4	HIGH	brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation
+CVE-2026-69152	npm	brace-expansion	3.0.0	3.0.6	HIGH	brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation
+CVE-2026-69152	npm	brace-expansion	4.0.0	5.0.9	HIGH	brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation
 CVE-2018-1109	npm	braces	2.2.0	2.3.1	LOW	Regular Expression Denial of Service (ReDoS) in braces
 CVE-2024-4068	npm	braces	0	3.0.3	HIGH	Uncontrolled resource consumption in braces
 CVE-2016-10635	npm	broccoli-closure	0	1.3.1	HIGH	Downloads Resources over HTTP in broccoli-closure
@@ -54928,6 +55176,7 @@ CVE-2018-1000620	npm	cryptiles	4.0.0	4.1.2	CRITICAL	Insufficient Entropy in cryp
 CVE-2023-46133	npm	crypto-es	0	2.1.0	CRITICAL	crypto-es PBKDF2 1,000 times weaker than specified in 1993 and 1.3M times weaker than current standard
 CVE-2020-36732	npm	crypto-js	3.2.0	3.2.1	MEDIUM	crypto-js uses insecure random numbers
 CVE-2023-46233	npm	crypto-js	0	4.2.0	CRITICAL	crypto-js PBKDF2 1,000 times weaker than specified in 1993 and 1.3M times weaker than current standard
+CVE-2026-71851	npm	crypto-js	0	4.0.0	CRITICAL	crypto-js: Insufficient Entropy in Cryptographic Secret Generation via Vulnerable CryptoJS Dependency Chain
 GHSA-jjmg-x456-w976	npm	csrf-csrf	0	2.2.1	LOW	Incorrect default cookie name and recommendation
 CVE-2016-10535	npm	csrf-lite	0	0.1.2	HIGH	Timing Attack in csrf-lite
 CVE-2021-33587	npm	css-what	4.0.0	5.0.1	HIGH	Denial of service in css-what
@@ -55150,6 +55399,7 @@ CVE-2026-65912	npm	dompurify	0	3.3.2	MEDIUM	DOMPurify ADD_ATTR predicate skips U
 CVE-2026-65913	npm	dompurify	0	3.3.2	MEDIUM	DOMPurify USE_PROFILES prototype pollution allows event handlers
 CVE-2026-65914	npm	dompurify	0	3.3.2	MEDIUM	DOMPurify is vulnerable to mutation-XSS via Re-Contextualization
 CVE-2026-66010	npm	dompurify	0	3.4.12	LOW	DOMPurify: `CUSTOM_ELEMENT_HANDLING` bypasses `afterSanitizeElements` for allowed custom elements.
+GHSA-55q2-fjhq-7xh7	npm	dompurify	0	3.4.13	MEDIUM	DOMPurify: IN_PLACE hook removal leaves a detached subtree executable, causing XSS
 GHSA-mjjq-c88q-qhr6	npm	dompurify	0	2.0.7	CRITICAL	Cross-Site Scripting in dompurify
 CVE-2020-8141	npm	dot	0	1.1.3	HIGH	Improper Control of Generation of Code in doT
 CVE-2019-10793	npm	dot-object	0	2.1.3	MEDIUM	Prototype Pollution in dot-object
@@ -55359,6 +55609,69 @@ CVE-2026-34781	npm	electron	40.0.0-alpha.1	40.8.5	LOW	Electron: Crash in clipboa
 CVE-2026-34781	npm	electron	41.0.0-alpha.1	41.1.0	LOW	Electron: Crash in clipboard.readImage() on malformed clipboard image data
 CVE-2026-34781	npm	electron	42.0.0-alpha.1	42.0.0-alpha.5	LOW	Electron: Crash in clipboard.readImage() on malformed clipboard image data
 CVE-2026-54257	npm	electron	42.3.1	42.3.3	CRITICAL	Electron: Buffer performs incorrect byte length calculations resulting in heap buffer under/overflow
+CVE-2026-70597	npm	electron	0	39.8.8	MEDIUM	Electron: Parent process code-sign check is spoofable
+CVE-2026-70597	npm	electron	40.0.0-alpha.1	40.9.1	MEDIUM	Electron: Parent process code-sign check is spoofable
+CVE-2026-70597	npm	electron	41.0.0-alpha.1	41.2.1	MEDIUM	Electron: Parent process code-sign check is spoofable
+CVE-2026-70597	npm	electron	42.0.0-alpha.1	42.0.0-beta.3	MEDIUM	Electron: Parent process code-sign check is spoofable
+CVE-2026-70598	npm	electron	0	39.8.10	LOW	Electron: Off-screen rendering trusts GPU-supplied geometry over shared-memory size
+CVE-2026-70598	npm	electron	40.0.0-alpha.1	40.9.0	LOW	Electron: Off-screen rendering trusts GPU-supplied geometry over shared-memory size
+CVE-2026-70598	npm	electron	41.0.0-alpha.1	41.2.1	LOW	Electron: Off-screen rendering trusts GPU-supplied geometry over shared-memory size
+CVE-2026-70598	npm	electron	42.0.0-alpha.1	42.0.0-beta.3	LOW	Electron: Off-screen rendering trusts GPU-supplied geometry over shared-memory size
+CVE-2026-70599	npm	electron	0	39.8.7	MEDIUM	Electron: Permission Check Handler Receives Main Frame Origin Instead of Requesting Iframe Origin
+CVE-2026-70599	npm	electron	40.0.0-alpha.1	40.9.0	MEDIUM	Electron: Permission Check Handler Receives Main Frame Origin Instead of Requesting Iframe Origin
+CVE-2026-70599	npm	electron	41.0.0-alpha.1	41.2.0	MEDIUM	Electron: Permission Check Handler Receives Main Frame Origin Instead of Requesting Iframe Origin
+CVE-2026-70599	npm	electron	42.0.0-alpha.1	42.0.0-beta.1	MEDIUM	Electron: Permission Check Handler Receives Main Frame Origin Instead of Requesting Iframe Origin
+CVE-2026-70600	npm	electron	0	39.8.8	LOW	Electron: Cross-origin iframe can position native autofill popup
+CVE-2026-70600	npm	electron	40.0.0-alpha.1	40.9.1	LOW	Electron: Cross-origin iframe can position native autofill popup
+CVE-2026-70600	npm	electron	41.0.0-alpha.1	41.2.1	LOW	Electron: Cross-origin iframe can position native autofill popup
+CVE-2026-70600	npm	electron	42.0.0-alpha.1	42.0.0-beta.3	LOW	Electron: Cross-origin iframe can position native autofill popup
+CVE-2026-70601	npm	electron	0	39.8.9	HIGH	Electron: Context isolation bypass via Function.prototype.bind hijack
+CVE-2026-70601	npm	electron	40.0.0-alpha.1	40.9.2	HIGH	Electron: Context isolation bypass via Function.prototype.bind hijack
+CVE-2026-70601	npm	electron	41.0.0-alpha.1	41.2.2	HIGH	Electron: Context isolation bypass via Function.prototype.bind hijack
+CVE-2026-70601	npm	electron	42.0.0-alpha.1	42.0.0-beta.5	HIGH	Electron: Context isolation bypass via Function.prototype.bind hijack
+CVE-2026-70602	npm	electron	0	39.8.8	MEDIUM	Electron: Extension tab APIs operate across session boundaries
+CVE-2026-70602	npm	electron	40.0.0-alpha.1	40.9.0	MEDIUM	Electron: Extension tab APIs operate across session boundaries
+CVE-2026-70602	npm	electron	41.0.0-alpha.1	41.2.1	MEDIUM	Electron: Extension tab APIs operate across session boundaries
+CVE-2026-70602	npm	electron	42.0.0-alpha.1	42.0.0-beta.3	MEDIUM	Electron: Extension tab APIs operate across session boundaries
+CVE-2026-70603	npm	electron	0	39.8.6	MEDIUM	Electron: shell.openPath path validation bypass via embedded null byte
+CVE-2026-70603	npm	electron	40.0.0-alpha.1	40.9.0	MEDIUM	Electron: shell.openPath path validation bypass via embedded null byte
+CVE-2026-70603	npm	electron	41.0.0-alpha.1	41.1.1	MEDIUM	Electron: shell.openPath path validation bypass via embedded null byte
+CVE-2026-70603	npm	electron	42.0.0-alpha.1	42.0.0-beta.1	MEDIUM	Electron: shell.openPath path validation bypass via embedded null byte
+CVE-2026-70604	npm	electron	0	39.8.10	HIGH	Electron: Custom protocol with supportFetchAPI but not corsEnabled allows cross-origin reads
+CVE-2026-70604	npm	electron	40.0.0-alpha.1	40.9.3	HIGH	Electron: Custom protocol with supportFetchAPI but not corsEnabled allows cross-origin reads
+CVE-2026-70604	npm	electron	41.0.0-alpha.1	41.4.0	HIGH	Electron: Custom protocol with supportFetchAPI but not corsEnabled allows cross-origin reads
+CVE-2026-70604	npm	electron	42.0.0-alpha.1	42.0.0	HIGH	Electron: Custom protocol with supportFetchAPI but not corsEnabled allows cross-origin reads
+CVE-2026-70605	npm	electron	0	39.8.8	MEDIUM	Electron: HTTP redirect followed into local file loader
+CVE-2026-70605	npm	electron	40.0.0-alpha.1	40.9.1	MEDIUM	Electron: HTTP redirect followed into local file loader
+CVE-2026-70605	npm	electron	41.0.0-alpha.1	41.2.1	MEDIUM	Electron: HTTP redirect followed into local file loader
+CVE-2026-70605	npm	electron	42.0.0-alpha.1	42.0.0-beta.3	MEDIUM	Electron: HTTP redirect followed into local file loader
+CVE-2026-70606	npm	electron	40.0.0-alpha.1	40.10.6	MEDIUM	Electron: ProtocolResponse.url reuses the default session cache instead of the registering session
+CVE-2026-70606	npm	electron	41.0.0-alpha.1	41.9.1	MEDIUM	Electron: ProtocolResponse.url reuses the default session cache instead of the registering session
+CVE-2026-70606	npm	electron	42.0.0-alpha.1	42.5.1	MEDIUM	Electron: ProtocolResponse.url reuses the default session cache instead of the registering session
+CVE-2026-70606	npm	electron	43.0.0-alpha.1	43.0.0	MEDIUM	Electron: ProtocolResponse.url reuses the default session cache instead of the registering session
+CVE-2026-70607	npm	electron	0	39.8.8	MEDIUM	Electron: window.open features string controls some window options considered privileged
+CVE-2026-70607	npm	electron	40.0.0-alpha.1	40.9.0	MEDIUM	Electron: window.open features string controls some window options considered privileged
+CVE-2026-70607	npm	electron	41.0.0-alpha.1	41.2.1	MEDIUM	Electron: window.open features string controls some window options considered privileged
+CVE-2026-70607	npm	electron	42.0.0-alpha.1	42.0.0-beta.3	MEDIUM	Electron: window.open features string controls some window options considered privileged
+CVE-2026-70608	npm	electron	0	39.8.10	HIGH	Electron: Sandboxed iframe can bypass the allow-popups restriction via the OpenURL navigation path
+CVE-2026-70608	npm	electron	40.0.0-alpha.1	41.10.3	HIGH	Electron: Sandboxed iframe can bypass the allow-popups restriction via the OpenURL navigation path
+CVE-2026-70608	npm	electron	42.0.0-alpha.1	42.0.1	HIGH	Electron: Sandboxed iframe can bypass the allow-popups restriction via the OpenURL navigation path
+CVE-2026-70609	npm	electron	0	39.8.7	MEDIUM	Electron: DevTools JavaScript Injection via Unsanitized Dock State Parameter
+CVE-2026-70609	npm	electron	40.0.0-alpha.1	40.9.0	MEDIUM	Electron: DevTools JavaScript Injection via Unsanitized Dock State Parameter
+CVE-2026-70609	npm	electron	41.0.0-alpha.1	41.2.0	MEDIUM	Electron: DevTools JavaScript Injection via Unsanitized Dock State Parameter
+CVE-2026-70609	npm	electron	42.0.0-alpha.1	42.0.0-beta.1	MEDIUM	Electron: DevTools JavaScript Injection via Unsanitized Dock State Parameter
+CVE-2026-70610	npm	electron	0	39.8.9	MEDIUM	Electron: contextBridge object copy honors prototype setters
+CVE-2026-70610	npm	electron	40.0.0-alpha.1	40.9.2	MEDIUM	Electron: contextBridge object copy honors prototype setters
+CVE-2026-70610	npm	electron	41.0.0-alpha.1	41.2.2	MEDIUM	Electron: contextBridge object copy honors prototype setters
+CVE-2026-70610	npm	electron	42.0.0-alpha.1	42.0.0-beta.4	MEDIUM	Electron: contextBridge object copy honors prototype setters
+CVE-2026-70611	npm	electron	0	39.8.9	MEDIUM	Electron: DevTools embedder handler executes arbitrary files via shell open
+CVE-2026-70611	npm	electron	40.0.0-alpha.1	40.9.2	MEDIUM	Electron: DevTools embedder handler executes arbitrary files via shell open
+CVE-2026-70611	npm	electron	41.0.0-alpha.1	41.2.1	MEDIUM	Electron: DevTools embedder handler executes arbitrary files via shell open
+CVE-2026-70611	npm	electron	42.0.0-alpha.1	42.0.0-beta.3	MEDIUM	Electron: DevTools embedder handler executes arbitrary files via shell open
+CVE-2026-70612	npm	electron	0	39.8.8	MEDIUM	Electron: Sandboxed iframes can launch external protocol handlers
+CVE-2026-70612	npm	electron	40.0.0-alpha.1	40.9.0	MEDIUM	Electron: Sandboxed iframes can launch external protocol handlers
+CVE-2026-70612	npm	electron	41.0.0-alpha.1	41.2.1	MEDIUM	Electron: Sandboxed iframes can launch external protocol handlers
+CVE-2026-70612	npm	electron	42.0.0-alpha.1	42.0.0-beta.3	MEDIUM	Electron: Sandboxed iframes can launch external protocol handlers
 CVE-2016-10534	npm	electron-packager	5.2.1	7.0.0	LOW	SSL Validation Defaults to False in electron-packager
 CVE-2024-39698	npm	electron-updater	0	6.3.0-alpha.6	HIGH	electron-updater Code Signing Bypass on Windows
 CVE-2022-27103	npm	element-plus	0	2.0.6	MEDIUM	element-plus vulnerable to cross-site scripting (XSS) via el-table-column
@@ -55484,6 +55797,9 @@ CVE-2026-13676	npm	fast-uri	4.0.0	4.0.1	HIGH	fast-uri vulnerable to host confusi
 CVE-2026-16221	npm	fast-uri	2.3.1	2.4.3	HIGH	fast-uri vulnerable to host confusion via literal backslash authority delimiter
 CVE-2026-16221	npm	fast-uri	3.0.0	3.1.4	HIGH	fast-uri vulnerable to host confusion via literal backslash authority delimiter
 CVE-2026-16221	npm	fast-uri	4.0.0	4.1.1	HIGH	fast-uri vulnerable to host confusion via literal backslash authority delimiter
+CVE-2026-18446	npm	fast-uri	0	2.4.4	HIGH	fast-uri vulnerable to host confusion via backslash authority introducer
+CVE-2026-18446	npm	fast-uri	3.0.0	3.1.5	HIGH	fast-uri vulnerable to host confusion via backslash authority introducer
+CVE-2026-18446	npm	fast-uri	4.0.0	4.1.2	HIGH	fast-uri vulnerable to host confusion via backslash authority introducer
 CVE-2026-6321	npm	fast-uri	0	3.1.1	HIGH	fast-uri vulnerable to path traversal via percent-encoded dot segments
 CVE-2026-6322	npm	fast-uri	0	3.1.2	HIGH	fast-uri vulnerable to host confusion via percent-encoded authority delimiters
 CVE-2026-44664	npm	fast-xml-builder	1.1.5	1.1.6	MEDIUM	fast-xml-builder Comment Value regex can be bypassed
@@ -55626,7 +55942,33 @@ CVE-2026-56275	npm	flowise	0	3.1.0	MEDIUM	Flowise Execute Flow function has an S
 CVE-2026-56276	npm	flowise	0	3.1.2	MEDIUM	Flowise: Mass Assignment in PUT /api/v1/user Allows Authenticated Users to Override Password Hash and Bypass Password C…
 CVE-2026-56277	npm	flowise	0	3.1.2	MEDIUM	Flowise: Hardcoded CORS wildcard on TTS endpoint enables cross-origin credential abuse from any webpage
 CVE-2026-56278	npm	flowise	0	3.1.0	MEDIUM	Flowise: Weak Default Express Session Secret
+CVE-2026-69250	npm	flowise	0	3.1.3	HIGH	Flowise: Unauthenticated OAuth2 Refresh Enables Non-Blind SSRF and Secret Exfiltration
+CVE-2026-69251	npm	flowise	0	3.1.3	CRITICAL	Flowise RCE via TypeORM DataSource
+CVE-2026-69252	npm	flowise	0	3.1.3	HIGH	Flowise: Missing authorization on `/api/v1/files` allows low-privileged API keys to list and delete files across worksp…
+CVE-2026-69253	npm	flowise	0	3.1.3	CRITICAL	Flowise Sandbox Escape to RCE
+CVE-2026-69254	npm	flowise	0	3.1.3	CRITICAL	Flowise: RCE via NodeVM Sandbox Escape in executeJavaScriptCode() nodeVMOptions Override
+CVE-2026-69255	npm	flowise	0	3.1.3	CRITICAL	Flowise: CSV Agent Remote Code Execution via Pyodide Code Injection — Root Shell Verified
+CVE-2026-69256	npm	flowise	0	3.1.3	CRITICAL	Flowise: Remote Code Execution Vulnerability in CSVAgent
+CVE-2026-69257	npm	flowise	0	3.1.3	HIGH	Flowise: SSRF Protection Bypass via IPv4-Mapped IPv6 Addresses
+CVE-2026-69258	npm	flowise	0	3.1.3	HIGH	Flowise: Unauthenticated Property Injection into Flow Execution Context via Ungated `overrideConfig` Spread in Predicti…
+CVE-2026-69259	npm	flowise	0	3.1.3	CRITICAL	Flowise RCE via SQLite Record Manager Node
+CVE-2026-69262	npm	flowise	0	3.1.3	HIGH	Flowise: `DELETE /api/v1/chatflows/:id` does not validate resource type, allowing `agentflows:delete` and `chatflows:de…
+CVE-2026-69263	npm	flowise	0	3.1.3	HIGH	Flowise: CVE-2025-8943 Patch Bypass: npm_config_yes bypasses MCP environment variable blocklist (Unauthenticated RCE)
+CVE-2026-69264	npm	flowise	0	3.1.3	CRITICAL	Flowise: RCE via CSVAgent csvFile data URI base64 segment is interpolated into Python source without validation
+CVE-2026-70470	npm	flowise	0	3.1.3	CRITICAL	Flowise: Pyodide validator Unicode homoglyph bypass leads to RCE
+CVE-2026-70471	npm	flowise	0	3.1.3	HIGH	Flowise: RBAC Bypass Leading to Unauthorized Workspace Variables Disclosure
+CVE-2026-70472	npm	flowise	0	3.1.3	HIGH	Flowise: Cross-workspace credential IDOR in openai-assistants-vector-store
+CVE-2026-70473	npm	flowise	0	3.1.3	HIGH	Flowise: Information Disclosure in GET /api/v1/upsert-history returns the entire server-wide upsert history
+CVE-2026-70474	npm	flowise	0	3.1.3	HIGH	Flowise: Cross-Workspace OAuth2 Credential Metadata Leak
+CVE-2026-70475	npm	flowise	0	3.1.3	HIGH	Flowise: Missing Authorization on Execution Update Endpoint
+CVE-2026-70476	npm	flowise	0	3.1.3	HIGH	Flowise: Broken Access Control in Stripe Subscription Endpoints Allows Cross-Tenant Billing Manipulation
+CVE-2026-70477	npm	flowise	0	3.1.3	CRITICAL	Flowise: CSV Agent Prompt Injection Remote Code Execution Vulnerability
+CVE-2026-70478	npm	flowise	0	3.1.3	CRITICAL	Flowise: Unauthenticated OAuth2 token refresh endpoint returns access tokens — enables token theft for any connected se…
+GHSA-2364-jh4q-m9vm	npm	flowise	0	3.1.3	MEDIUM	Flowise: IDOR vulnerability exists at the GET /api/v1/organization/customer-default-source endpoint
+GHSA-88pr-878c-24wf	npm	flowise	0	3.1.3	HIGH	Flowise: Authenticated arbitrary file write in the `S3 Directory` document loader via unsanitized S3 object keys
+GHSA-8gj2-2cvc-6xx7	npm	flowise	0	3.1.4	MEDIUM	Flowise: Unauthenticated Credential Abuse via Text-to-Speech Endpoint Allows Unauthorized Use of Private Chatflow TTS C…
 GHSA-j44m-5v8f-gc9c	npm	flowise	0	3.0.8	HIGH	Flowise is vulnerable to arbitrary file exposure through its ReadFileTool
+GHSA-rwrp-9823-p2xq	npm	flowise	0	3.1.3	MEDIUM	Flowise: Incomplete Credential Redaction Exposes Secrets via API
 CVE-2025-29189	npm	flowise-components	0	2.2.4	HIGH	Flowise Vulnerable to SQL Injection via `tableName` Parameter
 CVE-2025-61913	npm	flowise-components	0	3.0.8	CRITICAL	Flowise is vulnerable to arbitrary file write through its WriteFileTool
 CVE-2026-31829	npm	flowise-components	0	3.0.13	HIGH	Flowise affected by Server-Side Request Forgery (SSRF) in HTTP Node Leading to Internal Network Access
@@ -55644,6 +55986,17 @@ CVE-2026-43995	npm	flowise-components	0	3.1.0	MEDIUM	Flowise: SSRF Protection By
 CVE-2026-56273	npm	flowise-components	0	3.1.0	MEDIUM	Flowise: Path Traversal in Vector Store basePath
 CVE-2026-56274	npm	flowise-components	0	3.1.2	HIGH	Flowise has an MCP Security Bypass that Enables RCE
 CVE-2026-56275	npm	flowise-components	0	3.1.0	MEDIUM	Flowise Execute Flow function has an SSRF vulnerability
+CVE-2026-69251	npm	flowise-components	0	3.1.3	CRITICAL	Flowise RCE via TypeORM DataSource
+CVE-2026-69253	npm	flowise-components	0	3.1.3	CRITICAL	Flowise Sandbox Escape to RCE
+CVE-2026-69254	npm	flowise-components	0	3.1.3	CRITICAL	Flowise: RCE via NodeVM Sandbox Escape in executeJavaScriptCode() nodeVMOptions Override
+CVE-2026-69255	npm	flowise-components	0	3.1.3	CRITICAL	Flowise: CSV Agent Remote Code Execution via Pyodide Code Injection — Root Shell Verified
+CVE-2026-69256	npm	flowise-components	0	3.1.3	CRITICAL	Flowise: Remote Code Execution Vulnerability in CSVAgent
+CVE-2026-69259	npm	flowise-components	0	3.1.3	CRITICAL	Flowise RCE via SQLite Record Manager Node
+CVE-2026-69263	npm	flowise-components	0	3.1.3	HIGH	Flowise: CVE-2025-8943 Patch Bypass: npm_config_yes bypasses MCP environment variable blocklist (Unauthenticated RCE)
+CVE-2026-69264	npm	flowise-components	0	3.1.3	CRITICAL	Flowise: RCE via CSVAgent csvFile data URI base64 segment is interpolated into Python source without validation
+CVE-2026-70470	npm	flowise-components	0	3.1.3	CRITICAL	Flowise: Pyodide validator Unicode homoglyph bypass leads to RCE
+CVE-2026-70477	npm	flowise-components	0	3.1.3	CRITICAL	Flowise: CSV Agent Prompt Injection Remote Code Execution Vulnerability
+GHSA-88pr-878c-24wf	npm	flowise-components	0	3.1.3	HIGH	Flowise: Authenticated arbitrary file write in the `S3 Directory` document loader via unsanitized S3 object keys
 GHSA-j44m-5v8f-gc9c	npm	flowise-components	0	3.0.8	HIGH	Flowise is vulnerable to arbitrary file exposure through its ReadFileTool
 CVE-2024-9148	npm	flowise-embed	0	2.0.0	MEDIUM	Flowise and Flowise Chat Embed vulnerable to Stored Cross-site Scripting
 CVE-2025-71328	npm	flowise-ui	0	3.0.10	HIGH	Flowise does not Prevent Bypass of Password Confirmation - Unverified Password Change
@@ -55762,6 +56115,22 @@ CVE-2026-26980	npm	ghost	3.24.0	6.19.1	CRITICAL	Ghost has a SQL injection in Con
 CVE-2026-29053	npm	ghost	0.7.2	6.19.1	HIGH	Ghost Vulnerable to Remote Code Execution via Malicious Themes
 CVE-2026-29784	npm	ghost	5.101.6	6.19.3	HIGH	Ghost has incomplete CSRF protections around OTC use
 CVE-2026-53943	npm	ghost	4.0.0	6.37.0	CRITICAL	Ghost: Cache-poisoning XSS in Ghost frontend via x-ghost-preview header
+CVE-2026-53944	npm	ghost	6.0.9	6.21.1	MEDIUM	Ghost: Private IP filtering bypass to make server-side requests to internal services
+CVE-2026-53945	npm	ghost	6.0.9	6.21.2	MEDIUM	Ghost: Server-side request forgery via DNS rebinding in external request handling
+CVE-2026-53946	npm	ghost	6.19.4	6.21.2	MEDIUM	Ghost: Mobiledoc image-size fetch SSRF
+CVE-2026-53947	npm	ghost	5.18.0	6.21.2	MEDIUM	Ghost: Member existence leak via magic link sign-in response
+CVE-2026-53948	npm	ghost	6.19.4	6.21.1	MEDIUM	Ghost: File Upload Content-Type Spoofing
+CVE-2026-53949	npm	ghost	5.46.1	6.21.2	MEDIUM	Ghost Content API filter bypass reveals private fields
+CVE-2026-59817	npm	ghost	6.27.0	6.44.0	MEDIUM	Ghost: Paid gift memberships obtainable at minimal cost via the donations feature
+CVE-2026-70588	npm	ghost	5.26.0	6.54.1	MEDIUM	Ghost: Cross-Site Scripting in Universal Import
+CVE-2026-70589	npm	ghost	4.22.0	6.54.1	MEDIUM	Ghost: Archived Offers can be Redeemed
+CVE-2026-70590	npm	ghost	0	6.54.1	MEDIUM	Ghost: Blind Password Hash Disclosure in Ghost Admin API
+CVE-2026-70591	npm	ghost	0.10.0	6.54.1	MEDIUM	Ghost: Server-Side Request Forgery in Image Fetching
+CVE-2026-70592	npm	ghost	1.20.1	6.54.1	MEDIUM	Ghost: Database Backup Path Traversal
+CVE-2026-70593	npm	ghost	0.10.0	6.54.1	MEDIUM	Ghost: Theme Upload Path Traversal
+CVE-2026-70594	npm	ghost	2.2.0	6.54.1	MEDIUM	Ghost: Session Fixation in Ghost Admin
+CVE-2026-70595	npm	ghost	6.26.0	6.54.1	MEDIUM	Ghost: Server-Side Request Forgery Mitigation Issue
+CVE-2026-70596	npm	ghost	4.9.0	6.54.1	MEDIUM	Ghost: Cross-Site Scripting in Feature Image Captions
 GHSA-65p7-pjj8-ggmr	npm	ghost	3.18.0	3.42.6	MEDIUM	Member account takeover
 GHSA-65p7-pjj8-ggmr	npm	ghost	4.0.0	4.15.1	MEDIUM	Member account takeover
 GHSA-7v28-g2pq-ggg8	npm	ghost	0	4.48.2	MEDIUM	Ghost vulnerable to remote code execution in locale setting change
@@ -55951,6 +56320,10 @@ CVE-2026-56764	npm	hono	0	4.11.10	LOW	Hono added timing comparison hardening in 
 CVE-2026-59895	npm	hono	4.0.0	4.12.27	MEDIUM	Hono: Server-Side XSS via JSX Escaping Bypass in cx() Utility
 CVE-2026-59896	npm	hono	4.11.8	4.12.27	MEDIUM	hono/jsx does not isolate context per request, leading to cross-request data disclosure
 CVE-2026-59897	npm	hono	4.3.3	4.12.27	MEDIUM	Hono: API Gateway v1 adapter can drop a distinct repeated request header value during de-duplication
+CVE-2026-69207	npm	hono	0	4.12.34	MEDIUM	Hono: ReDoS in CORS middleware via Access-Control-Request-Headers
+CVE-2026-71848	npm	hono	4.12.0	4.12.34	MEDIUM	Hono: Algorithmic Complexity DoS in Language Middleware
+CVE-2026-71849	npm	hono	4.7.0	4.12.34	LOW	Hono: Proxy Helper does not remove response headers listed in the `Connection` header
+CVE-2026-71850	npm	hono	3.8.0	4.12.34	MEDIUM	Hono: `memo()` retains SSR output across requests, leading to cross-user data disclosure
 CVE-2024-23339	npm	hoolock	2.0.0	2.2.1	MEDIUM	Prototype pollution not blocked by object-path related utilities in hoolock
 CVE-2021-23362	npm	hosted-git-info	0	2.8.9	MEDIUM	Regular Expression Denial of Service in hosted-git-info
 CVE-2021-23362	npm	hosted-git-info	3.0.0	3.0.8	MEDIUM	Regular Expression Denial of Service in hosted-git-info
@@ -56037,6 +56410,9 @@ CVE-2025-52573	npm	ios-simulator-mcp	0	1.3.3	MEDIUM	iOS Simulator MCP Command In
 CVE-2023-42282	npm	ip	0	1.1.9	LOW	NPM IP package incorrectly identifies some private IP addresses as public
 CVE-2023-42282	npm	ip	2.0.0	2.0.1	LOW	NPM IP package incorrectly identifies some private IP addresses as public
 CVE-2026-42338	npm	ip-address	0	10.1.1	MEDIUM	ip-address has XSS in Address6 HTML-emitting methods
+CVE-2026-54272	npm	ip-address	10.1.1	10.2.1	MEDIUM	ip-address: misclassification of IPv4-mapped/NAT64 IPv6 addresses can bypass SSRF and trust-boundary checks
+CVE-2026-69192	npm	ip-address	0	10.3.1	HIGH	ip-address: Address4 decodes leading-zero octets as decimal while resolvers decode them as octal, allowing SSRF and tru…
+CVE-2026-69198	npm	ip-address	10.1.1	10.2.2	MEDIUM	ip-address: a CIDR suffix on the parsed address suppresses special-use classification and can bypass SSRF and trust-bou…
 GHSA-6fcr-9h9g-23fq	npm	ipfs-bitswap	0	0.24.1	MEDIUM	Denial of Service in ipfs-bitswap
 GHSA-j59f-6m4q-62h6	npm	ipns	0	0.1.3	HIGH	Improper Key Verification in ipns
 CVE-2025-54387	npm	ipx	0	1.3.2	MEDIUM	IPX Allows Path Traversal via Prefix Matching Bypass
@@ -56154,12 +56530,15 @@ CVE-2026-59869	npm	js-yaml	3.0.0	3.15.0	HIGH	js-yaml: YAML merge-key chains can 
 CVE-2026-59869	npm	js-yaml	4.0.0	4.3.0	HIGH	js-yaml: YAML merge-key chains can force quadratic CPU consumption
 CVE-2026-59870	npm	js-yaml	5.0.0	5.2.1	MEDIUM	js-yaml: Quadratic-complexity (O(n^2)) DoS via !!omap tag in YAML11_SCHEMA
 GHSA-2pr6-76vf-7546	npm	js-yaml	0	3.13.0	MEDIUM	Denial of Service in js-yaml
+GHSA-5p4m-2wfm-xmqj	npm	js-yaml	3.0.0	3.15.1	HIGH	JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026-59870 fix not backported
+GHSA-5p4m-2wfm-xmqj	npm	js-yaml	4.0.0	4.3.1	HIGH	JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026-59870 fix not backported
 GHSA-8j8c-7jfh-h6hx	npm	js-yaml	0	3.13.1	HIGH	Code Injection in js-yaml
 GHSA-pm4m-ph32-ghv5	npm	js-yaml	5.0.0	5.2.2	HIGH	js-yaml: Exponential parsing time in flow collections leads to denial of service
 GHSA-m56h-5xx3-2jc2	npm	jsii	5.4.0	5.4.46	LOW	Prototype pollution in jsii.configureCategories
 GHSA-m56h-5xx3-2jc2	npm	jsii	5.5.0	5.5.15	LOW	Prototype pollution in jsii.configureCategories
 GHSA-m56h-5xx3-2jc2	npm	jsii	5.6.0	5.6.4	LOW	Prototype pollution in jsii.configureCategories
 GHSA-m56h-5xx3-2jc2	npm	jsii	5.7.0	5.7.3	LOW	Prototype pollution in jsii.configureCategories
+CVE-2026-15895	npm	jsii-diff	0	1.131.0	HIGH	jsii-diff: Command Injection via npm: package argument
 CVE-2020-7712	npm	json	0	10.0.0	HIGH	trentm/json vulnerable to command injection
 CVE-2026-9673	npm	json-2-csv	3.15.0	5.5.11	MEDIUM	json-2-csv vulnerable to CSV Injection via the preventCsvInjection optio
 CVE-2020-8237	npm	json-bigint	0	1.0.0	HIGH	Uncontrolled Resource Consumption in json-bigint
@@ -56181,7 +56560,8 @@ CVE-2020-7770	npm	json8	0	1.0.3	CRITICAL	Prototype pollution in json8
 CVE-2020-8268	npm	json8-merge-patch	0	1.0.3	HIGH	Prototype pollution in json8-merge-patch
 CVE-2024-27307	npm	jsonata	1.4.0	1.8.7	CRITICAL	JSONata expression can pollute the "Object" prototype
 CVE-2024-27307	npm	jsonata	2.0.0	2.0.4	CRITICAL	JSONata expression can pollute the "Object" prototype
-CVE-2026-52746	npm	jsonata	0	2.2.0	HIGH	jsonata: Malicious inputs to "$toMillis" function can cause resource exhaustion
+CVE-2026-52746	npm	jsonata	0	1.8.9	HIGH	jsonata: Malicious inputs to "$toMillis" function can cause resource exhaustion
+CVE-2026-52746	npm	jsonata	2.0.0	2.2.0	HIGH	jsonata: Malicious inputs to "$toMillis" function can cause resource exhaustion
 CVE-2025-9910	npm	jsondiffpatch	0	0.7.2	MEDIUM	jsondiffpatch is vulnerable to Cross-site Scripting (XSS) via HtmlFormatter::nodeBegin
 CVE-2020-23849	npm	jsoneditor	0	9.0.2	MEDIUM	Cross-site Scripting in jsoneditor
 CVE-2021-3822	npm	jsoneditor	0	9.5.6	MEDIUM	Regular Expression Denial of Service in jsoneditor
@@ -56559,6 +56939,14 @@ CVE-2026-41150	npm	mermaid	0	10.9.6	MEDIUM	Mermaid Gantt Charts are vulnerable t
 CVE-2026-41150	npm	mermaid	11.0.0-alpha.1	11.15.0	MEDIUM	Mermaid Gantt Charts are vulnerable to an Infinite Loop DoS
 CVE-2026-41159	npm	mermaid	0	10.9.6	MEDIUM	Mermaid: Improper sanitization of configuration leads to CSS injection
 CVE-2026-41159	npm	mermaid	11.0.0-alpha.1	11.15.0	MEDIUM	Mermaid: Improper sanitization of configuration leads to CSS injection
+CVE-2026-50159	npm	mermaid	0	10.9.8	MEDIUM	Mermaid allows CSS injection applying to sibling elements of the diagram
+CVE-2026-50159	npm	mermaid	11.0.0-alpha.1	11.16.1	MEDIUM	Mermaid allows CSS injection applying to sibling elements of the diagram
+CVE-2026-71436	npm	mermaid	10.6.0	10.9.8	MEDIUM	Mermaid XY Charts are vulnerable to an infinite loop DoS
+CVE-2026-71436	npm	mermaid	11.0.0-alpha.1	11.16.1	MEDIUM	Mermaid XY Charts are vulnerable to an infinite loop DoS
+CVE-2026-71437	npm	mermaid	11.5.0	11.16.1	MEDIUM	Mermaid Architecture diagrams are vulnerable to prototype pollution
+CVE-2026-71438	npm	mermaid	0	10.9.8	LOW	Mermaid configuration APIs allow prototype pollution
+CVE-2026-71438	npm	mermaid	11.0.0-alpha.1	11.16.1	LOW	Mermaid configuration APIs allow prototype pollution
+CVE-2026-71439	npm	mermaid	11.6.0	11.16.1	MEDIUM	Mermaid radar diagrams are vulnerable to DoS
 GHSA-m4gq-x24j-jpmf	npm	mermaid	0	10.9.3	HIGH	Prototype pollution vulnerability found in Mermaid's bundled version of DOMPurify
 GHSA-w32g-5hqp-gg6q	npm	mermaid	0	8.2.3	HIGH	Cross-Site Scripting in mermaid
 CVE-2023-51842	npm	meshcentral	0	1.1.17	HIGH	MeshCentral algorithm-downgrade issue
@@ -57060,6 +57448,10 @@ CVE-2022-42496	npm	nadesiko3	0	3.3.75	CRITICAL	nadesiko3 vulnerable to OS Comman
 CVE-2021-23566	npm	nanoid	3.0.0	3.1.31	MEDIUM	Exposure of Sensitive Information to an Unauthorized Actor in nanoid
 CVE-2024-55565	npm	nanoid	0	3.3.8	MEDIUM	Predictable results in nanoid generation when given non-integer values
 CVE-2024-55565	npm	nanoid	4.0.0	5.0.9	MEDIUM	Predictable results in nanoid generation when given non-integer values
+CVE-2026-67213	npm	nanoid	0	3.3.17	HIGH	nanoid: custom generators can loop indefinitely when size is zero
+CVE-2026-67213	npm	nanoid	4.0.0	5.1.6	HIGH	nanoid: custom generators can loop indefinitely when size is zero
+CVE-2026-67214	npm	nanoid	0	3.3.16	HIGH	nanoid: non-secure generators can loop indefinitely with negative size
+CVE-2026-67214	npm	nanoid	4.0.0	5.1.16	HIGH	nanoid: non-secure generators can loop indefinitely with negative size
 CVE-2025-54313	npm	napi-postinstall	0.3.1	0.3.2	HIGH	eslint-config-prettier, eslint-plugin-prettier, synckit, @pkgr/core, napi-postinstall have embedded malicious code
 CVE-2020-26149	npm	nats	2.0.0-201	2.0.0-209	HIGH	Sensitive data exposure in NATS
 GHSA-prmc-5v5w-c465	npm	nats	2.0.0-201	2.0.0-209	CRITICAL	Client TLS credentials sent raw to server in npm package nats
@@ -57264,6 +57656,7 @@ GHSA-whv6-rj84-2vh2	npm	nextcloud-vue-collections	0	0.4.2	HIGH	Cross-Site Script
 CVE-2020-7735	npm	ng-packagr	0	10.1.1	MEDIUM	OS Command Injection in ng-packagr
 GHSA-2xw5-3767-qxvm	npm	ng-ui-library	1.0.987	1.0.990	CRITICAL	Malicious Package in ng-ui-library
 GHSA-28xx-8j99-m32j	npm	nginxbeautifier	1.0.14	1.0.15	CRITICAL	Malicious Package in nginxbeautifier
+GHSA-w9hm-4m3m-fxmm	npm	ngx-extended-pdf-viewer	27.0.0-rc.0	29.0.0-rc.3	HIGH	ngx-extended-pdf-viewer bundles a version of pdf.js vulnerable to CVE-2026-16633
 GHSA-xr53-m937-jr9c	npm	ngx-md	0	6.0.3	HIGH	Cross-Site Scripting in ngx-md
 CVE-2022-36034	npm	nitrado.js	0	0.2.5	HIGH	Polynomial regular expression used on uncontrolled data in nitrado.js
 CVE-2026-44372	npm	nitro	0	3.0.260429-beta	MEDIUM	Nitro has an Open Redirect via Protocol-Relative URL Bypass in Wildcard Route Rules
@@ -57454,6 +57847,19 @@ CVE-2026-56317	npm	nuxt	0	3.21.7	LOW	Cross-site scripting via <NoScript> slot co
 CVE-2026-56317	npm	nuxt	4.0.0	4.4.7	LOW	Cross-site scripting via <NoScript> slot content in Nuxt's head components
 CVE-2026-56326	npm	nuxt	0	3.21.7	MEDIUM	Nuxt: URL-handling weaknesses in `navigateTo` and `reloadNuxtApp`: SSR open redirect, client-side script execution via…
 CVE-2026-56326	npm	nuxt	4.0.0	4.4.7	MEDIUM	Nuxt: URL-handling weaknesses in `navigateTo` and `reloadNuxtApp`: SSR open redirect, client-side script execution via…
+CVE-2026-71314	npm	nuxt	3.1.0	3.21.10	HIGH	Nuxt: Unauthenticated out-of-memory crash via unbounded v-for expansion in island rendering
+CVE-2026-71314	npm	nuxt	4.0.0	4.5.1	HIGH	Nuxt: Unauthenticated out-of-memory crash via unbounded v-for expansion in island rendering
+CVE-2026-71315	npm	nuxt	3.21.7	3.21.10	HIGH	Nuxt route rules silently dropped for mixed-case paths, bypassing appMiddleware auth gates (incomplete fix for CVE-2026…
+CVE-2026-71315	npm	nuxt	4.4.7	4.5.1	HIGH	Nuxt route rules silently dropped for mixed-case paths, bypassing appMiddleware auth gates (incomplete fix for CVE-2026…
+CVE-2026-71316	npm	nuxt	4.4.0	4.5.1	HIGH	Nuxt runtime payload cache discloses another user's SSR data across users and to unauthenticated clients
+CVE-2026-71318	npm	nuxt	3.1.0	3.21.10	MEDIUM	Nuxt: Unauthorized Component Instantiation via Server Island Props
+CVE-2026-71318	npm	nuxt	4.0.0	4.5.1	MEDIUM	Nuxt: Unauthorized Component Instantiation via Server Island Props
+CVE-2026-71320	npm	nuxt	3.4.0	3.21.10	HIGH	Nuxt: Server-Side Remote Code Execution via Runtime Template Injection in Nuxt Server Island Props
+CVE-2026-71320	npm	nuxt	4.0.0	4.5.1	HIGH	Nuxt: Server-Side Remote Code Execution via Runtime Template Injection in Nuxt Server Island Props
+CVE-2026-71321	npm	nuxt	3.1.0	3.21.10	HIGH	Nuxt: Unauthenticated CPU exhaustion parsing and hashing the Nuxt island endpoint body before hash validation
+CVE-2026-71321	npm	nuxt	4.0.0	4.5.1	HIGH	Nuxt: Unauthenticated CPU exhaustion parsing and hashing the Nuxt island endpoint body before hash validation
+GHSA-7c4v-fwgw-9rf7	npm	nuxt	3.21.7	3.21.10	MEDIUM	Nuxt dev server discloses project root and workspace UUID via the Chrome DevTools workspace endpoint
+GHSA-7c4v-fwgw-9rf7	npm	nuxt	4.4.7	4.5.1	MEDIUM	Nuxt dev server discloses project root and workspace UUID via the Chrome DevTools workspace endpoint
 GHSA-rq7w-g337-39qq	npm	nuxt	4.0.0-alpha.1	4.4.7	LOW	Nuxt: Dev server discloses project absolute path and persistent workspace UUID via `/.well-known/appspecific/com.chrome…
 CVE-2023-49799	npm	nuxt-api-party	0	0.22.0	HIGH	SSRF & Credentials Leak
 CVE-2023-49800	npm	nuxt-api-party	0	0.22.1	HIGH	DOS by abusing `fetchOptions.retry`.
@@ -57465,6 +57871,8 @@ CVE-2016-10588	npm	nw	0	0.23.6-1	HIGH	Downloads Resources over HTTP in nw
 GHSA-6394-6h9h-cfjg	npm	nwmatcher	0	1.4.4	MEDIUM	Regular Expression Denial of Service
 CVE-2026-54753	npm	nx	17.0.4	22.7.2	MEDIUM	`nx graph` dev server permissive CORS policy
 CVE-2026-54753	npm	nx	23.0.0-beta.0	23.0.0-beta.2	MEDIUM	`nx graph` dev server permissive CORS policy
+CVE-2026-71476	npm	nx	20.8.0	22.7.7	HIGH	Nx: Zip-Slip in the self-hosted remote cache
+CVE-2026-71476	npm	nx	23.0.0	23.0.2	HIGH	Nx: Zip-Slip in the self-hosted remote cache
 CVE-2018-11647	npm	oauth2orize-fprm	0	0.2.1	MEDIUM	oauth2orize-fprm XSS vulnerability
 CVE-2021-25914	npm	object-collider	1.0.0	1.0.4	CRITICAL	Prototype Pollution Vulnerability in object-collider
 CVE-2020-28270	npm	object-hierarchy-access	0.2.0	0.33.0	CRITICAL	Prototype pollution in object-hierarchy-access
@@ -58390,6 +58798,7 @@ CVE-2018-3746	npm	pdfinfojs	0	0.4.1	CRITICAL	Command Injection in pdfinfojs
 CVE-2018-5158	npm	pdfjs-dist	0	1.10.100	HIGH	Malicious PDF can inject JavaScript into PDF Viewer
 CVE-2018-5158	npm	pdfjs-dist	2.0.0	2.0.550	HIGH	Malicious PDF can inject JavaScript into PDF Viewer
 CVE-2024-4367	npm	pdfjs-dist	0	4.2.67	HIGH	PDF.js vulnerable to arbitrary JavaScript execution upon opening a malicious PDF
+CVE-2026-16633	npm	pdfjs-dist	5.6.83	6.2.108	HIGH	PDF.js: Arbitrary JavaScript execution upon opening a malicious PDF
 CVE-2025-11362	npm	pdfmake	0.3.0-beta.1	0.3.0-beta.17	HIGH	pdfmake is vulnerable to Throttling via repeatedly redirecting URL in file embedding
 CVE-2026-26801	npm	pdfmake	0.3.0-beta.2	0.3.6	HIGH	pdfmake is vulnerable to server-side request forgery (SSRF)
 CVE-2021-3780	npm	peertube	0	3.4.0	MEDIUM	Cross-site Scripting in peertube
@@ -58500,6 +58909,7 @@ CVE-2021-23382	npm	postcss	8.0.0	8.2.13	MEDIUM	Regular Expression Denial of Serv
 CVE-2023-44270	npm	postcss	0	8.4.31	MEDIUM	PostCSS line return parsing error
 CVE-2026-41305	npm	postcss	0	8.5.10	MEDIUM	PostCSS has XSS via Unescaped </style> in its CSS Stringify Output
 CVE-2026-45623	npm	postcss	0	8.5.12	HIGH	PostCSS: Arbitrary file read and information disclosure via attacker-controlled sourceMappingURL in CSS comments
+CVE-2026-69153	npm	postcss	0	8.5.23	MEDIUM	PostCSS: incomplete fix of GHSA-6g55-p6wh-862q — attacker-controlled sourceMappingURL reads arbitrary .map files when `…
 GHSA-r28c-9q8g-f849	npm	postcss	0	8.5.18	HIGH	PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure
 CVE-2023-32325	npm	posthog-js	0	1.57.2	MEDIUM	Potential for cross-site scripting in PostHog-js
 CVE-2016-10546	npm	pouchdb	0	6.0.5	CRITICAL	Arbitrary Code Injection in pouchdb
@@ -58632,6 +59042,8 @@ CVE-2022-35144	npm	raneto	0	0.17.1	MEDIUM	Raneto vulnerable to Cross-site Script
 GHSA-x48m-gp6r-gp4v	npm	rate-map	1.0.3	1.0.5	CRITICAL	Malicious Package in rate-map
 CVE-2026-67550	npm	re2	0	1.25.2	MEDIUM	re2: Out-of-bounds heap read in `exec`/`test`/`match` via attacker-influenced `lastIndex` on a non-ASCII subject → unca…
 CVE-2026-68499	npm	re2	0	1.25.2	MEDIUM	re2: Global `String.prototype.match` with an empty-matchable pattern never advances → infinite loop with unbounded nati…
+CVE-2026-71430	npm	re2	0	1.25.1	MEDIUM	node-re2: String.prototype.replace(re2, template) aborts the Node process (uncatchable ToLocalChecked on empty MaybeLoc…
+CVE-2026-71498	npm	re2	0	1.26.1	MEDIUM	node-re2: Out-of-bounds heap read in `replace`/`split` via a `Buffer` ending in a truncated multi-byte UTF-8 character…
 CVE-2013-7035	npm	react	0.4.0	0.4.2	MEDIUM	Cross-Site Scripting in react
 CVE-2013-7035	npm	react	0.5.0	0.5.2	MEDIUM	Cross-Site Scripting in react
 GHSA-hg79-j56m-fxgv	npm	react	0.0.1	0.14.0	HIGH	Cross-Site Scripting in react
@@ -58684,7 +59096,8 @@ CVE-2026-53667	npm	react-router	7.11.0	7.18.0	MEDIUM	React Router: RSCErrorHandl
 CVE-2026-53668	npm	react-router	7.9.6	7.13.0	MEDIUM	React Router: Open redirect leading to XSS
 CVE-2026-53669	npm	react-router	6.0.0	7.18.0	MEDIUM	React Router: Open redirect via backslash in <Link> and useNavigate (CVE-2025-68470 bypass)
 CVE-2026-55685	npm	react-router	7.0.0	7.18.0	HIGH	React Router: Unauthenticated Denial of Service via Inefficient Route Matching
-GHSA-qwww-vcr4-c8h2	npm	react-router	7.12.0	8.3.0	HIGH	React Router: RSC Mode CSRF Bypass Allows Action Execution Before 400 Response
+GHSA-qwww-vcr4-c8h2	npm	react-router	7.12.0	7.18.2	HIGH	React Router: RSC Mode CSRF Bypass Allows Action Execution Before 400 Response
+GHSA-qwww-vcr4-c8h2	npm	react-router	8.0.0	8.3.0	HIGH	React Router: RSC Mode CSRF Bypass Allows Action Execution Before 400 Response
 CVE-2025-55182	npm	react-server-dom-parcel	19.0.0	19.0.1	CRITICAL	React Server Components are Vulnerable to RCE
 CVE-2025-55182	npm	react-server-dom-parcel	19.1.0	19.1.2	CRITICAL	React Server Components are Vulnerable to RCE
 CVE-2025-55182	npm	react-server-dom-parcel	19.2.0	19.2.1	CRITICAL	React Server Components are Vulnerable to RCE
@@ -58915,6 +59328,7 @@ CVE-2023-22579	npm	sequelize	0	6.28.1	CRITICAL	Unsafe fall-through in getWhereCo
 CVE-2023-22580	npm	sequelize	0	6.28.1	MEDIUM	Sequelize information disclosure vulnerability
 CVE-2023-25813	npm	sequelize	0	6.19.1	CRITICAL	Sequelize vulnerable to SQL Injection via replacements
 CVE-2026-30951	npm	sequelize	6.0.0-beta.1	6.37.8	HIGH	Sequelize v6 Vulnerable to SQL Injection via JSON Column Cast Type
+CVE-2026-69240	npm	sequelize	0	6.37.4	CRITICAL	Sequelize: SQL Injection (Oracle DB)
 GHSA-fw4p-36j9-rrj3	npm	sequelize	0	4.44.4	MEDIUM	Denial of Service in sequelize
 GHSA-wfp9-vr4j-f49j	npm	sequelize	0	4.12.0	HIGH	NoSQL Injection in sequelize
 CVE-2023-6293	npm	sequelize-typescript	0	2.1.6	HIGH	sequelize-typescript Prototype Pollution vulnerability
@@ -59111,6 +59525,9 @@ CVE-2023-32695	npm	socket.io-parser	4.0.4	4.2.3	MEDIUM	Insufficient validation w
 CVE-2026-33151	npm	socket.io-parser	0	3.3.5	HIGH	socket.io allows an unbounded number of binary attachments
 CVE-2026-33151	npm	socket.io-parser	3.4.0	3.4.4	HIGH	socket.io allows an unbounded number of binary attachments
 CVE-2026-33151	npm	socket.io-parser	4.0.0	4.2.6	HIGH	socket.io allows an unbounded number of binary attachments
+CVE-2026-69185	npm	socket.io-parser	0	3.3.6	HIGH	Socket.IO: Zero-attachment Memory Exhaustion
+CVE-2026-69185	npm	socket.io-parser	3.4.0	3.4.5	HIGH	Socket.IO: Zero-attachment Memory Exhaustion
+CVE-2026-69185	npm	socket.io-parser	4.0.0	4.2.7	HIGH	Socket.IO: Zero-attachment Memory Exhaustion
 CVE-2020-7693	npm	sockjs	0	0.3.20	MEDIUM	Improper Input Validation in SocksJS-Node
 CVE-2020-8823	npm	sockjs	0	0.3.0	MEDIUM	Cross-site scripting in SocksJS-node
 CVE-2025-27109	npm	solid-js	0	1.9.4	HIGH	Solid Lacks Escaping of HTML in JSX Fragments allows for Cross-Site Scripting (XSS)
@@ -59490,6 +59907,13 @@ CVE-2026-11525	npm	undici	8.0.0	8.5.0	LOW	undici vulnerable to Set-Cookie SameSi
 CVE-2026-12151	npm	undici	0	6.27.0	HIGH	undici WebSocket client vulnerable to denial of service via fragment count bypass
 CVE-2026-12151	npm	undici	7.0.0	7.28.0	HIGH	undici WebSocket client vulnerable to denial of service via fragment count bypass
 CVE-2026-12151	npm	undici	8.0.0	8.5.0	HIGH	undici WebSocket client vulnerable to denial of service via fragment count bypass
+CVE-2026-13697	npm	undici	7.0.0	7.29.0	HIGH	undici vulnerable to cross-user information disclosure and parse-time crash via degenerate private cache directives
+CVE-2026-13697	npm	undici	8.0.0	8.9.0	HIGH	undici vulnerable to cross-user information disclosure and parse-time crash via degenerate private cache directives
+CVE-2026-14643	npm	undici	7.0.0	7.29.0	MEDIUM	undici vulnerable to cross-user information disclosure via whitespace around equals in Cache-Control directives
+CVE-2026-14643	npm	undici	8.0.0	8.9.0	MEDIUM	undici vulnerable to cross-user information disclosure via whitespace around equals in Cache-Control directives
+CVE-2026-15157	npm	undici	0	6.28.0	MEDIUM	undici vulnerable to CRLF Injection via blob-like body 'type' property
+CVE-2026-15157	npm	undici	7.0.0	7.29.0	MEDIUM	undici vulnerable to CRLF Injection via blob-like body 'type' property
+CVE-2026-15157	npm	undici	8.0.0	8.9.0	MEDIUM	undici vulnerable to CRLF Injection via blob-like body 'type' property
 CVE-2026-1525	npm	undici	0	6.24.0	MEDIUM	Undici has an HTTP Request/Response Smuggling issue
 CVE-2026-1525	npm	undici	7.0.0	7.24.0	MEDIUM	Undici has an HTTP Request/Response Smuggling issue
 CVE-2026-1526	npm	undici	0	6.24.0	HIGH	Undici has Unbounded Memory Consumption in WebSocket permessage-deflate Decompression
@@ -59498,6 +59922,12 @@ CVE-2026-1527	npm	undici	0	6.24.0	MEDIUM	Undici has CRLF Injection in undici via
 CVE-2026-1527	npm	undici	7.0.0	7.24.0	MEDIUM	Undici has CRLF Injection in undici via `upgrade` option
 CVE-2026-1528	npm	undici	6.0.0	6.24.0	HIGH	Undici: Malicious WebSocket 64-bit length overflows parser and crashes the client
 CVE-2026-1528	npm	undici	7.0.0	7.24.0	HIGH	Undici: Malicious WebSocket 64-bit length overflows parser and crashes the client
+CVE-2026-16728	npm	undici	0	6.28.0	MEDIUM	undici vulnerable to downstream response desynchronization via retry interceptor
+CVE-2026-16728	npm	undici	7.0.0	7.29.0	MEDIUM	undici vulnerable to downstream response desynchronization via retry interceptor
+CVE-2026-16728	npm	undici	8.0.0	8.9.0	MEDIUM	undici vulnerable to downstream response desynchronization via retry interceptor
+CVE-2026-16729	npm	undici	0	6.28.0	MEDIUM	undici vulnerable to cookie attribute injection via unsanitized domain and unparsed setCookie fields
+CVE-2026-16729	npm	undici	7.0.0	7.29.0	MEDIUM	undici vulnerable to cookie attribute injection via unsanitized domain and unparsed setCookie fields
+CVE-2026-16729	npm	undici	8.0.0	8.9.0	MEDIUM	undici vulnerable to cookie attribute injection via unsanitized domain and unparsed setCookie fields
 CVE-2026-22036	npm	undici	0	6.23.0	MEDIUM	Undici has an unbounded decompression chain in HTTP responses on Node.js Fetch API via Content-Encoding leads to resour…
 CVE-2026-22036	npm	undici	7.0.0	7.18.2	MEDIUM	Undici has an unbounded decompression chain in HTTP responses on Node.js Fetch API via Content-Encoding leads to resour…
 CVE-2026-2229	npm	undici	0	6.24.0	HIGH	Undici has Unhandled Exception in WebSocket Client Due to Invalid server_max_window_bits Validation
