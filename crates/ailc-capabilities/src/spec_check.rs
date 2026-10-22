@@ -80,6 +80,28 @@ impl DriftCheck {
     }
 }
 
+/// Совпадают ли документ на диске и свежая сборка, если не учитывать хеш коммита в
+/// строке «Состояние истории изменений». Документ по стандарту называет состояние истории,
+/// на котором собран, но документ, лежащий в коммите, не может содержать хеш этого же
+/// коммита. Прежде сверка сравнивала тексты буквально, и после любого коммита все такие
+/// документы считались разошедшимися с кодом: ось «Доки/Спека актуальны» не могла стать
+/// зелёной ни на одном коммите. Версия продукта и всё остальное сверяются как раньше.
+fn same_but_commit(on_disk: &str, fresh: &str) -> bool {
+    use std::sync::OnceLock;
+    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    let Some(re) = RE
+        .get_or_init(|| ailc_core::re::compile(r"Состояние истории изменений: [0-9a-f]{7,40}\."))
+        .as_ref()
+    else {
+        return on_disk == fresh;
+    };
+    let norm = |t: &str| {
+        re.replace_all(t, "Состояние истории изменений: <коммит>.")
+            .into_owned()
+    };
+    norm(on_disk) == norm(fresh)
+}
+
 impl DriftCheck {
     /// Сверить документы, объявленные декларациями стандартов, со свежей сборкой.
     ///
@@ -128,7 +150,7 @@ impl DriftCheck {
                     absent += 1;
                     out.records.push(format!("{}: не выпущен", doc.path));
                 }
-                Some(текст) if текст == r.text => {
+                Some(текст) if same_but_commit(&текст, &r.text) => {
                     fresh += 1;
                     out.records.push(format!("{}: актуален", doc.path));
                 }
@@ -464,6 +486,18 @@ pub fn register(reg: &mut Registry) {
 #[cfg(test)]
 mod trace_tests {
     use super::*;
+
+    #[test]
+    fn хеш_коммита_не_делает_документ_устаревшим() {
+        let a = "Версия: 0.8.2. Состояние истории изменений: 35ac47a79698.\nтекст";
+        let b = "Версия: 0.8.2. Состояние истории изменений: 1234567abcde.\nтекст";
+        assert!(same_but_commit(a, b));
+        let other_version = "Версия: 0.8.3. Состояние истории изменений: 1234567abcde.\nтекст";
+        assert!(
+            !same_but_commit(a, other_version),
+            "смена версии остаётся дрейфом"
+        );
+    }
 
     /// Временный git-репозиторий с одним незакоммиченным исходником.
     fn git_repo(tag: &str) -> Option<std::path::PathBuf> {

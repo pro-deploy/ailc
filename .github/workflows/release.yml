@@ -140,8 +140,10 @@ jobs:
     name: публикация обёртки в npm
     # Идёт только по тегу и только после успешной сборки всех бинарников: к моменту
     # публикации ассеты релиза v<версия> уже на месте, поэтому npx ailc-mcp@<версия>
-    # сразу найдёт бинарь и не упрётся в 404. Требует секрет репозитория NPM_TOKEN
-    # (npm Automation-токен либо гранулярный токен с правом publish и обходом 2FA).
+    # сразу найдёт бинарь и не упрётся в 404. Требует секрет репозитория NPM_TOKEN либо,
+    # для совместимости с уже заведённым в репозитории, секрет NPM (npm Automation-токен
+    # либо гранулярный токен с правом publish и обходом 2FA). Прежде шаг читал только
+    # NPM_TOKEN, а в репозитории был заведён NPM, и публикация в npm не работала с 0.6.0.
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
@@ -169,7 +171,7 @@ jobs:
       - name: Публикация в npm (идемпотентно)
         working-directory: npm/ailc-mcp
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN || secrets.NPM }}
         run: |
           pkg="$(node -p "require('./package.json').version")"
           if npm view "ailc-mcp@$pkg" version >/dev/null 2>&1; then
