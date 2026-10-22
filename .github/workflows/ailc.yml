@@ -8,6 +8,12 @@ on: [push, pull_request]
 jobs:
   quality:
     runs-on: ubuntu-latest
+    # Загрузке SARIF в раздел безопасности нужно право security-events: write. Без явного
+    # блока токен получал права по умолчанию (только чтение), и шаг upload-sarif падал с
+    # «Resource not accessible by integration», хотя вердикт DoD был зелёным.
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@v4
       - name: Инструментарий из rust-toolchain.toml
