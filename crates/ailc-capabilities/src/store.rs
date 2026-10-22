@@ -23,6 +23,9 @@ const NS_MEMORY: &str = "memory-bank";
 const NS_BACKLOG: &str = "backlog";
 
 /// Первая непустая строка содержимого (краткая выжимка для списков), обрезанная.
+/// Предел символов одного файла памяти в ответе memory/read.
+const MEMORY_READ_LIMIT: usize = 8000;
+
 fn excerpt(content: &str) -> String {
     let line = content
         .lines()
@@ -66,9 +69,13 @@ impl Capability for MemoryRead {
     fn manifest(&self) -> &CapabilityManifest {
         &self.manifest
     }
-    fn run(&self, ctx: &Ctx, _input: &RunInput) -> Result<CapabilityOutput> {
+    fn run(&self, ctx: &Ctx, input: &RunInput) -> Result<CapabilityOutput> {
         let mut out = CapabilityOutput::default();
-        let items = Store::read_all(ctx, NS_MEMORY)?;
+        let mut items = Store::read_all(ctx, NS_MEMORY)?;
+        // Конкретный файл памяти можно запросить через target (например «decision-log.md»).
+        if let Some(only) = input.target.as_deref().filter(|t| !t.is_empty()) {
+            items.retain(|(name, _)| name == only);
+        }
 
         // Инвариант «нет молчаливых пропусков»: пустая память — явная причина.
         if items.is_empty() {
@@ -77,8 +84,23 @@ impl Capability for MemoryRead {
             return Ok(out);
         }
 
+        // Содержимое отдаётся ЦЕЛИКОМ. Прежде от файла возвращалась только первая непустая
+        // строка, обрезанная до 120 символов, и модель, сохранившая рабочий контекст через
+        // memory/update, получала назад его заголовок вместо самого контекста. Предел на
+        // файл защищает ответ от разросшегося журнала: сверх него отдаётся хвост, то есть
+        // самое свежее, и путь к полному файлу.
         for (name, content) in &items {
-            out.records.push(format!("{name}: {}", excerpt(content)));
+            out.records.push(format!("── {name} ──"));
+            let chars = content.chars().count();
+            if chars > MEMORY_READ_LIMIT {
+                let tail: String = content.chars().skip(chars - MEMORY_READ_LIMIT).collect();
+                out.records.push(format!(
+                    "… начало опущено ({chars} символов, полный файл: .ailc/{NS_MEMORY}/{name})"
+                ));
+                out.records.extend(tail.lines().map(str::to_string));
+            } else {
+                out.records.extend(content.lines().map(str::to_string));
+            }
         }
         out.metrics.push(("files".into(), items.len() as f64));
         out.summary = format!("memory/read: {} файлов памяти", items.len());
@@ -139,7 +161,47 @@ impl Capability for MemoryUpdate {
             .filter(|t| !t.is_empty())
             .unwrap_or("active-context.md");
 
-        Store::write(ctx, NS_MEMORY, name, content)?;
+        // Активный контекст делят модель и сервер: сервер ведёт в нём свои авто-блоки
+        // (журнал вызовов, состояние работ, паспорт). Прежде запись модели перезаписывала
+        // файл целиком и стирала их. Теперь заметка модели живёт в собственном управляемом
+        // блоке «model-context», и каждая сторона обновляет только своё. Прочие файлы памяти
+        // принадлежат модели целиком и пишутся как раньше.
+        if name == "active-context.md" {
+            // Переход с прежнего формата: прежний memory/update писал файл целиком, без
+            // блока, поэтому текст вне управляемых блоков в файле без блока
+            // «model-context» есть прежняя заметка модели. Её заменяет новая; иначе
+            // следующий агент получил бы рядом устаревший и противоречащий контекст.
+            let path = ctx.root.join(format!(".ailc/{NS_MEMORY}/{name}"));
+            if let Ok(old) = std::fs::read_to_string(&path) {
+                if !old.contains("auto:start model-context") {
+                    let mut kept = String::new();
+                    let mut inside = false;
+                    for l in old.lines() {
+                        if l.contains("auto:start") {
+                            inside = true;
+                        }
+                        if inside {
+                            kept.push_str(l);
+                            kept.push('\n');
+                        }
+                        if l.contains("auto:end") {
+                            inside = false;
+                        }
+                    }
+                    std::fs::write(&path, kept)?;
+                }
+            }
+            ailc_core::engines::generator::Generator::write_block(
+                ctx,
+                &format!(".ailc/{NS_MEMORY}/{name}"),
+                "model-context",
+                content,
+            )?;
+        } else {
+            Store::write(ctx, NS_MEMORY, name, content)?;
+        }
+        // Заметка модели входит в файл передачи следующему агенту (NEXT.md).
+        ailc_core::process::refresh_next(ctx);
         let artifact = format!(".ailc/{NS_MEMORY}/{name}");
         out.artifacts.push(artifact.clone());
         out.summary = format!("memory/update: память сохранена → {artifact}");
@@ -194,7 +256,11 @@ impl Capability for DecisionLog {
             }
         };
 
-        Store::append(ctx, NS_MEMORY, "decision-log.md", line)?;
+        // Строка журнала получает дату: без неё по журналу нельзя понять, когда принято
+        // решение и какое из противоречащих друг другу действует (последнее по дате).
+        let stamped = format!("- [{}] {line}", ailc_core::answers::today());
+        Store::append(ctx, NS_MEMORY, "decision-log.md", &stamped)?;
+        ailc_core::process::refresh_next(ctx);
         let artifact = format!(".ailc/{NS_MEMORY}/decision-log.md");
         out.artifacts.push(artifact.clone());
         out.summary = format!("memory/decision-log: решение записано → {artifact}");

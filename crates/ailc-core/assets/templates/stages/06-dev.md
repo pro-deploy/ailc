@@ -1,4 +1,4 @@
-<!-- ailc-template: stage-6 v1 -->
+<!-- ailc-template: stage-6 v2 -->
 # Этап 6. Разработка MVP
 
 **Роль:** модель с ailc, команда ревьюит
@@ -14,9 +14,10 @@
 2. Перед шагом вызови stage action=step_begin, после правок stage action=step_done. ailc сам выполнит check и закроет шаг только при успехе.
 3. Если заказчик просит новое, не делай это: вызови stage action=change с текстом просьбы. Процесс вернётся на этап 5.
 4. Для доработки большой системы не выходи за «Затрагиваемый код» из карты ландшафта без запроса на изменение.
+5. После каждого закрытого шага обнови память через memory/update: что сделано, какой шаг следующий, что не получилось и почему. Техническое решение уровня реализации (библиотека, формат, соглашение), не требующее ADR, запиши через memory/decision-log. Пакет возобновления показывает память в начале следующей сессии, и без неё работа после перерыва начинается с догадок.
 
 ## Инструменты ailc
-stage (plan_add, step_begin, step_done, change), task/plan, deliver/branch-name, spec.check/trace, code.intel/diff-scope, plan.
+stage (plan_add, step_begin, step_done, change), memory/update, memory/read, memory/decision-log, task/plan, deliver/branch-name, spec.check/trace, code.intel/diff-scope, plan.
 
 ## Запрещено на этом этапе
 Менять бриф, ADR и критерии. Делать что-то сверх объёма.

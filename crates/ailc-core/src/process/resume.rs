@@ -67,6 +67,31 @@ pub fn packet(ctx: &Ctx, st: &State, budget_tokens: Option<usize>) -> String {
         trim_head: false,
     });
 
+    // Как вызывать ailc. Пакет велит вызывать `stage` с действиями, но у агента может
+    // оказаться другая версия ailc: устаревший MCP-сервер из npm или старый бинарь в PATH,
+    // где `stage` нет. Так агент в новой сессии восстановил контекст, доделал шаг и не
+    // смог его закрыть. Поэтому пакет называет бинарь, который его построил.
+    if let Ok(exe) = std::env::current_exe() {
+        let exe = exe.to_string_lossy();
+        sections.push(Section {
+            title: "Как вызывать ailc".into(),
+            lines: vec![
+                format!(
+                    "Этот пакет построен ailc {} ({exe}).",
+                    env!("CARGO_PKG_VERSION")
+                ),
+                "Действия процесса (step_begin, step_done, plan_add, advance, change и другие) \
+                 вызывай инструментом stage сервера MCP ailc либо командой:"
+                    .into(),
+                format!("  \"{exe}\" stage <действие> . ключ=значение   (пример: \"{exe}\" stage step_done . step=1)"),
+                "Если инструмента stage в MCP нет или `ailc stage` в PATH отвечает, что такой \
+                 команды нет, у тебя устаревшая версия ailc: используй полный путь выше."
+                    .into(),
+            ],
+            trim_head: false,
+        });
+    }
+
     // 2. Точка остановки и единственное следующее действие.
     let mut stop = Vec::new();
     if let Some(s) = current {
@@ -122,6 +147,68 @@ pub fn packet(ctx: &Ctx, st: &State, budget_tokens: Option<usize>) -> String {
         trim_head: false,
     });
 
+    // Память проекта (memory/update и memory/decision-log). Пакет возобновления служит
+    // единственным мостом между сессиями модели, и прежде память в него не входила:
+    // сохранённый рабочий контекст к модели в новой сессии не возвращался. Активный
+    // контекст идёт с начала (при нехватке бюджета режется хвост), журнал решений с конца
+    // (режется начало, самое старое).
+    let mem = ctx.root.join(".ailc/memory-bank");
+    if let Ok(text) = std::fs::read_to_string(mem.join("active-context.md")) {
+        // Из активного контекста берутся заметки модели: её управляемый блок
+        // «model-context» и текст вне любых блоков. Прочие авто-блоки (в том числе
+        // прежние серверные, ещё не убранные миграцией) в раздел памяти не попадают.
+        let mut block: Option<bool> = None;
+        let lines: Vec<String> = text
+            .lines()
+            .filter(|l| {
+                if l.contains("auto:start") {
+                    block = Some(l.contains("auto:start model-context"));
+                    return false;
+                }
+                if l.contains("auto:end") {
+                    block = None;
+                    return false;
+                }
+                block.unwrap_or(true)
+            })
+            .filter(|l| !l.trim().is_empty())
+            .take(40)
+            .map(str::to_string)
+            .collect();
+        sections.push(Section {
+            title: "Память: активный контекст (.ailc/memory-bank/active-context.md)".into(),
+            lines,
+            trim_head: false,
+        });
+    }
+    if let Ok(text) = std::fs::read_to_string(mem.join("decision-log.md")) {
+        let all: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+        let lines = all[all.len().saturating_sub(10)..]
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        sections.push(Section {
+            title: "Память: последние решения (.ailc/memory-bank/decision-log.md)".into(),
+            lines,
+            trim_head: true,
+        });
+    }
+
+    // Состояние работ (задачи .ailc/tasks): прежде сервер дублировал его авто-блоком в
+    // активном контексте модели, теперь оно входит в пакет напрямую.
+    let tasks = crate::tasks::all(ctx);
+    if !tasks.is_empty() {
+        sections.push(Section {
+            title: "Состояние работ (.ailc/tasks)".into(),
+            lines: crate::tasks::active_context_block(&tasks)
+                .lines()
+                .filter(|l| !l.trim().is_empty() && !l.starts_with("## "))
+                .map(str::to_string)
+                .collect(),
+            trim_head: true,
+        });
+    }
+
     // 3. Незакоммиченные изменения.
     let mut gs = git_status(ctx);
     if gs.is_empty() {
@@ -156,6 +243,26 @@ pub fn packet(ctx: &Ctx, st: &State, budget_tokens: Option<usize>) -> String {
         lines: rules,
         trim_head: true,
     });
+
+    // Устаревшие шаблоны: команда могла править свои копии, поэтому они не перезаписываются,
+    // но модель обязана знать, что работает по старой версии, и сказать об этом человеку.
+    let old = templates::outdated(ctx);
+    if !old.is_empty() {
+        let mut lines: Vec<String> = old
+            .iter()
+            .map(|(p, mine, theirs)| format!("{p}: в проекте v{mine}, в ailc v{theirs}"))
+            .collect();
+        lines.push(
+            "Новая версия встроена в ailc. Предложи человеку обновить копию (удалить файл, \
+             и ailc разложит новый при следующем подключении) или перенести изменения вручную."
+                .into(),
+        );
+        sections.push(Section {
+            title: "Шаблоны устарели".into(),
+            lines,
+            trim_head: false,
+        });
+    }
 
     // 5. Карточка этапа целиком.
     let card = templates::load(ctx, info.card).unwrap_or_default();
@@ -300,6 +407,29 @@ mod tests {
         assert!(p.contains("был НАЧАТ и не закрыт"));
         assert!(p.contains("step_done step=1"));
         assert!(p.chars().count() <= 1500 * CHARS_PER_TOKEN + 200);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn пакет_возвращает_память_проекта() {
+        let dir = std::env::temp_dir().join(format!("ailc-resume-mem-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".ailc/memory-bank")).unwrap();
+        std::fs::write(
+            dir.join(".ailc/memory-bank/active-context.md"),
+            "Делаем сервер комнат, следующий шаг: переподключение.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join(".ailc/memory-bank/decision-log.md"),
+            "- выбрали WebSocket\n",
+        )
+        .unwrap();
+        let ctx = Ctx::new(&dir);
+        let st = super::super::load_or_init(&ctx).unwrap();
+        let p = packet(&ctx, &st, None);
+        assert!(p.contains("следующий шаг: переподключение"), "{p}");
+        assert!(p.contains("выбрали WebSocket"), "{p}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

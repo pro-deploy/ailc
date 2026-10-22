@@ -380,7 +380,13 @@ impl GateRunner {
     pub fn escalate_unfinished(report: &mut GateReport) {
         // Источники незавершённого: ищем И в warning, И в advisories, так как дрейф доков теперь
         // низкоуверенный (совет), но на сдаче обязан эскалировать наравне с заглушками.
-        let is_unfinished = |f: &Finding| UNFINISHED_SOURCES.contains(&f.source.as_str());
+        // Подсказка `doc-missing` («нет документации из кода») не эскалирует: это мягкий
+        // нудж, и прежде он блокировал сдачу любого нового проекта, у которого ещё нет
+        // модели данных и глоссария. Блокирует `doc-drift`: документ есть, но разошёлся с
+        // кодом и вводит в заблуждение.
+        let is_unfinished = |f: &Finding| {
+            UNFINISHED_SOURCES.contains(&f.source.as_str()) && f.rule != "doc-missing"
+        };
         let (mut unfinished, warn_rest): (Vec<Finding>, Vec<Finding>) =
             std::mem::take(&mut report.warning)
                 .into_iter()

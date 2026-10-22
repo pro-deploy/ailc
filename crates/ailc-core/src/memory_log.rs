@@ -1,26 +1,30 @@
-//! Серверное ведение памяти проекта: след оставляет САМ сервер, а не агент по памятке.
+//! Серверный след работы: каждый вызов инструмента (plan / run / dod / autofix / design)
+//! оставляет строку в ЕДИНОМ журнале событий проекта `.ailc/process/journal.md`, а не по
+//! памятке агента.
 //!
-//! Каждый вызов инструмента (plan / run / dod / autofix / design) дописывает строку в
-//! журнал `.ailc/memory-bank/journal.md` и обновляет в
-//! `.ailc/memory-bank/active-context.md` два авто-блока: «Журнал AILC» с последними
-//! событиями и «Состояние работ» с тем, что в работе, в очереди, отложено и отклонено. Ручные
-//! разделы активного контекста не трогаются: авто-блок живёт в управляемых маркерах
-//! генератора. Так память проекта актуальна, даже если агент среды о ней не вспоминал.
+//! Прежде сервер вёл собственный журнал `.ailc/memory-bank/journal.md` и писал свои
+//! авто-блоки («Журнал AILC», «Состояние работ», «Паспорт») в активный контекст, который
+//! одновременно принадлежал модели. Журналов событий было два (второй вёл процесс
+//! поставки), а запись модели через memory/update стирала блоки сервера. Теперь
+//! разделение такое: события пишутся в журнал процесса, состояние работ и паспорт входят в
+//! пакет возобновления (`process::resume`), а `.ailc/memory-bank/` целиком принадлежит
+//! заметкам модели. Данные прежнего размещения переносятся при подключении сервера
+//! ([`bootstrap`]).
 
-use crate::engines::generator::Generator;
 use crate::engines::store::Store;
 use ailc_contracts::Ctx;
 
 const NS: &str = "memory-bank";
-const JOURNAL: &str = "journal.md";
-/// Сколько последних событий журнала показываем в активном контексте.
-const RECENT: usize = 10;
+/// Прежний журнал сервера, переносится в журнал процесса.
+const LEGACY_JOURNAL: &str = "journal.md";
+/// Ключи прежних серверных авто-блоков в активном контексте.
+const LEGACY_BLOCKS: &[&str] = &["ailc-journal", "ailc-tasks", "ailc-passport"];
 
 /// Зафиксировать событие: инструмент, деталь (намерение/фича/идентификатор) и краткий
-/// итог. Не паникует и не возвращает ошибок: память — побочный эффект, она не имеет
+/// итог. Не паникует и не возвращает ошибок: журнал — побочный эффект, он не имеет
 /// права ломать основной вызов.
 pub fn note(ctx: &Ctx, tool: &str, detail: &str, digest: &str) {
-    // Память ведём только внутри уже инициализированного проекта: наличие .ailc
+    // Журнал ведём только внутри уже инициализированного проекта: наличие .ailc
     // подтверждает, что путь валиден и это корень проекта, а не случайный каталог.
     if !ctx.root.join(".ailc").is_dir() {
         return;
@@ -28,95 +32,76 @@ pub fn note(ctx: &Ctx, tool: &str, detail: &str, digest: &str) {
     let detail = clip(detail, 120);
     let digest = clip(digest, 200);
     let line = if detail.is_empty() {
-        format!("- [{}] {tool}: {digest}", today())
+        format!("{tool}: {digest}")
     } else {
-        format!("- [{}] {tool} «{detail}»: {digest}", today())
+        format!("{tool} «{detail}»: {digest}")
     };
-    let _ = Store::append(ctx, NS, JOURNAL, &line);
-    refresh_active_context(ctx);
+    crate::process::plan::journal(ctx, &line);
 }
 
-/// Перестроить авто-блок активного контекста из хвоста журнала.
-fn refresh_active_context(ctx: &Ctx) {
-    let journal =
-        std::fs::read_to_string(ctx.root.join(".ailc").join(NS).join(JOURNAL)).unwrap_or_default();
-    let recent: Vec<&str> = journal
-        .lines()
-        .filter(|l| l.starts_with("- "))
-        .rev()
-        .take(RECENT)
-        .collect();
-    let mut body = String::from("## Журнал AILC (ведётся сервером)\n\n");
-    if recent.is_empty() {
-        body.push_str("_Событий пока нет: журнал заполнится при первом вызове инструмента._\n");
-    } else {
-        // В хронологическом порядке: старые выше, свежие ниже.
-        for l in recent.iter().rev() {
-            body.push_str(l);
-            body.push('\n');
-        }
-    }
-    let _ = Generator::write_block(
-        ctx,
-        ".ailc/memory-bank/active-context.md",
-        "ailc-journal",
-        &body,
-    );
-
-    // Состояние работ обновляется тем же вызовом. Журнал событий отвечает на вопрос
-    // «что происходило», а состояние работ на вопрос «где мы находимся»: что брошено на
-    // середине, что в очереди, что отложено и почему. Человек, вернувшийся к проекту
-    // после обрыва сеанса, читает именно это, поэтому запись не должна зависеть от того,
-    // вспомнил ли о ней агент.
-    let _ = Generator::write_block(
-        ctx,
-        ".ailc/memory-bank/active-context.md",
-        "ailc-tasks",
-        &crate::tasks::active_context_block(&crate::tasks::all(ctx)),
-    );
-}
-
-/// Первичный бутстрап активного контекста: паспорт проекта вместо пустой заглушки.
-/// Идемпотентно (управляемый авто-блок); зовётся при инициализации MCP.
-pub fn bootstrap(ctx: &Ctx, profile_summary: &str) {
+/// Подготовка памяти при подключении сервера. Идемпотентно. Переносит прежний журнал
+/// сервера в журнал процесса и убирает из активного контекста прежние серверные
+/// авто-блоки, оставляя заметки модели нетронутыми. Паспорт проекта в активный контекст
+/// больше не пишется: он лежит в `.ailc/profile.md`.
+pub fn bootstrap(ctx: &Ctx, _profile_summary: &str) {
     if !ctx.root.join(".ailc").is_dir() {
         return;
     }
-    let body = format!(
-        "## Паспорт проекта (определён AILC)\n\n{profile_summary}\n\nПодробности в `.ailc/profile.md`.\n"
-    );
-    let _ = Generator::write_block(
-        ctx,
-        ".ailc/memory-bank/active-context.md",
-        "ailc-passport",
-        &body,
-    );
-    refresh_active_context(ctx);
+    let mem = ctx.root.join(".ailc").join(NS);
+    let legacy = mem.join(LEGACY_JOURNAL);
+    if let Ok(text) = std::fs::read_to_string(&legacy) {
+        let lines: Vec<&str> = text.lines().filter(|l| l.starts_with("- ")).collect();
+        if !lines.is_empty() {
+            let mut block = format!(
+                "- перенесено из .ailc/memory-bank/journal.md ({} событий):",
+                lines.len()
+            );
+            for l in &lines {
+                block.push_str("\n  ");
+                block.push_str(l.trim_start_matches("- "));
+            }
+            let _ = Store::append(
+                ctx,
+                crate::process::plan::NS,
+                crate::process::plan::JOURNAL,
+                &block,
+            );
+        }
+        let _ = std::fs::remove_file(&legacy);
+    }
+    let acx = mem.join("active-context.md");
+    if let Ok(text) = std::fs::read_to_string(&acx) {
+        let cleaned = strip_blocks(&text, LEGACY_BLOCKS);
+        if cleaned != text {
+            let _ = std::fs::write(&acx, cleaned);
+        }
+    }
 }
 
-/// Дата в виде ГГГГ-ММ-ДД без внешних зависимостей (алгоритм civil_from_days).
-fn today() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let days = (secs / 86_400) as i64;
-    let (y, m, d) = civil_from_days(days);
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-/// Перевод «дней от эпохи» в календарную дату (Howard Hinnant, chrono-совместимо).
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if m <= 2 { y + 1 } else { y }, m, d)
+/// Убрать из текста управляемые блоки с перечисленными ключами вместе с метками.
+fn strip_blocks(text: &str, keys: &[&str]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut skipping = false;
+    for line in text.lines() {
+        if !skipping {
+            let starts = keys.iter().any(|k| {
+                line.contains(&format!("ailc:auto:start {k} "))
+                    || line
+                        .trim_end()
+                        .ends_with(&format!("ailc:auto:start {k} -->"))
+                    || line.contains(&format!("co:auto:start {k} "))
+            });
+            if starts {
+                skipping = true;
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        } else if line.contains("ailc:auto:end") || line.contains("co:auto:end") {
+            skipping = false;
+        }
+    }
+    out
 }
 
 /// Обрезать строку до лимита по символам, без паники на кириллице.
@@ -147,18 +132,14 @@ mod tests {
     }
 
     #[test]
-    fn note_appends_journal_and_updates_context() {
+    fn note_пишет_в_единый_журнал_процесса() {
         let ctx = temp_ctx("note");
         note(&ctx, "dod", "", "вердикт: не готов, 1 блокер");
         note(&ctx, "plan", "проверь перед сдачей", "балл 92, блокеров 0");
-        let journal =
-            std::fs::read_to_string(ctx.root.join(".ailc/memory-bank/journal.md")).unwrap();
-        assert!(journal.contains("dod"));
+        let journal = std::fs::read_to_string(ctx.root.join(".ailc/process/journal.md")).unwrap();
+        assert!(journal.contains("dod: вердикт"));
         assert!(journal.contains("проверь перед сдачей"));
-        let acx =
-            std::fs::read_to_string(ctx.root.join(".ailc/memory-bank/active-context.md")).unwrap();
-        assert!(acx.contains("Журнал AILC"));
-        assert!(acx.contains("балл 92"));
+        assert!(!ctx.root.join(".ailc/memory-bank/journal.md").exists());
         std::fs::remove_dir_all(&ctx.root).ok();
     }
 
@@ -173,22 +154,30 @@ mod tests {
     }
 
     #[test]
-    fn civil_date_known_values() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(19_723), (2024, 1, 1));
-    }
-
-    #[test]
-    fn bootstrap_writes_passport_block_idempotently() {
+    fn bootstrap_переносит_прежний_журнал_и_убирает_серверные_блоки() {
         let ctx = temp_ctx("boot");
-        bootstrap(&ctx, "стек: Rust · признаки: нет");
-        let first =
-            std::fs::read_to_string(ctx.root.join(".ailc/memory-bank/active-context.md")).unwrap();
-        bootstrap(&ctx, "стек: Rust · признаки: нет");
-        let second =
-            std::fs::read_to_string(ctx.root.join(".ailc/memory-bank/active-context.md")).unwrap();
-        assert!(first.contains("Паспорт"));
-        assert_eq!(first, second);
+        let mem = ctx.root.join(".ailc/memory-bank");
+        std::fs::write(
+            mem.join("journal.md"),
+            "- [2026-07-01] dod: старое событие\n",
+        )
+        .unwrap();
+        std::fs::write(
+            mem.join("active-context.md"),
+            "<!-- ailc:auto:start ailc-journal -->\nжурнал\n<!-- ailc:auto:end -->\n\
+             <!-- ailc:auto:start model-context -->\nзаметка модели\n<!-- ailc:auto:end -->\n",
+        )
+        .unwrap();
+        bootstrap(&ctx, "стек: Rust");
+        bootstrap(&ctx, "стек: Rust");
+        let j = std::fs::read_to_string(ctx.root.join(".ailc/process/journal.md")).unwrap();
+        assert_eq!(j.matches("старое событие").count(), 1, "{j}");
+        assert!(!mem.join("journal.md").exists());
+        let acx = std::fs::read_to_string(mem.join("active-context.md")).unwrap();
+        assert!(
+            acx.contains("заметка модели") && !acx.contains("журнал\n"),
+            "{acx}"
+        );
         std::fs::remove_dir_all(&ctx.root).ok();
     }
 }

@@ -140,6 +140,24 @@ impl Capability for ApiBreak {
             .map(|(_, c)| c);
         let baseline = match baseline {
             Some(b) => b,
+            // Снимка нет: это первая версия API, сломать нечего. Снимок создаётся сейчас, и
+            // следующие изменения сравниваются уже с ним. Прежде ось оставалась
+            // невыполненной, пока кто-то не вызовет generate/api-baseline, а ни одна
+            // карточка процесса MVP этого не делает. Снимок пишется только при проверке
+            // всего проекта: снимок части проекта выдал бы остальное за удалённое.
+            None if input.target.as_deref().unwrap_or("").is_empty() => {
+                let api = current_api(ctx, input)?;
+                if !api.is_empty() {
+                    let body = api.iter().cloned().collect::<Vec<_>>().join("\n");
+                    Store::write(ctx, NS, BASELINE, &body)?;
+                    out.artifacts.push(format!(".ailc/{NS}/{BASELINE}"));
+                }
+                out.summary = format!(
+                    "verify/api-break: первая версия API, снимок создан ({} публичных символов)",
+                    api.len()
+                );
+                return Ok(out);
+            }
             None => {
                 out.skipped = Some(
                     "нет снимка API (.ailc/api/baseline.txt) — сделай: ailc cap generate/api-baseline".into(),

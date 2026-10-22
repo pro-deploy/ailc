@@ -109,8 +109,34 @@ fn in_scope(attrs: &RuleAttrs, rel: &str) -> bool {
 /// проверка более длинного префикса первой исключает любую двусмысленность.
 fn parse_constitution(text: &str) -> Vec<ConstRule> {
     let mut rules = Vec::new();
+    // Примеры правил не являются правилами. Прежде шаблон, разложенный в каждый новый
+    // проект, содержал под строкой «Примеры (замените на свои):» строки, которые
+    // разбирались как действующие REQUIRE, и на чистом проекте ось «Конституция»
+    // блокировала сдачу. Пропускаются блоки кода (так примеры записаны в шаблоне теперь)
+    // и абзац под прежней строкой «Примеры…» до пустой строки или заголовка (так они
+    // записаны в проектах, разложенных прежними версиями).
+    let mut in_fence = false;
+    let mut in_examples = false;
     for line in text.lines() {
         let t = line.trim();
+        if t.starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        if t.starts_with("Примеры (замените на свои)") {
+            in_examples = true;
+            continue;
+        }
+        if in_examples {
+            if t.is_empty() || t.starts_with('#') {
+                in_examples = false;
+            } else {
+                continue;
+            }
+        }
         if let Some(rest) = t.strip_prefix("REQUIRE_EACH ") {
             let (attrs, needle) = parse_attrs(rest);
             let needle = needle.trim();
@@ -408,9 +434,14 @@ impl Capability for ConstitutionCheck {
 
         let rules = parse_constitution(&text);
         if rules.is_empty() {
-            out.skipped =
-                Some("файл конституции не содержит правил FORBID/REQUIRE/REQUIRE_EACH".into());
-            out.summary = "quality.check/constitution: пропущено (нет правил)".into();
+            // Нет правил, значит нарушать нечего: проверка выполнена, и это видно в сводке.
+            // Прежде такой исход считался пропуском, а пропуск жёсткой оси не даёт
+            // подтвердить готовность, поэтому новый проект без правил команды не проходил
+            // Definition of Done никогда.
+            out.summary =
+                "quality.check/constitution: правил нет, нарушать нечего (добавьте правила команды в .ailc/constitution.md)"
+                    .into();
+            out.metrics.push(("rules".into(), 0.0));
             return Ok(out);
         }
 
@@ -1042,6 +1073,31 @@ mod tests {
     use super::*;
     use ailc_testkit::TempTree;
     use std::path::Path;
+
+    #[test]
+    fn примеры_в_шаблоне_не_становятся_правилами() {
+        // Прежний формат шаблона: примеры абзацем под строкой «Примеры…».
+        let legacy = "Примеры (замените на свои):\nFORBID секреты\nREQUIRE тесты\n\n\
+                      ## Правила команды\nFORBID todo!()\n";
+        let rules = parse_constitution(legacy);
+        assert_eq!(rules.len(), 1, "действует только правило команды");
+        // Новый формат: примеры в блоке кода.
+        let fenced = "Примеры:\n```\nREQUIRE тесты\n```\n## Правила команды\n";
+        assert!(parse_constitution(fenced).is_empty());
+    }
+
+    #[test]
+    fn конституция_без_правил_выполнена_с_пометкой() {
+        let t = TempTree::new("const-empty");
+        t.write(
+            ".ailc/constitution.md",
+            "# Конституция\n\nПримеры (замените на свои):\nREQUIRE тесты\n\n## Правила команды\n",
+        );
+        t.write("src/a.rs", "fn a() {}\n");
+        let out = run_const(t.path());
+        assert!(matches!(out.outcome(), ailc_contracts::CheckOutcome::Ran), "{out:?}");
+        assert!(out.summary.contains("правил нет"), "{}", out.summary);
+    }
 
     /// Прогнать ConstitutionCheck по корню без подпути.
     fn run_const(root: &Path) -> CapabilityOutput {

@@ -154,7 +154,7 @@ flowchart LR
     S6 -. "change request" .-> S5
 ```
 
-You always know where you are: `.ailc/process/NEXT.md` says in one line what is needed from a human right now, and the state lives in `.ailc/process/state.toml`.
+Work is not lost between sessions: `.ailc/process/NEXT.md` is the hand-off to the AI agent in a new session. ailc refreshes it on every process event, and it holds everything needed to continue: the stage, an interrupted step, the model's notes from `.ailc/memory-bank/`, accepted decisions, recent events from the single journal `.ailc/process/journal.md`, and the next action. Its first line says what is needed from a human right now. The process state lives in `.ailc/process/state.toml`.
 
 The gate checks concrete things before each move: required template sections are filled in, criteria are measurable, plan steps are closed, `dod` is confirmed, the version is new and has a git tag, acceptance passed. After **approval** (`action=approve`) the ADR (Architecture Decision Record) becomes "accepted" and the requirements are frozen by a sha256 hash. Anything new after that is a **change request** (`action=change`), which sends the process back to stage 5. Other returns use `action=return` with cycle А, В or Г (Cyrillic letters, as in the stage cards).
 

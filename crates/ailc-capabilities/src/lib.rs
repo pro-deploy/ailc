@@ -1322,9 +1322,131 @@ fn detect_stack(root: &Path) -> Option<Stack> {
     })
 }
 
-/// В выводе раннера есть ненулевое «N passed» (cargo «test result: ok. 13 passed»,
-/// pytest «13 passed», jest «Tests: 13 passed») — значит, тесты реально выполнялись.
+/// Корни проектов для verify/test и verify/lint. Обычно это корень репозитория. Если в
+/// корне признака проекта нет, берутся подкаталоги первого уровня, в которых он есть:
+/// проект часто складывается из нескольких частей рядом (например сервер и клиент в
+/// своих каталогах), и прежде их тесты не находились вовсе. Порядок по имени, скрытые и служебные каталоги пропускаются.
+fn project_roots(root: &Path) -> Vec<std::path::PathBuf> {
+    if detect_stack(root).is_some() {
+        return vec![root.to_path_buf()];
+    }
+    let mut subs: Vec<std::path::PathBuf> = std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().to_string();
+            !n.starts_with('.')
+                && !matches!(
+                    n.as_str(),
+                    "target" | "node_modules" | "build" | "dist" | "vendor"
+                )
+        })
+        .map(|e| e.path())
+        .filter(|p| detect_stack(p).is_some())
+        .collect();
+    subs.sort();
+    subs
+}
+
+/// Прогнать проверку `one` по каждому корню проекта и свести результат. При одном корне,
+/// совпадающем с корнем репозитория (или при отсутствии корней), результат возвращается
+/// как есть. Иначе: сбой инструмента в любом подпроекте делает сбойным весь итог; если
+/// хоть один подпроект выполнился, итог выполнен, находки объединяются, а сводка
+/// перечисляет каждый подпроект (поэтому «тестов нет» в одном из них лишает итог
+/// доказательства пройденных тестов, как и должно быть); если все пропущены, итог пропущен.
+fn run_per_project(
+    ctx: &Ctx,
+    id: &str,
+    one: impl Fn(&Ctx) -> Result<CapabilityOutput>,
+) -> Result<CapabilityOutput> {
+    let roots = project_roots(&ctx.root);
+    if roots.is_empty() || roots == [ctx.root.clone()] {
+        return one(ctx);
+    }
+    let mut out = CapabilityOutput::default();
+    let mut summaries = Vec::new();
+    let mut skipped = Vec::new();
+    let mut failed: Option<String> = None;
+    let mut any_ran = false;
+    for r in &roots {
+        let rel = r
+            .strip_prefix(&ctx.root)
+            .unwrap_or(r)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let sub = one(&Ctx::new(r))?;
+        match sub.outcome() {
+            CheckOutcome::Ran => any_ran = true,
+            CheckOutcome::Skipped(reason) => skipped.push(format!("{rel}/: {reason}")),
+            CheckOutcome::Failed(reason) => {
+                failed.get_or_insert(format!("{rel}/: {reason}"));
+            }
+        }
+        summaries.push(format!("{rel}/: {}", sub.summary));
+        out.records
+            .extend(sub.records.into_iter().map(|l| format!("[{rel}] {l}")));
+        for mut f in sub.findings {
+            if let Some(loc) = f.location.as_mut() {
+                loc.file = format!("{rel}/{}", loc.file);
+            }
+            out.findings.push(f);
+        }
+    }
+    if let Some(reason) = failed {
+        out.skipped = Some(reason);
+    } else if !any_ran {
+        out.skipped = Some(skipped.join("; "));
+    }
+    out.summary = format!("{id}: {}", summaries.join("; "));
+    Ok(out)
+}
+
+/// В выводе раннера есть доказательство, что тесты реально выполнялись: ненулевой
+/// счётчик в формате любого раннера из [`stack_table`]. Прежде распознавалась только
+/// форма «N passed» (cargo, pytest, jest), и у остальных стеков таблицы зелёный прогон
+/// считался «без подтверждённого числа пройденных тестов». Ожидается вывод в нижнем
+/// регистре.
 pub fn some_tests_passed(blob: &str) -> bool {
+    n_passed(blob) || other_runner_count(blob)
+}
+
+/// Счётчики раннеров, которые не пишут «N passed»: dart и flutter «+4: all tests passed»,
+/// maven и gradle «tests run: 5», swift «executed 5 tests», dotnet «passed: 5», minitest
+/// «5 runs, 9 assertions», rspec «5 examples», phpunit «ok (5 tests», ctest «… out of 5»;
+/// go test печатает для каждого прошедшего пакета строку «ok <пакет>».
+fn other_runner_count(blob: &str) -> bool {
+    use std::sync::OnceLock;
+    static PATTERNS: OnceLock<Vec<regex::Regex>> = OnceLock::new();
+    let patterns = PATTERNS.get_or_init(|| {
+        ailc_core::re::compile_all([
+            r"\+([0-9]+)(?: ~[0-9]+)?(?: -[0-9]+)?: all tests passed",
+            r"tests run: ([0-9]+)",
+            r"executed ([0-9]+) tests?",
+            r"passed:\s*([0-9]+)",
+            r"([0-9]+) runs?, [0-9]+ assertions?",
+            r"([0-9]+) examples?, [0-9]+ failures?",
+            r"ok \(([0-9]+) tests?,",
+            r"tests failed out of ([0-9]+)",
+        ])
+    });
+    let counted = patterns.iter().any(|re| {
+        re.captures_iter(blob).any(|c| {
+            c.get(1)
+                .and_then(|m| m.as_str().parse::<u64>().ok())
+                .is_some_and(|n| n > 0)
+        })
+    });
+    counted
+        || blob
+            .lines()
+            .any(|l| l.starts_with("ok ") || l.starts_with("ok\t"))
+}
+
+/// Ненулевое «N passed» (cargo «test result: ok. 13 passed», pytest «13 passed», jest
+/// «Tests: 13 passed»).
+fn n_passed(blob: &str) -> bool {
     let mut rest = blob;
     while let Some(i) = rest.find(" passed") {
         let digits: String = rest[..i]
@@ -1395,6 +1517,13 @@ impl Capability for TestRun {
         &self.manifest
     }
     fn run(&self, ctx: &Ctx, _input: &RunInput) -> Result<CapabilityOutput> {
+        run_per_project(ctx, "verify/test", |c| self.run_root(c))
+    }
+}
+
+impl TestRun {
+    /// Прогон тестов одного корня проекта.
+    fn run_root(&self, ctx: &Ctx) -> Result<CapabilityOutput> {
         let mut out = CapabilityOutput::default();
         let stack = match detect_stack(&ctx.root) {
             Some(s) => s,
@@ -1543,6 +1672,13 @@ impl Capability for LintRun {
         &self.manifest
     }
     fn run(&self, ctx: &Ctx, _input: &RunInput) -> Result<CapabilityOutput> {
+        run_per_project(ctx, "verify/lint", |c| self.run_root(c))
+    }
+}
+
+impl LintRun {
+    /// Прогон линтера одного корня проекта.
+    fn run_root(&self, ctx: &Ctx) -> Result<CapabilityOutput> {
         let mut out = CapabilityOutput::default();
         let stack = match detect_stack(&ctx.root) {
             Some(s) => s,
@@ -2047,6 +2183,54 @@ mod tests {
     }
 
     #[test]
+    fn корни_проекта_ищутся_в_подкаталогах_для_любого_стека() {
+        // Признак в корне: корень единственный, подкаталоги не просматриваются.
+        let t = проект(&[("Cargo.toml", ""), ("tools/package.json", "{}")]);
+        assert_eq!(project_roots(t.path()), vec![t.path().to_path_buf()]);
+        // Признака в корне нет: берутся подкаталоги с признаком любого стека по имени,
+        // скрытые и служебные пропускаются.
+        let t = проект(&[
+            ("web/package.json", "{}"),
+            ("api/go.mod", "module api"),
+            ("docs/readme.md", "текст"),
+            (".hidden/Cargo.toml", ""),
+            ("node_modules/x/package.json", "{}"),
+        ]);
+        let names: Vec<String> = project_roots(t.path())
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, ["api", "web"]);
+    }
+
+    #[test]
+    fn итог_по_подпроектам_сводится_честно() {
+        let t = проект(&[("a/go.mod", ""), ("b/go.mod", "")]);
+        let ctx = Ctx::new(t.path());
+        let ran = |summary: &str| CapabilityOutput {
+            summary: summary.into(),
+            ..Default::default()
+        };
+        // Оба выполнены: итог выполнен, сводка перечисляет оба подпроекта.
+        let out = run_per_project(&ctx, "verify/test", |_| Ok(ran("✅ тесты прошли"))).unwrap();
+        assert!(matches!(out.outcome(), CheckOutcome::Ran));
+        assert!(out.summary.contains("a/:") && out.summary.contains("b/:"));
+        // Сбой инструмента в одном подпроекте делает сбойным весь итог.
+        let out = run_per_project(&ctx, "verify/test", |c| {
+            if c.root.ends_with("b") {
+                Ok(CapabilityOutput {
+                    skipped: Some("инструмент не отработал (сборка/импорт)".into()),
+                    ..Default::default()
+                })
+            } else {
+                Ok(ran("✅ тесты прошли"))
+            }
+        })
+        .unwrap();
+        assert!(matches!(out.outcome(), CheckOutcome::Failed(_)), "{out:?}");
+    }
+
+    #[test]
     fn t62_detect_stack_по_расширению_csproj() {
         // dotnet распознаётся не по имени файла, а по расширению .csproj.
         let t = проект(&[("App.csproj", "<Project/>")]);
@@ -2114,6 +2298,30 @@ mod tests {
     }
 
     // ── T86: разделение сбоя инструмента и находки тестов ──────────────────
+
+    #[test]
+    fn доказательство_прогона_для_раннеров_таблицы() {
+        for out in [
+            "00:01 +4: all tests passed!",
+            "tests run: 12, failures: 0, errors: 0, skipped: 0",
+            "executed 5 tests, with 0 failures (0 unexpected)",
+            "passed!  - failed:     0, passed:     7, skipped:     0",
+            "5 runs, 9 assertions, 0 failures, 0 errors, 0 skips",
+            "3 examples, 0 failures",
+            "ok (5 tests, 10 assertions)",
+            "100% tests passed, 0 tests failed out of 4",
+            "ok  \texample.com/api\t0.012s",
+        ] {
+            assert!(some_tests_passed(out), "не распознан прогон: {out}");
+        }
+        for out in [
+            "00:00 +0: all tests passed!",
+            "tests run: 0",
+            "no test files",
+        ] {
+            assert!(!some_tests_passed(out), "пустой прогон принят: {out}");
+        }
+    }
 
     #[test]
     fn t86_число_прошедших_тестов_есть_доказательство() {

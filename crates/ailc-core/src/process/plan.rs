@@ -113,6 +113,7 @@ pub fn stamp() -> String {
 /// Дописать строку журнала процесса. Ошибки журнала основной вызов не ломают.
 pub fn journal(ctx: &Ctx, line: &str) {
     let _ = Store::append(ctx, NS, JOURNAL, &format!("- [{}] {line}", stamp()));
+    super::refresh_next(ctx);
 }
 
 /// Последние `n` строк журнала.

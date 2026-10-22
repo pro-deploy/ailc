@@ -1049,10 +1049,32 @@ fn drift_blocks_on_release() {
         &mut s_ship,
         1,
     );
-    assert!(
-        !ship.passed,
-        "сдача: устаревшие/отсутствующие доки блокируют"
+    // Отсутствующие доки остаются подсказкой и на сдаче не блокируют: иначе новый проект
+    // без модели данных и глоссария не сдавался бы никогда.
+    assert!(ship.passed, "сдача: отсутствие доков не блокирует");
+
+    // Устаревший документ блокирует: собираем глоссарий, затем меняем код.
+    r.get("generate/glossary")
+        .unwrap()
+        .run(&ctx, &RunInput::default())
+        .unwrap();
+    std::fs::write(
+        ctx.root.join("api.go"),
+        "package x\ntype Order struct{}\ntype Cart struct{}\nfunc A(){}\nfunc B(){}\nfunc C(){}\n",
+    )
+    .unwrap();
+    let mut s_stale = Scripted {
+        plan: one_step_plan("spec.check/drift", true),
+    };
+    let ship = AgentOrchestrator::run(
+        &r,
+        &ctx,
+        &RunInput::default(),
+        "хочу выкатить в прод",
+        &mut s_stale,
+        1,
     );
+    assert!(!ship.passed, "сдача: устаревший документ блокирует");
     assert!(ship.blocking >= 1, "дрейф эскалирован в блокер");
 }
 
@@ -1122,6 +1144,97 @@ fn surface_coverage_completed_all_langs() {
     for m in ["User", "Order", "Item", "Users"] {
         assert!(blob.contains(m), "модель {m}: {blob}");
     }
+}
+
+#[test]
+fn память_читается_целиком_а_не_первой_строкой() {
+    let (_t, ctx) = tree(&[]);
+    let r = reg();
+    let context = "# Активный контекст\n\nДелаем сервер комнат.\nСледующий шаг: переподключение.\n";
+    r.get("memory/update")
+        .unwrap()
+        .run(
+            &ctx,
+            &RunInput {
+                target: None,
+                query: Some(context.into()),
+            },
+        )
+        .unwrap();
+    let rd = r
+        .get("memory/read")
+        .unwrap()
+        .run(
+            &ctx,
+            &RunInput {
+                target: Some("active-context.md".into()),
+                query: None,
+            },
+        )
+        .unwrap();
+    assert!(
+        rd.records
+            .iter()
+            .any(|x| x.contains("Следующий шаг: переподключение")),
+        "последняя строка контекста должна вернуться: {:?}",
+        rd.records
+    );
+}
+
+#[test]
+fn заметка_модели_не_стирает_авто_блоки_сервера() {
+    let (_t, ctx) = tree(&[]);
+    let path = ctx.root.join(".ailc/memory-bank/active-context.md");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        "<!-- ailc:auto:start ailc-tasks -->\nСостояние работ: шаг 2 в работе\n<!-- ailc:auto:end -->\n",
+    )
+    .unwrap();
+    let r = reg();
+    for note in ["первая заметка", "вторая заметка"] {
+        r.get("memory/update")
+            .unwrap()
+            .run(
+                &ctx,
+                &RunInput {
+                    target: None,
+                    query: Some(note.into()),
+                },
+            )
+            .unwrap();
+    }
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("Состояние работ: шаг 2 в работе"), "{text}");
+    assert!(text.contains("вторая заметка"), "{text}");
+    assert!(
+        !text.contains("первая заметка"),
+        "заметка модели заменяется: {text}"
+    );
+}
+
+#[test]
+fn прежняя_заметка_без_блока_заменяется_новой() {
+    let (_t, ctx) = tree(&[]);
+    let path = ctx.root.join(".ailc/memory-bank/active-context.md");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "Этап 5, ждём согласования.\n").unwrap();
+    reg()
+        .get("memory/update")
+        .unwrap()
+        .run(
+            &ctx,
+            &RunInput {
+                target: None,
+                query: Some("Этап 6, шаг 1 в работе.".into()),
+            },
+        )
+        .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("шаг 1 в работе") && !text.contains("Этап 5"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -1351,17 +1464,23 @@ fn api_break_detects_removed_public_symbol() {
             .map(|f| f.message.as_str())
             .collect::<Vec<_>>()
     );
-    // Без снимка — честный skip, не молчание.
+    // Без снимка: первая версия API, проверка выполнена и сама создаёт снимок.
     let (_t2, ctx2) = tree(&[("a.go", "package x\nfunc A(){}\n")]);
+    let first = r
+        .get("verify/api-break")
+        .unwrap()
+        .run(&ctx2, &RunInput::default())
+        .unwrap();
     assert!(
-        r.get("verify/api-break")
-            .unwrap()
-            .run(&ctx2, &RunInput::default())
-            .unwrap()
-            .skipped
-            .is_some(),
-        "без baseline — явный skip"
+        first.skipped.is_none() && first.findings.is_empty(),
+        "{first:?}"
     );
+    assert!(
+        first.summary.contains("первая версия API"),
+        "{}",
+        first.summary
+    );
+    assert!(ctx2.root.join(".ailc/api/baseline.txt").exists());
 }
 
 #[test]
@@ -1689,10 +1808,14 @@ fn _bench_controlled() {
 /// обновляется вместе с кодом, иначе тест падает.
 #[test]
 fn readme_matches_registry() {
-    let readme = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md"),
-    )
-    .expect("README.md должен читаться");
+    // README двуязычный: английский README.md по умолчанию и русский README.ru.md. Числа
+    // и идентификаторы сверяются в обоих, каждое в формулировке своего языка.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let readme_en =
+        std::fs::read_to_string(root.join("README.md")).expect("README.md должен читаться");
+    let readme_ru =
+        std::fs::read_to_string(root.join("README.ru.md")).expect("README.ru.md должен читаться");
+    let readme = format!("{readme_en}\n{readme_ru}");
 
     let r = reg();
     let ids: Vec<&str> = r.all().iter().map(|c| c.manifest().id).collect();
@@ -1727,13 +1850,21 @@ fn readme_matches_registry() {
     // фиксированная фраза целиком: инвариант в том, что README называет фактический
     // размер каталога, а не в том, каким падежом он это делает.
     assert!(
-        readme.contains(&format!("каталог из {caps} возможност")),
-        "README должен называть фактический размер каталога: {caps}"
+        readme_ru.contains(&format!("каталог из {caps} возможност")),
+        "README.ru.md должен называть фактический размер каталога: {caps}"
+    );
+    assert!(
+        readme_en.contains(&format!("catalog of {caps} capabilit")),
+        "README.md должен называть фактический размер каталога: {caps}"
     );
     let rules = ailc_capabilities::secret_rule_count();
     assert!(
-        readme.contains(&format!("по {rules} правилам")),
-        "README должен называть фактическое число правил поиска секретов: {rules}"
+        readme_ru.contains(&format!("{rules} правил")),
+        "README.ru.md должен называть фактическое число правил поиска секретов: {rules}"
+    );
+    assert!(
+        readme_en.contains(&format!("{rules} rules")),
+        "README.md должен называть фактическое число правил поиска секретов: {rules}"
     );
 }
 

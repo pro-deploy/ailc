@@ -1,4 +1,4 @@
-<!-- ailc-template: adr v1 -->
+<!-- ailc-template: adr v2 -->
 # ADR-{number}: {title}
 
 - Статус: предложено

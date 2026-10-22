@@ -215,21 +215,40 @@ pub fn init(ctx: &Ctx, profile: &crate::profile::ProjectProfile) -> templates::S
     rep
 }
 
-/// Записать NEXT.md: одна понятная человеку строка о том, чего от него ждут.
+/// Записать NEXT.md: файл передачи работы агенту ИИ в следующей сессии.
+///
+/// Новая сессия агента не помнит предыдущих, поэтому всё нужное для продолжения обязано
+/// лежать на диске. Прежде NEXT.md содержал лишь номер этапа и строку о том, что нужно от
+/// человека, а сведения для продолжения (прерванный шаг, память модели, принятые решения,
+/// последние события, следующее действие) собирал только пакет возобновления на лету, и
+/// агент без настроенного хука их не получал. Теперь в NEXT.md записывается сам пакет
+/// возобновления; строка о том, что нужно от человека, стоит первой.
 pub fn write_next(ctx: &Ctx, st: &State) {
     let info = stage_info(st.stage);
     let line = match info.human {
-        Some(h) => format!("**От вас сейчас нужно:** {h}."),
-        None => "**От вас сейчас ничего не нужно:** модель работает по карточке этапа.".to_string(),
+        Some(h) => format!("**От человека сейчас нужно:** {h}."),
+        None => {
+            "**От человека сейчас ничего не нужно:** агент работает по карточке этапа.".to_string()
+        }
     };
+    let packet = resume::packet(ctx, st, None);
+    let body = packet
+        .strip_prefix("# Пакет возобновления ailc\n")
+        .unwrap_or(&packet);
     let text = format!(
-        "# Что дальше\n\nЭтап {} из 9: {}. Итерация {}. Сценарий: {}.\n\n{line}\n",
-        info.number,
-        info.title,
-        st.iteration,
-        scenario_label(&st.scenario)
+        "# Что дальше\n\n> Файл передачи работы агенту ИИ в новой сессии. Ведётся ailc \
+         автоматически при каждом событии процесса, вручную не править.\n\n{line}\n{body}"
     );
     let _ = Store::write(ctx, NS, "NEXT.md", &text);
+}
+
+/// Обновить NEXT.md, если процесс в проекте начат. Зовётся после событий, которые не
+/// меняют состояние процесса, но меняют то, что должен знать следующий агент: запись в
+/// журнал, заметка в памяти, закрытие шага.
+pub fn refresh_next(ctx: &Ctx) {
+    if let Some(st) = load(ctx) {
+        write_next(ctx, &st);
+    }
 }
 
 fn read(ctx: &Ctx, rel: &str) -> Option<String> {
@@ -993,7 +1012,10 @@ mod tests {
         let ctx = Ctx::new(std::env::temp_dir().join("ailc-proc-adr-ready-nonexistent"));
         let empty = templates::render_adr(&ctx, "1", "БД", "2026-01-01", "нет");
         assert!(!empty.contains("(обязательно)"));
-        assert!(!adr_ready(&empty), "пустые разделы не должны проходить гейт");
+        assert!(
+            !adr_ready(&empty),
+            "пустые разделы не должны проходить гейт"
+        );
         let mut filled = String::new();
         for line in empty.lines() {
             filled.push_str(line);

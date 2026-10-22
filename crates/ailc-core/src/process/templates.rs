@@ -136,6 +136,21 @@ pub fn builtin(rel: &str) -> Option<&'static str> {
     BUILTIN.iter().find(|(p, _)| *p == rel).map(|(_, c)| *c)
 }
 
+/// Шаблоны, копия которых в проекте старше встроенной версии: `(путь в проекте, версия
+/// проекта, встроенная версия)`. Ничего не пишет на диск. Нужна пакету возобновления:
+/// прежде о новой версии узнавал только служебный журнал при подключении MCP-сервера, и
+/// модель продолжала работать по устаревшей карточке этапа, не зная об этом.
+pub fn outdated(ctx: &Ctx) -> Vec<(String, u32, u32)> {
+    BUILTIN
+        .iter()
+        .filter_map(|(rel, content)| {
+            let mine = version_of(&std::fs::read_to_string(project_path(ctx, rel)).ok()?)?;
+            let theirs = version_of(content)?;
+            (theirs > mine).then(|| (format!("{DIR}/{rel}"), mine, theirs))
+        })
+        .collect()
+}
+
 /// Путь шаблона в проекте.
 pub fn project_path(ctx: &Ctx, rel: &str) -> PathBuf {
     ctx.root.join(DIR).join(rel)
