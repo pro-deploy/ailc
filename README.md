@@ -1,40 +1,291 @@
 # AILC (AI Life Cycle)
 
-**Автономный оркестратор качества и безопасности кода для не-экспертов** (вайбкодер и энтерпрайз-джун). Человек задаёт **намерение простым языком**, а сервер сам понимает код, подбирает и гонит проверки, безопасно чинит формат и линт, ведёт документацию из кода и выносит вердикт качества, эскалируя человеку только настоящие решения. **Гарантию даёт детерминированный гейт, а не нейросеть.** Это один защищённый бинарь на Rust со встроенной мультиязычной моделью и пятнадцатью грамматиками разбора, работает полностью офлайн, без внешних сервисов.
+**English** | [Русский](README.ru.md)
 
-Поток работы устроен так: намерение или наблюдение поступает планировщику, планировщик собирает пайплайн инструментов (направленный граф, исполняется параллельно), результаты проходят verify-проход (состязательное опровержение ложных находок), затем детерминированный гейт применяет governance и выносит вердикт человеку.
+**AILC checks the quality and security of your code automatically, so you do not need to be an expert.** You say in plain words what you want ("is everything ready to ship?"), and AILC decides which checks to run, runs them, safely fixes formatting and lint, keeps documentation in sync with the code, and gives you a clear verdict. You are asked only about decisions that really need a human.
 
-## Содержание
+The most important idea: **the verdict comes from a deterministic gate, not from a neural network.** The AI helps plan and explain, but whether your code passes is decided by fixed, repeatable rules. The same code always gets the same answer.
 
-Установка и сборка, готовые сборки, быстрый старт, подключение в среду разработки по протоколу MCP, использование с искусственным интеллектом и агентами, каталог возможностей, глубокая безопасность, governance, Definition of Done, языки и экосистемы, архитектура, честные ограничения, тесты и непрерывная интеграция, лицензия.
+AILC is a single Rust binary. It works fully offline: language grammars and a vulnerability database are built into it, and it needs no external services.
 
-## Установка
+## Contents
 
-### В один клик (если редактор установлен)
+[AILC in one picture](#ailc-in-one-picture) · [Get started in 5 minutes](#get-started-in-5-minutes) · [How it works](#how-it-works) · [Reading the verdict](#reading-the-verdict) · [The delivery process](#the-delivery-process) · [Commands](#commands) · [MCP tools](#mcp-tools) · [What it checks](#what-it-checks) · [Team rules (governance)](#team-rules-governance) · [Installation options](#installation-options) · [Architecture](#architecture) · [Honest limitations](#honest-limitations) · [Tests and CI](#tests-and-ci) · [License](#license)
 
-[Добавить в Cursor](https://cursor.com/install-mcp?name=ailc&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImFpbGMtbWNwIl19) · [Добавить в VS Code](https://vscode.dev/redirect/mcp/install?name=ailc&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22ailc-mcp%22%5D%7D) · для Claude Code одна команда:
+## AILC in one picture
+
+```mermaid
+flowchart LR
+    You["You<br/>'is it ready to ship?'"] --> Agent["Your AI editor<br/>Claude Code, Cursor, VS Code"]
+    Agent -- "MCP" --> AILC["AILC server"]
+    AILC --> Checks["Checks run in parallel<br/>security, quality, tests, docs"]
+    Checks --> Verify["Verify pass<br/>throws out false alarms"]
+    Verify --> Gate{"Deterministic gate<br/>your team rules"}
+    Gate -- "passed" --> Ok["✓ Ready"]
+    Gate -- "failed" --> Fix["✗ What to fix and where"]
+    Fix --> Agent
+```
+
+You talk to your AI editor as usual. The editor calls AILC through MCP (Model Context Protocol, the standard way editors connect to tools). AILC runs the checks, removes false alarms, and the gate gives the final answer. If something is wrong, the editor gets an exact list (file, line, reason) and can fix it, then check again.
+
+## Get started in 5 minutes
+
+**Step 1. Connect AILC to your editor.** For Claude Code, run one command (Node.js is required):
 
 ```sh
 claude mcp add ailc -- npx -y ailc-mcp
 ```
 
-Ссылки открывают редактор, и он сам прописывает сервер (запуск через `npx ailc-mcp`, нужен Node.js). Если что-то не завелось, команда `ailc doctor` печатает диагностику: где бинарь, виден ли npx, подключён ли сервер в конфигах редакторов, и готовый сниппет под вашу среду.
+For Cursor or VS Code, one-click links: [Add to Cursor](https://cursor.com/install-mcp?name=ailc&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImFpbGMtbWNwIl19) · [Add to VS Code](https://vscode.dev/redirect/mcp/install?name=ailc&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22ailc-mcp%22%5D%7D). No Node.js? See [Installation options](#installation-options).
 
-### Через npx (проще всего, если есть Node.js)
+**Step 2. Ask in plain words.** In the editor chat write, for example:
 
-Отдельная установка не нужна. Впишите в `.mcp.json` (Claude Code) или в `~/.cursor/mcp.json` (Cursor) три строки, и при первом запуске пакет `ailc-mcp` сам скачает готовый бинарь нужной платформы из релиза и запустит сервер:
+> Check with ailc: is everything ok before I ship?
+
+The editor calls the `plan` tool, and AILC does the rest.
+
+**Step 3. Read the verdict.** You get a list of axes with ✓ or ✗ and, for every problem, a file, a line and a short explanation. Fix what is marked, or ask the editor to fix it, and ask again.
+
+**Prefer the terminal?** The same checks without any AI:
+
+```sh
+ailc dod .     # "Is it done?" verdict for the current folder
+ailc pulse .   # one-line status: ✅ quality 92/100 · blockers 0 · warnings 3 · checks 28
+ailc fix .     # safely fix formatting and lint
+```
+
+**Something does not work?** Run `ailc doctor`. It shows where the binary is, whether `npx` is visible, whether the server is registered in your editor configs, and prints a ready-made config snippet for your setup.
+
+## How it works
+
+### The adaptive loop
+
+When you call `plan`, AILC does not run everything blindly. It builds a plan from your intent and your project, runs it, looks at the result, and adds more checks only if they are needed.
+
+```mermaid
+sequenceDiagram
+    participant U as You
+    participant E as AI editor
+    participant A as AILC
+    participant G as Gate
+    U->>E: "Ready to ship?"
+    E->>A: plan(intent)
+    A->>A: Read project passport<br/>(stack, UI, personal data, AI calls)
+    A->>A: Run base checks in parallel
+    A->>A: Verify pass (remove false alarms)
+    A->>G: Confirmed findings
+    G-->>A: Verdict + what is missing
+    A-->>E: Verdict and next-step hint
+    E->>A: plan(steps=[extra checks], strict=true)
+    A->>G: Re-check
+    G-->>E: ✓ or ✗ with exact places
+    E-->>U: Result in plain words
+```
+
+There are two modes, and you do not have to choose: AILC detects it.
+
+If the editor supports *sampling* (the server may ask the editor's model questions), AILC drives the whole loop itself: it asks the model which checks to run, runs them, and asks whether more are needed, for up to four rounds.
+
+If the editor does not support sampling (Claude Code, for example), the roles swap: the editor's own model plans and reflects, passing check IDs in `steps`, and AILC runs checks, filters false alarms and applies the gate.
+
+In both modes the final verdict comes from the gate, never from the model. If the model gives no usable plan, AILC falls back to a safe default set (security, quality, spec), adjusted to your project.
+
+### What happens on the first call
+
+```mermaid
+flowchart TD
+    First["First tool call in a project"] --> Rules["Writes a short rule for the agent<br/>CLAUDE.md, .cursorrules, AGENTS.md"]
+    First --> Passport["Detects the project passport<br/>.ailc/profile.md"]
+    First --> Memory["Starts project memory<br/>.ailc/memory-bank/"]
+    First --> Baseline["Freezes existing findings as debt<br/>.ailc/baseline/"]
+    First --> Templates["Lays out process templates<br/>.ailc/templates/"]
+```
+
+All of this is idempotent (safe to repeat) and happens only on a real tool call, never just because the server was connected.
+
+The **rule for the agent** tells your editor's AI to call `plan` before writing code and before saying "done". Disable it with `AILC_NO_RULES`.
+
+The **project passport** records your stack, whether there is a UI or a mobile part, signs of personal data, a Russian-language codebase and calls to AI models. The passport changes how strict the verdict is: a project with a UI gets an accessibility axis, a project that calls AI models gets a mandatory AI-security axis.
+
+The **project memory** is a journal of every tool call plus the current context, so a new session can catch up quickly.
+
+The **baseline** solves the "legacy project" problem. Old findings are recorded as historical debt, and from then on only *new* findings block shipping. The debt stays visible as a separate number. Tests, lint and the API contract are never hidden as debt. Disable it with `AILC_NO_BASELINE`.
+
+### Why there are few false alarms
+
+Every finding goes through a **verify pass** that actively tries to disprove it: a "secret" that is really in a comment, a placeholder value, a safely configured XML parser, the rule's own definition, or a line marked `ailc:ignore`. Only findings that are confirmed and tied to a file and line affect the score and can block shipping.
+
+The verifier also learns from your project: a rule whose findings are almost always disproved here (at least 20 observations, at least 80 percent disproved) is downgraded to a warning, with a visible note. Security-critical rules are excluded from this.
+
+## Reading the verdict
+
+`ailc dod .` (or the `dod` tool) answers the question "is this done?" along several axes.
+
+```mermaid
+flowchart TD
+    DoD["Definition of Done"] --> Hard["Hard axes: any problem blocks shipping"]
+    DoD --> Soft["Soft axes: visible, never block"]
+    DoD --> Profile["Profile axes: depend on the project passport"]
+    Hard --> H1["Constitution · Tests · Secrets<br/>OWASP HIGH · SAST · Taint flow<br/>Unfinished code · Docs up to date · API contract"]
+    Soft --> S1["Code smells · Anti-patterns<br/>Dependency cycles · Dead code · Change has a spec"]
+    Profile --> P1["Russian compliance · AI security · UI accessibility"]
+```
+
+The verdict is honest and has three states, not two:
+
+| State | Meaning |
+|---|---|
+| **Confirmed** ✓ | Every hard axis really ran and found no blocking problem. |
+| **Failed** ✗ | At least one hard axis found a blocking problem. The output says where. |
+| **Not confirmed** | A hard axis did not run or had nothing to check. An empty repository never gets a green verdict "for free". |
+
+The profile axes work like this. *Russian compliance* is soft by default (legal risk is heuristic, a lawyer decides), but becomes hard for a Russian-language project with signs of personal data. *AI security* appears only if the project calls AI models, and it is hard. *UI accessibility* appears only if the project has an interface, and it stays soft.
+
+For CI, `ailc sarif . > results.sarif` produces a SARIF 2.1.0 report for the security tab of GitHub or GitLab. It also includes a *Rigor Score*: the share of checks that really ran out of those attempted.
+
+## The delivery process
+
+For larger work AILC can guide a project through nine stages. Each move forward is allowed only by the gate, so a stage cannot be skipped by accident.
+
+```mermaid
+flowchart LR
+    S1["1 Idea"] --> S2["2 Landscape"] --> S3["3 ADR<br/>decision"] --> S4["4 Criteria"] --> S5["5 Approval<br/>requirements frozen"]
+    S5 --> S6["6 Development<br/>small checked steps"] --> S7["7 Quality<br/>dod confirmed"] --> S8["8 Deploy<br/>new version + git tag"] --> S9["9 Acceptance<br/>criteria measured"]
+    S6 -. "change request" .-> S5
+```
+
+You always know where you are: `.ailc/process/NEXT.md` says in one line what is needed from a human right now, and the state lives in `.ailc/process/state.toml`.
+
+The gate checks concrete things before each move: required template sections are filled in, criteria are measurable, plan steps are closed, `dod` is confirmed, the version is new and has a git tag, acceptance passed. After **approval** (`action=approve`) the ADR (Architecture Decision Record) becomes "accepted" and the requirements are frozen by a sha256 hash. Anything new after that is a **change request** (`action=change`), which sends the process back to stage 5. Other returns use `action=return` with cycle А, В or Г (Cyrillic letters, as in the stage cards).
+
+Development happens in **small steps** (`plan_add`, `step_begin`, `step_done`). Each step must have a `check` (a command or `cap:<id>`), and AILC closes a step only when that check passes.
+
+**If the session breaks**, nothing is lost. AILC journals before and after each step in `.ailc/process/journal.md`, and `action=resume` returns a compact restart package (6000 tokens by default): current stage, interrupted step, uncommitted changes, decisions made, the stage card and one next action. `ailc stage hooks` prints a Claude Code hook config that calls `resume` at the start of every session and `status` on every message.
+
+Templates (brief, landscape, ADR, `acceptance.toml`, change request, plan step, nine stage cards) are placed in `.ailc/templates/` and adapted to the project passport. Your team's edits are never overwritten; a newer built-in version is saved next to it with a `.new` extension.
+
+The same is available from the command line: `ailc stage <action> [path] [key=value ...]`.
+
+## Commands
+
+All modes are subcommands of one binary.
+
+```sh
+ailc serve                         # MCP server over stdio (for your editor)
+ailc <path> "I want to ship a feature"   # one-off run by intent (needs the editor's LLM)
+ailc dod <path>                    # Definition of Done: multi-axis ✓/✗ verdict
+ailc pulse <path>                  # quick one-line status (no tests or lint)
+ailc sarif <path> > out.sarif      # SARIF 2.1.0 report for CI
+ailc fix <path>                    # safe formatting and lint fixes (built-in fixers)
+ailc design "<feature>" <path>     # feature design: spec draft and ADR
+ailc stage <action> [path] [k=v]   # delivery process: status, advance, resume, ...
+ailc cap <id> <path> [query]       # run a single tool (for debugging)
+ailc skills [folder]               # export capabilities as an agentskills pack
+ailc custodian <path> [sec] [--fix] [--once]   # continuous background watch
+ailc custodian install <path> [sec]            # autostart via launchd (macOS)
+ailc compliance-ru [folder]        # interactive Russian compliance wizard
+ailc doctor [path]                 # connection diagnostics and config snippets
+ailc baseline <path>               # freeze current findings as debt
+```
+
+Examples:
+
+```sh
+ailc cap security.scan/secret .    # only look for hardcoded secrets
+ailc cap code.intel/surface .      # list endpoints, env variables and services
+```
+
+## MCP tools
+
+The server exposes **eight front-door tools**. The full catalog of 88 capabilities sits behind them, so your editor's context is not flooded.
+
+| Tool | Input | What it does |
+|---|---|---|
+| `plan` | `intent` (required), `path`, `steps`, `strict` | The adaptive loop by intent: plan, run, verify, reflect, gate. Returns a `QualityLedger`. Works with any client. |
+| `find_capability` | `query` (optional) | Finds the right tool using a synonym dictionary ("holes" means vulnerabilities, "slow" means performance). When unsure, returns the whole catalog so the editor's model can choose. |
+| `run` | `id` (required), `path`, `target`, `query` | Runs one tool by ID and returns its findings. No LLM. |
+| `autofix` | `path`, `max` (default 8) | LLM fixes formatting and lint, then the same detector re-checks the file; a fix is kept only if the finding is gone and nothing new appeared. Needs sampling; otherwise use `ailc fix`. |
+| `dod` | `path` | Deterministic "is it done?" verdict. No LLM. |
+| `sarif` | `path` | Full scan and SARIF 2.1.0 report. No LLM. |
+| `design` | `feature` (required), `path` | Spec draft and an ADR for a new feature. |
+| `stage` | `action`, `path`, `reason`, `cycle`, `version`, `step` and others | The nine-stage delivery process and work plan. |
+
+Responses contain human-readable `content` and, where useful, typed JSON in `structuredContent`. Supported protocol versions: `2024-11-05`, `2025-03-26`, `2025-06-18`.
+
+`ailc skills [folder]` exports all capabilities as an [agentskills.io](https://agentskills.io) compatible pack (`.claude-plugin/plugin.json` plus one `SKILL.md` per tool), installable as a Claude Code plugin.
+
+## What it checks
+
+The 88 capabilities are grouped into families. Each one is a thin config over a shared engine, so logic is never duplicated.
+
+**Security.** Hardcoded secrets (28 rules: AWS, GitHub, Stripe, GCP, Azure, Slack, LLM provider keys, private keys, connection strings, high-entropy strings). Structural analysis on the syntax tree (SAST, Static Application Security Testing). Inter-procedural taint analysis in 15 languages. OWASP Top 10 categories. Personal data in code and logs. Web and API vulnerabilities. Docker, Kubernetes and Terraform. Shell scripts. CI workflows (untrusted input in commands, `pull_request_target` misuse, unpinned actions, leaked secrets). Dependencies against a built-in offline OSV vulnerability snapshot. Copyleft licenses. OWASP LLM Top 10 for AI code (prompt injection, unsafe handling of model output, sensitive data in prompts, excessive agent permissions).
+
+**Taint analysis in detail.** It follows untrusted input from a source through assignments and function calls to a dangerous sink, taking sanitizers into account. Languages: Python, JavaScript, TypeScript, Go, Java, Ruby, PHP, C#, Rust, Kotlin, Scala, C, C++, Swift, Dart. Sinks: command execution (CWE-78, CWE-94), SQL injection (CWE-89), path traversal (CWE-22), XSS (CWE-79), LDAP and XPath injection (CWE-90, CWE-643), open redirect (CWE-601), trust boundary (CWE-501). For C and C++ also buffer overflow, format string, integer overflow, use-after-free and double free. A sanitizer counts only if its class matches the sink class.
+
+**Quality.** Code smells, dead code, dependency cycles, anti-patterns (huge files, deep nesting), complex functions, architecture rules from `.ailc/constitution.md`, layer violations, undocumented public API, unfinished code (stubs, empty handlers), and UI accessibility by WCAG 2.1 for web, Android, iOS and Flutter.
+
+**Code intelligence.** Symbols, module cards, call graph, project map, find usages, lexical search, extracted surface (HTTP endpoints, env variables, databases, queues, data models), Mermaid module diagram, blast radius of the current change, size and complexity metrics.
+
+**Verification by running.** `verify/test` detects the stack (Rust, Go, Node, Python, Scala, Gradle, Maven, Swift, Dart, Ruby, PHP, C and C++, .NET) and runs the tests. Also lint, coverage, "does this symbol exist" (protection against model hallucinations), API breaking changes against a snapshot, mobile and desktop configs.
+
+**Generation** (writes files idempotently). Documentation, diagrams, full documents by standard (GOST 19.201-78, GOST 34.602-2020, GOST 19.404-79, GOST R 59795-2021, arc42, C4), data model, glossary, API snapshot, SBOM in CycloneDX, release notes, ADR, spec drift check, task journal.
+
+**Russian compliance.** Personal data (passport, SNILS, INN) in logs (152-FZ), storage abroad (242-FZ), foreign trackers (152-FZ art. 12), pre-filled consent (152-FZ art. 9), foreign cryptography on critical infrastructure (187-FZ, enterprise tier). These are **review signals, not a legal guarantee**.
+
+**Languages and ecosystems.** Deep analysis in 15 languages via built-in `tree-sitter` grammars, with a regex fallback if parsing fails. Offline dependency checks for 12 lock-file formats: `requirements.txt`, `poetry.lock`, `Pipfile.lock`, `Cargo.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `go.sum`, `gradle.lockfile`, `pubspec.lock`, `Podfile.lock`, `composer.lock`. An ecosystem with no data is reported as "not covered", which is not the same as "clean".
+
+The OSV snapshot is built from official OSV.dev exports by `tools/update-osv.py`, stored as text in `crates/ailc-core/assets/osv/snapshot.tsv`, compressed into the binary (about 1.5 MB) and refreshed weekly by `.github/workflows/osv-update.yml`. Malicious-package records (`MAL-*`) are left out on purpose because of their volume; for those, and for the very latest records, run your ecosystem's auditor (`cargo audit`, `npm audit`, `pip-audit`, `osv-scanner`). AILC picks up its results when it is installed.
+
+## Team rules (governance)
+
+A senior engineer puts `ailc.policy.toml` in the project root once; juniors configure nothing, the gate applies the rules.
+
+```toml
+name = "my-org"
+
+[gate]
+block_at = "high"                  # info | low | medium | high | critical
+families  = ["security", "quality", "spec", "verify"]
+
+[thresholds]
+score_critical    = 25.0           # penalty per critical finding
+score_high        = 10.0
+score_medium      = 3.0
+score_low         = 1.0
+score_info        = 0.2
+max_defs_per_file = 30             # "god file" threshold
+max_nesting       = 6
+doc_coverage_floor = 50.0          # percent of public API documented
+max_lines         = 400
+max_complexity    = 50
+semantic_threshold = 0.62
+```
+
+Trust has three layers. The organization default is built into the code. If the project file is weaker (blocks less, skips families, lowers penalties), the gate shows a visible warning. A trusted reference file can be set with `AILC_POLICY` and pinned with `AILC_POLICY_SHA256`. A broken or tampered file is never silently accepted: the default is applied with an explicit warning.
+
+**Architecture rules in one sentence.** Rules live in `.ailc/constitution.md` as `FORBID`, `REQUIRE` and `REQUIRE_EACH` lines, with optional `[warn]`, `[in: path]` and a `# reason`. You can add one in plain words, and AILC translates it deterministically, without a network: "forbid `console.log` in src because it is debug output" becomes `FORBID [in: src] console.log # because it is debug output`. AILC immediately reports how many places in the code break the new rule. An unrecognized sentence is rejected clearly instead of being guessed.
+
+**Decision journal.** A new ADR is born "proposed"; accepting it is a separate human action. "Move to ClickHouse, replaces ADR-1" creates a new record and marks the old one "superseded" with links both ways. `verify/adr-lifecycle` checks the journal for missing or unknown statuses and broken links.
+
+**Thresholds adapt to the repository.** Structural thresholds (long file, god file, complex function, nesting) are stricter on a small young project and softer on a large mature one, within a narrow fixed range. The blocking level and score weights are never auto-calibrated, and thresholds set by a human are never touched. Disable with `AILC_NO_CALIBRATION`.
+
+## Continuous watch (custodian)
+
+`ailc custodian <path> [sec] [--fix] [--once]` watches for changes, runs fast deterministic checks, fixes formatting and lint with `--fix`, updates docs and alerts a human. Status goes to `.ailc/custodian/`, `ALERT.md` is surfaced in the editor chat, and macOS shows notifications. Stop it by creating `.ailc/custodian/STOP`. `ailc custodian install <path> [sec]` sets up autostart via `launchd` on macOS (every 15 minutes by default); `uninstall` removes it.
+
+## Installation options
+
+**Via npx (easiest with Node.js).** Put this in `.mcp.json` (Claude Code) or `~/.cursor/mcp.json` (Cursor). On first launch the `ailc-mcp` package downloads the right binary from the release:
 
 ```json
 { "mcpServers": { "ailc": { "command": "npx", "args": ["-y", "ailc-mcp"] } } }
 ```
 
-Можно вызвать и любую подкоманду, например `npx -y ailc-mcp dod .` или `npx -y ailc-mcp pulse .`.
+Any subcommand works too, for example `npx -y ailc-mcp dod .`.
 
-### Через установщик (без Node.js)
+**Installer (no Node.js).** Detects your platform, downloads the binary, verifies its checksum and prints a config snippet.
 
-Одна команда скачивает готовый бинарь для вашей операционной системы и архитектуры.
-
-macOS и Linux:
+macOS and Linux:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/pro-deploy/ailc/main/install.sh | sh
@@ -46,251 +297,59 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/pro-deploy/ailc/main/install.ps1 | iex
 ```
 
-Установщик определяет платформу, скачивает бинарь из релиза, сверяет контрольную сумму, кладёт его в каталог пользователя и печатает готовый сниппет для подключения в среду разработки. После этого подключение сводится к копированию трёх строк в `.mcp.json`. Поддержаны Linux (x86_64 и aarch64), macOS (Intel и Apple Silicon), Windows (x86_64). Каталог установки и версию можно переопределить переменными окружения `AILC_BINDIR` и `AILC_VERSION`.
+Supported: Linux (x86_64, aarch64), macOS (Intel, Apple Silicon), Windows (x86_64). Override the install folder and version with `AILC_BINDIR` and `AILC_VERSION`.
 
-### Сборка из исходников
-
-Нужен стабильный Rust (`rustup`, канал `stable`; версия зафиксирована в `rust-toolchain.toml`). Сборка одной командой:
-
-```sh
-cargo build --release
-```
-
-Результатом будет один статический бинарь `target/release/ailc` размером около 31 МБ. Внутрь бинаря встроены пятнадцать грамматик `tree-sitter` (компилируются через крейт `cc`) и сжатый снимок базы уязвимостей OSV, поэтому внешних зависимостей и обращений в сеть в момент работы нет. Модели эмбеддингов в бинаре больше нет: подбор инструмента под запрос выполняется детерминированным отбором со словарём синонимов, а при неуверенном отборе каталог отдаётся целиком, и выбирает модель агента среды разработки, которая всё равно читает ответ. Это убрало из поставки около 43 МБ и повысило точность подбора. Профиль `release` настроен агрессивно на размер и защиту: `opt-level = "z"`, тонкая межкрейтовая оптимизация `lto = true`, `codegen-units = 1`, `panic = "unwind"` (изоляция сбоев через `catch_unwind` обязана работать), `strip = true`.
-
-Быстрая проверка после сборки:
-
-```sh
-./target/release/ailc dod .      # детерминированный вердикт «готово к сдаче»
-cargo test --workspace           # все тесты проекта (их более тысячи)
-```
-
-## Готовые сборки
-
-Готовые бинарники под все платформы прикрепляются к каждому релизу на странице [Releases](https://github.com/pro-deploy/ailc/releases): Linux (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`), macOS (`x86_64-apple-darwin`, `aarch64-apple-darwin`), Windows (`x86_64-pc-windows-msvc`). Рядом лежат установочные скрипты `install.sh` и `install.ps1`. Выкладку выполняет GitHub Actions (workflow `.github/workflows/release.yml`) при публикации тега вида `vX.Y.Z`: он собирает бинарь под каждую платформу, считает контрольную сумму SHA-256 и прикрепляет архивы и скрипты к релизу. Установка из готового архива вручную (если не пользуетесь установщиком):
-
-```sh
-# пример для Linux x86_64 (имя ассета смотрите на странице Releases)
-tar -xzf ailc-x86_64-unknown-linux-gnu.tar.gz
-./ailc dod .
-```
-
-Рядом с архивом лежит файл `.sha256` для сверки целостности.
-
-## Быстрый старт
-
-Все режимы вызываются подкомандами одного бинаря.
-
-```sh
-ailc serve                         # MCP-сервер поверх stdio (для среды разработки)
-ailc <путь> "хочу выкатить фичу"   # одноразовый прогон по намерению (нужен LLM среды разработки)
-ailc dod <путь>                    # Definition of Done: многоосевой вердикт ✓/✗
-ailc pulse <путь>                  # лёгкий однострочный статус (без тестов и линта)
-ailc sarif <путь> > out.sarif      # отчёт SARIF 2.1.0 для непрерывной интеграции
-ailc fix <путь>                    # безопасная починка формата и линта (свои фиксеры)
-ailc design "<фича>" <путь>        # проектирование фичи: заготовка спеки и запись решения (ADR)
-ailc cap <id> <путь> [query]       # прогнать один инструмент (для отладки)
-ailc skills [папка]                # экспорт возможностей как пак навыков agentskills
-ailc custodian <путь> [сек] [--fix] [--once]   # непрерывный фоновый присмотр
-ailc custodian install <путь> [сек]            # автозапуск через launchd (macOS)
-ailc compliance-ru [папка]         # интерактивный мастер комплаенса РФ
-ailc doctor [путь]                 # диагностика подключения и готовые сниппеты
-ailc baseline <путь>               # заморозить текущие находки как долг (перемирие с легаси)
-```
-
-Например:
-
-```sh
-ailc dod .                         # вердикт по текущему проекту
-ailc pulse .                       # ✅ качество 92/100 · блокеров 0 · предупреждений 3 · проверок 28
-ailc cap security.scan/secret .    # только поиск секретов
-ailc cap code.intel/surface .      # извлечь эндпоинты, переменные окружения и сервисы
-ailc sarif . > results.sarif       # отчёт для вкладки безопасности в GitHub или GitLab
-```
-
-## Подключение в среду разработки по протоколу MCP
-
-Сервер говорит на JSON-RPC 2.0 поверх стандартного ввода-вывода (сообщения, разделённые переводом строки). Версия протокола согласуется при рукопожатии: поддержаны `2024-11-05`, `2025-03-26` и `2025-06-18`, сервер отвечает той версией клиента, которую понимает, а при незнакомой откатывается на базовую `2024-11-05`. Подключение в Claude Code (файл `.mcp.json` в корне проекта) или в Cursor (`~/.cursor/mcp.json`):
+**Connecting the binary directly.** Claude Code or Cursor:
 
 ```json
-{
-  "mcpServers": {
-    "ailc": { "command": "/путь/к/target/release/ailc", "args": ["serve"] }
-  }
-}
+{ "mcpServers": { "ailc": { "command": "/path/to/ailc", "args": ["serve"] } } }
 ```
 
-В Visual Studio Code (режим агента GitHub Copilot) схема другая: ключ верхнего уровня `servers`, а у сервера обязательно поле `"type": "stdio"`. Откройте конфигурацию через палитру команд, пункт «MCP: Open User Configuration», и впишите:
+VS Code (GitHub Copilot agent mode) uses a different schema: open "MCP: Open User Configuration" from the command palette and add:
 
 ```json
-{
-  "servers": {
-    "ailc": { "type": "stdio", "command": "/абсолютный/путь/к/ailc", "args": ["serve"] }
-  }
-}
+{ "servers": { "ailc": { "type": "stdio", "command": "/absolute/path/to/ailc", "args": ["serve"] } } }
 ```
 
-Важная тонкость для всех сред: если Node.js установлен через `nvm`, указывайте абсолютный путь к бинарю `ailc`, а не команду `npx`. Приложение, запущенное из дока или меню, не наследует PATH с `nvm`, поэтому `npx` оно не найдёт и сервер не стартует. Путь к бинарю печатает установщик (по умолчанию `~/.local/bin/ailc`).
+**A common pitfall:** if Node.js is installed via `nvm`, use the absolute path to the `ailc` binary instead of `npx`. Apps started from the Dock or a menu do not inherit the `nvm` PATH, so they cannot find `npx`. The installer prints the path (`~/.local/bin/ailc` by default).
 
-При первом вызове любого инструмента (не при подключении сервера) ailc идемпотентно вписывает короткое правило для агента в файлы `CLAUDE.md`, `.cursorrules`, `AGENTS.md` (отключается переменной окружения `AILC_NO_RULES`), чтобы агент среды знал: перед кодом и перед ответом надо вызвать инструмент `plan`. Путь корня проекта валидируется (канонизация, существование, запрет выхода за корень).
+**Prebuilt binaries** for all platforms are attached to every [release](https://github.com/pro-deploy/ailc/releases) together with a `.sha256` file. Releases are built by `.github/workflows/release.yml` when a `vX.Y.Z` tag is pushed.
 
-Сверх правила при первом вызове инструмента происходят ещё три вещи, и все идемпотентно. Ни одна из них не выполняется от одного лишь факта подключения сервера: рукопожатие происходит, когда пользователь ещё ничего не просил, поэтому запись файлов и сканирование репозитория привязаны к явному вызову. Во-первых, сервер сам определяет паспорт проекта и пишет его в `.ailc/profile.md`: стек, есть ли интерфейс, мобильная часть, признаки персональных данных, русскоязычная ли база, обращения к нейросетям. От паспорта зависят умолчания проверок и жёсткость осей вердикта: у проекта с интерфейсом доступность становится жёсткой осью, у проекта с признаками РФ и персональных данных жёсткой становится ось комплаенса, у проекта с вызовами нейросетей появляется жёсткая ось безопасности ИИ. Во-вторых, рабочую память ведёт сам сервер: каждый вызов инструмента дописывает журнал `.ailc/memory-bank/journal.md` и обновляет активный контекст, а при первом вызове контекст заполняется паспортом, поэтому память проекта актуальна, даже если агент среды о ней не вспоминал; готовый промпт «введи меня в курс дела» сервер отдаёт средам по протоколу (prompts). В-третьих, на действующем проекте первый вызов фоном замораживает текущие находки как исторический долг (базовая линия в `.ailc/baseline/`, опт-аут `AILC_NO_BASELINE`): дальше вердикт сдачи блокируют только новые находки, долг виден отдельной метрикой и гасится по плану, а verify-оси (тесты, линт, контракт) под долг не попадают никогда.
-
-Наружу сервер отдаёт **восемь front-door инструментов**, а полный каталог из 88 возможностей скрыт за роутером:
-
-| Инструмент | Вход | Что делает |
-|---|---|---|
-| `plan` | `intent` (обязательно), `path`, `steps`, `strict` | Адаптивная петля по намерению: планирование, исполнение, verify, рефлексия, гейт. Возвращает структуру `QualityLedger`. Работает с любым клиентом: при поддержке sampling петлю ведёт сервер, без sampling планировщиком выступает модель агента среды (параметры `steps` и `strict`). |
-| `find_capability` | `query` (необязательно) | Подбор инструмента: детерминированный отбор со словарём синонимов. При неуверенном отборе и при пустом запросе отдаёт каталог целиком, чтобы выбирала модель агента. |
-| `run` | `id` (обязательно), `path`, `target`, `query` | Выполнить конкретный инструмент по идентификатору. Возвращает `CapabilityOutput` с находками. Без LLM. |
-| `autofix` | `path`, `max` (по умолчанию 8) | Починка дефектов формата и линта силами LLM с состязательной перепроверкой. Требует sampling; без него находки чинит сам агент, а формат и линт закрывает `ailc fix`. |
-| `dod` | `path` | Детерминированный многоосевой вердикт «готово ли к сдаче». Без LLM. |
-| `sarif` | `path` | Полный скан и отчёт SARIF 2.1.0. Без LLM. |
-| `design` | `feature` (обязательно), `path` | Заготовка спецификации и запись архитектурного решения (ADR). |
-| `stage` | `action`, `path`, `reason`, `cycle`, `version`, `step` и другие | Процесс поставки из девяти этапов и план работ: где остановились, что делать дальше, переходы через детерминированный гейт, заморозка требований, запрос на изменение, приёмка замером критериев. |
-
-### Процесс поставки и возобновление работы
-
-При первом вызове инструмента ailc раскладывает шаблоны в `.ailc/templates/`: бриф, карту ландшафта, ADR, критерии приёмки (`acceptance.toml`), запрос на изменение, шаг плана и девять карточек этапов с инструкциями для модели. Шаблоны подстраиваются под паспорт проекта (персональные данные, интерфейс, нейросети, большая кодовая база), правки команды не перезаписываются, а новая встроенная версия кладётся рядом с расширением `.new`.
-
-Процесс состоит из этапов: идея, ландшафт, ADR, критерии, согласование, разработка, проверка качества, развёртывание, приёмка. Состояние хранится в `.ailc/process/state.toml`, файл `.ailc/process/NEXT.md` в одной строке говорит, что сейчас нужно от человека. Переход вперёд (`action=advance`) разрешает гейт: обязательные разделы шаблонов заполнены, критерии измеримы, шаги плана закрыты, `dod` подтверждён, версия новая и имеет git-тег, приёмка пройдена. Согласование (`action=approve`) переводит ADR в «принято» и замораживает требования по sha256; после этого в DoD появляется жёсткая ось «Требования заморожены», а новое оформляется только запросом на изменение (`action=change`), который возвращает процесс на этап 5. Возвраты: `return` с циклом А, В или Г.
-
-Работа на этапе разработки ведётся мелкими шагами (`plan_add`, `step_begin`, `step_done`). У шага обязательна проверка `check` (команда или `cap:<id>`), и шаг закрывает ailc, только когда она проходит. Перед шагом и после него сервер пишет журнал `.ailc/process/journal.md`, поэтому после обрыва сессии `action=resume` выдаёт пакет возобновления в пределах бюджета (по умолчанию 6000 токенов): этап, прерванный шаг, незакоммиченные изменения, принятые решения, карточку этапа и одно следующее действие. Команда `ailc stage hooks` печатает настройку хуков Claude Code, которая вызывает `resume` в начале каждой сессии и `status` на каждое сообщение. Из командной строки доступно то же: `ailc stage <действие> [путь] [ключ=значение ...]`.
-
-Ответы содержат поле `content` с человекочитаемым текстом и, где уместно, поле `structuredContent` с типизированным JSON (`QualityLedger` для `plan`, `CapabilityOutput` для `run` и `design`, объект осей для `dod`). Инструмент `plan` работает в двух режимах. Если клиент поддерживает двустороннюю связь (sampling), сервер сам инициирует `sampling/createMessage` к модели клиента и целиком ведёт петлю. Если клиент sampling не поддерживает (например, Claude Code), петля инвертируется: роль планировщика играет сама модель агента среды. Первый вызов `plan` без параметра `steps` выполняет базовый детерминированный набор проверок по паспорту проекта и возвращает вердикт вместе с инструкцией продолжения; дальше агент подбирает инструменты через `find_capability`, передаёт их идентификаторы в `steps`, при сдаче добавляет `strict: true`, чинит найденное и перепроверяет. Вердикт в обоих режимах выносит детерминированный гейт. Серверный `autofix` без sampling недоступен (правки строк вносит модель клиента); в этом случае агент чинит находки сам, а формат и линт закрывает команда `ailc fix`.
-
-## Использование с искусственным интеллектом и агентами
-
-ailc спроектирован для работы рука об руку с агентами вроде Claude Code и Cursor, и для этого есть три механизма.
-
-Первый механизм, адаптивная петля плана. Через инструмент `plan` агент передаёт намерение простым языком. В клиенте с поддержкой sampling оркестратор просит модель клиента выбрать набор инструментов и режим, исполняет их параллельным графом, отсеивает ложные находки verify-проходом, затем спрашивает модель, достаточно ли проверок или нужно довызвать и починить, и повторяет до исчерпания бюджета раундов (по умолчанию четыре). В клиенте без sampling та же петля инвертируется: фазы планирования и рефлексии выполняет модель агента среды (она передаёт `steps` и решает, довызвать, починить или завершить), а сервер выполняет проверки, отсев ложных находок и гейт. Итоговый вердикт «прошло или нет» в обоих случаях выносит детерминированный гейт, не модель. Если план от модели не получен, петля откатывается на безопасный детерминированный набор семейств (безопасность, качество, спека), расширенный паспортом проекта.
-
-Второй механизм, починка с состязательной перепроверкой. Инструмент `autofix` для каждой находки просит модель внести минимальную правку, затем заново прогоняет тот же детектор на файле: правка принимается, только если находка исчезла и новых не появилось, иначе откатывается. Цикл идёт до исчерпания или до отсутствия новых правок. Автоматически чинятся только формат и линт; решения по безопасности и логике остаются за человеком.
-
-Третий механизм, экспорт навыков. Команда `ailc skills [папка]` выгружает все возможности как пак, совместимый со стандартом agentskills.io: файл `.claude-plugin/plugin.json` и по файлу `SKILL.md` на каждый инструмент с описанием и примером вызова. Пак ставится как плагин Claude Code или подхватывается любым agentskills-совместимым агентом, а сами навыки вызывают настоящий движок через MCP. Внутри `plugin.json` уже прописан запуск сервера (`command: ailc`, `args: ["serve"]`).
-
-Подбор инструмента под запрос устроен без встроенной модели: слова запроса расширяются словарём синонимов («дыры» ведут к уязвимостям, «медленно» к производительности), совпадение в идентификаторе весит больше совпадения в описании, а при неуверенном отборе каталог отдаётся целиком. Окончательный выбор делает модель агента среды разработки, которая читает ответ: соревноваться с ней внутри сервера незачем, а весь каталог из восьмидесяти восьми описаний занимает около двух десятков килобайт.
-
-## Каталог возможностей
-
-В каталоге 88 инструментов поверх переиспользуемых движков, сгруппированы по семействам. Инструмент это тонкий конфиг над движком, без дублирования логики. Ниже идентификаторы и назначение.
-
-**Безопасность (сканеры).** `security.scan/secret` ищет захардкоженные секреты по 28 правилам (ключи AWS, GitHub, Stripe, GCP, Azure, Slack, SendGrid, npm, Twilio, ключи провайдеров LLM, приватные ключи, секреты в строках подключения, обобщённые секреты с проверкой энтропии). `security.scan/sast` это структурный анализ по абстрактному синтаксическому дереву. `security.scan/taint` это межпроцедурный анализ заражения. `security.scan/owasp` раскладывает находки по категориям OWASP с A01 по A10 (слабая криптография, слабые хеши паролей, отключённая проверка TLS, JWT с alg=none, небезопасная десериализация, межсайтовый скриптинг, подделка запроса со стороны сервера, сравнение секретов не за постоянное время, постоянный вектор инициализации, распаковка архива без проверки пути, права на запись всем, предсказуемое имя временного файла, внешний сценарий без контроля целостности, ослабленные заголовки безопасности, инъекция в документную базу, подделка записей журнала, слабые параметры выработки ключа, отключённая проверка срока действия токена, инъекция перевода строки в заголовок ответа, идентификатор сессии в адресе страницы, выключенное ограничение частоты запросов, трассировка стека в ответе, включённый листинг каталога, зависимость по ветке без фиксации, целочисленное переполнение в размере выделения, разыменование без проверки, гонка между проверкой и использованием и прочее). `security.scan/pii` ищет персональные данные в коде и логах. `security.scan/web` и `security.scan/api` покрывают уязвимости веб и интерфейсов прикладного программирования. `security.scan/iac` смотрит инфраструктуру как код (Docker, Kubernetes), а `security.scan/terraform` покрывает описания на языке HCL (открытая наружу группа безопасности, публичное объектное хранилище, отключённое шифрование, зашитые учётные данные, отключённое версионирование и журналирование, незашифрованное состояние, подстановочный знак в политике доступа). `security.scan/shell` проверяет командные сценарии (незакавыченная подстановка переменной, исполнение через eval, загрузка с немедленным исполнением, отключённая проверка сертификата, предсказуемое имя временного файла, подавленная ошибка, права на запись всем). `security.scan/ci` проверяет рабочие процессы непрерывной интеграции (подстановка недоверенного поля события в исполняемую команду, событие pull_request_target вместе с получением кода из чужой ветви, права токена write-all, действие по подвижной ссылке вместо отпечатка коммита, печать секрета в журнал, собственный исполнитель для постороннего вклада); файлы рабочих процессов лежат в скрытых каталогах, поэтому этот сканер обходит дерево в особом режиме. `security.scan/injection-extra` добавляет классы, не покрытые прочими сканерами (катастрофический возврат в регулярном выражении, загрязнение прототипа, инъекция в XPath и в фильтр LDAP, небезопасная рефлексия, приём оповещения без проверки подписи, хранение маркера доступа в локальном хранилище браузера, cookie сессии без атрибута SameSite). `security.scan/mobile-config` и `verify/desktop` проверяют конфигурации мобильных и настольных платформ. `security.scan/injection` ловит небезопасную работу с разметкой. `security.scan/deps` сверяет зависимости со ВСТРОЕННЫМ офлайн-снимком базы уязвимостей OSV (о его объёме и возрасте смотрите раздел «Честные ограничения»). `security.scan/licenses` проверяет лицензии (copyleft). Семейство `security.ai/*` покрывает OWASP LLM Top-10: инъекция в подсказку модели (LLM01), небезопасная обработка вывода модели (LLM02), утечка чувствительных данных в подсказку (LLM06) и избыточные полномочия агента, когда вывод модели напрямую превращается в действие с побочным эффектом (LLM08).
-
-**Качество.** `quality.check/smell` ловит запахи кода (проглоченные ошибки, panic и unwrap, маркеры долга). `quality.check/dead-code` находит неиспользуемые экспорты (исключая тесты и точки входа фреймворков). `quality.check/cycles` обнаруживает циклы зависимостей. `quality.check/antipattern` ловит God-файлы, длинные файлы и глубокую вложенность. `quality.check/complexity` находит сложные функции. `quality.check/constitution` сверяет код с архитектурными правилами из `.ailc/constitution.md`. `quality.check/layers` следит за слоями. `quality.check/undocumented` находит недокументированное публичное API. `quality.check/completeness` это страж недоделанного (заглушки, пустые обработчики). Семейство `quality.ui/*` проверяет доступность интерфейса по WCAG 2.1 (изображения без альтернативного текста, поля без подписей, размер области нажатия, видимость фокуса, поддержка тёмной темы) для веба, Android, iOS и Flutter.
-
-**Код-интеллект.** `code.intel/symbols` перечисляет все функции, типы и классы. `code.intel/module_card` строит карточку модуля. `code.intel/call_graph` строит граф вызовов. `code.intel/map` строит карту проекта. `code.intel/find_usages` находит использования символа. `code.intel/search` ищет по проекту лексическим индексом (постинги по дереву исходников, тестовые файлы в индекс не входят). `code.intel/surface` извлекает HTTP-эндпоинты, переменные окружения, внешние сервисы (базы данных, очереди, хранилища) и модели данных. `code.intel/diagram` рисует граф модулей в Mermaid. `code.intel/diff-scope` определяет радиус влияния текущего изменения через граф вызовов. `code.intel/metrics` считает метрики размера и сложности.
-
-**Проверка прогоном.** `verify/test` определяет стек (Rust, Go, Node, Python, Scala, Gradle, Maven, Swift, Dart, Ruby, PHP, C и C++, .NET) и запускает тесты. `verify/lint` запускает линтер с запасным вариантом. `verify/coverage` считает покрытие. `verify/symbol` проверяет, что символ существует (защита от выдумок модели). `verify/api-break` сверяет удалённые или переименованные публичные символы со снимком в `.ailc/api/baseline.txt`. `verify/mobile` и `verify/desktop` прогоняют и проверяют конфигурации мобильных и настольных стеков.
-
-**Генерация (пишут файлы идемпотентно).** `generate/docs`, `generate/diagram`, `generate/doc` (выпуск документа целиком по стандарту: ГОСТ 19.201-78, ГОСТ 34.602-2020, ГОСТ 19.404-79, ГОСТ Р 59795-2021, arc42, модель C4), `generate/model` (модель проекта с происхождением фактов), `generate/data-model`, `generate/glossary`, `generate/api-baseline` (снимок публичного API), `generate/sbom` (перечень зависимостей в формате CycloneDX), `generate/release-notes`, `generate/adr` (запись архитектурного решения). Семейство `spec`: `spec/feature` проектирует фичу (заготовка спеки и ADR), `spec.check/drift` сверяет свежесть документации с кодом, `spec/questions` выдаёт очередь вопросов по незакрытым разделам стандартов, `spec/answer` записывает ответ в реестр требований. Журнал работ: `task/plan` записывает план в проект, `task/update` отмечает состояние задачи (взял в работу, сделал, отложил с причиной, решил не делать с причиной), `task/list` восстанавливает контекст после перерыва. Состояние работ сервер перестраивает в активном контексте при каждом вызове любого инструмента, поэтому обрыв сеанса его не теряет.
-
-**Комплаенс РФ.** `compliance.ru/pdn-logs` и `compliance.ru/pdn-logs-ast` ищут персональные данные (паспорт, СНИЛС, ИНН) в вызовах логирования (152-ФЗ). `compliance.ru/localization` сигналит о хранении данных за рубежом (242-ФЗ). `compliance.ru/cross-border` ловит иностранные трекеры и аналитику (152-ФЗ статья 12). `compliance.ru/consent` находит предзаполненное согласие (152-ФЗ статья 9). `compliance.ru/gost-crypto` помечает иностранную криптографию на объектах критической информационной инфраструктуры, где требуется отечественная (187-ФЗ); этот инструмент имеет тир предприятия и в обычный прогон не входит.
-
-**Состояние и поток работы.** Память: `memory/read`, `memory/update`, `memory/decision-log`. Бэклог: `backlog/add`, `backlog/list`. Настройка: `setup/init` (разворачивает каркас `.ailc/`), `setup/cicd` (генерирует workflow с гейтами). Поставка: `deliver/branch-name`, `deliver/commit-draft`.
-
-## Глубокая безопасность
-
-**Анализ заражения по пятнадцати языкам.** `security.scan/taint` отслеживает недоверенный ввод от источника через цепочки присваиваний и границы функций до опасного стока, с учётом санитайзеров. Поддержаны Python, JavaScript, TypeScript, Go, Java, Ruby, PHP, C#, Rust, Kotlin, Scala, C, C++, Swift, Dart. Источники у каждого языка свои (например, у Python это `request.args`, `request.form`, `os.environ`; у Go это `URL.Query`, `FormValue`, `Header`; у PHP это `$_GET`, `$_POST`, `$_COOKIE`). Стоки разнесены по классам: исполнение команды (CWE-78 и CWE-94), внедрение в SQL (CWE-89), обход пути (CWE-22), межсайтовый скриптинг (CWE-79), внедрение в LDAP и XPath (CWE-90 и CWE-643), открытый редирект (CWE-601), нарушение границы доверия (CWE-501). Для C и C++ отдельная модель памяти: переполнение буфера (CWE-120), форматная строка (CWE-134), целочисленное переполнение размера выделения (CWE-190), использование после освобождения (CWE-416), двойное освобождение (CWE-415). Санитайзеры разбиты на пять классов (числовой, оболочечный, SQL, разметка, путь), и очистка засчитывается, только если класс санитайзера подходит классу стока. Анализ построен на структуре дерева разбора, регулярные выражения остаются лишь запасным вариантом при сбое разбора. Матрица покрытия закреплена тестом по всем пятнадцати языкам.
-
-**Правила веб и интерфейсов.** Подделка запроса со стороны сервера (включая обращения к облачным метаданным и внутренним адресам), открытый редирект, обход пути, внедрение в шаблон, внешние сущности XML, небезопасная десериализация, чтение YAML без безопасного загрузчика, отключённая проверка сертификата TLS, маски CORS и отражение заголовка Origin, небезопасные cookie, отключённая защита от подделки межсайтовых запросов, JWT с alg=none и смешением алгоритмов, открытая интроспекция GraphQL, массовое присваивание. Каждое сообщение несёт проверенную ссылку на CWE и категорию OWASP.
-
-**Безопасность искусственного интеллекта.** Инъекция в подсказку модели через интерполяцию и пошаговую сборку буфера (OWASP LLM01, CWE-1427), небезопасная обработка вывода модели, когда ответ модели попадает в исполнение или в разметку (OWASP LLM02, CWE-94 и CWE-79), включая отдельный лёгкий анализ заражения вывода модели внутри функции.
-
-## Governance: правила компании как данные
-
-Старший один раз кладёт в корень проекта файл `ailc.policy.toml`, а джун ничего не настраивает: гейт применяет правила сам. Минимальный пример с полной схемой:
-
-```toml
-name = "my-org"
-
-[gate]
-block_at = "high"                  # info | low | medium | high | critical
-families  = ["security", "quality", "spec", "verify"]  # какие семейства гонять
-
-[thresholds]
-score_critical    = 25.0           # штраф за находку critical
-score_high        = 10.0
-score_medium      = 3.0
-score_low         = 1.0
-score_info        = 0.2
-max_defs_per_file = 30             # порог God-файла
-max_nesting       = 6              # глубина вложенности
-doc_coverage_floor = 50.0          # процент покрытия публичного API документацией
-max_lines         = 400            # длинный файл
-max_complexity    = 50             # сложная функция
-semantic_threshold = 0.62          # порог близости для семантического роутера
-```
-
-Доверие трёхслойное. Организационный дефолт зашит в код. Файл проекта загружается и сверяется с дефолтом: если он слабее (например, блокирует только более высокую серьёзность, обрезает семейства проверок или занижает веса штрафов), гейт выносит видимое предупреждение «политика проекта слабее организационного дефолта». Доверенный эталон можно задать переменной окружения `AILC_POLICY` (путь к файлу вне рабочего каталога), а его целостность закрепить контрольной суммой через `AILC_POLICY_SHA256`. Битый или подменённый файл не пропускается молча: применяется дефолт и выдаётся явное предупреждение.
-
-Архитектурные правила задаются в `.ailc/constitution.md` строками `FORBID`, `REQUIRE`, `REQUIRE_EACH` (подстрочное совпадение только по коду, без комментариев и строковых литералов) и проверяются инструментом `quality.check/constitution`. У правила есть опциональные атрибуты: `[warn]` понижает его до предупреждения, `[in: путь]` ограничивает область действия префиксом пути, а текст после ` #` служит обоснованием для людей и в поиске не участвует. Правило добавляется одной репликой: инструмент `governance/rule-add` валидирует строку тем же парсером, дописывает её в неприкосновенный раздел «Правила команды» и сразу отвечает, скольким местам кода новое правило противоречит прямо сейчас (заморозить их как долг или чинить немедленно, решает человек). Прослеживаемость изменений проверяет `spec.check/trace`: изменение исходников, не упомянутое ни в одной спеке или задаче бэклога, помечается как «код без чертежа» (мягкая ось вердикта). Верификатор при этом самообучается на проекте: правило, чьи находки здесь хронически опровергаются (не менее 20 наблюдений и не менее 80 процентов опровержений), теряет голос до предупреждения с видимой пометкой в сообщении; security-критичные правила из этого механизма исключены.
-
-### Правило одной фразой и журнал решений
-
-Правило команды добавляется обычной фразой, и переводит её в формальное правило сам сервер, детерминированно и без сети: `запрети \`console.log\` в папке src, потому что это отладочный вывод` превращается в `FORBID [in: src] console.log # потому что это отладочный вывод`. Прежде этот перевод выполняла нейросеть среды разработки, то есть закон проекта зависел от вероятностного вывода и от наличия модели у клиента. Формальную строку по-прежнему можно передать как есть, а нераспознанная фраза даёт внятный отказ вместо правдоподобного, но выдуманного правила.
-
-Архитектурные решения ведут жизненный цикл. Новая запись рождается со статусом «предложено» (принятие есть отдельное человеческое действие), а замена оформляется одним вызовом: фраза `перейти на ClickHouse, заменяет ADR-1` создаёт новую запись со ссылкой назад и переводит прежнюю в статус «заменено» со встречной ссылкой вперёд. Целостность журнала проверяет инструмент `verify/adr-lifecycle`: он находит записи без статуса, с неизвестным статусом, со ссылкой на несуществующее решение и отменённые решения, не назвавшие преемника.
-
-### Пороги под размер и возраст репозитория
-
-Структурные пороги (длинный файл, божественный файл, сложная функция, глубина вложенности) калибруются автоматически: на небольшом молодом проекте они строже умолчания, на крупной зрелой кодовой базе мягче, в пределах узкого заранее ограниченного диапазона. Порог блокировки и веса балла не калибруются никогда, поскольку именно они решают вердикт. Порог, заданный человеком в файле политики, автоматика не трогает, а факт калибровки печатается человеку заметкой. Отключается переменной окружения `AILC_NO_CALIBRATION`.
-
-## Definition of Done
-
-`ailc dod <путь>` выносит многоосевой вердикт. Жёсткие оси блокируют сдачу: «Конституция», «Тесты», «Секреты», «OWASP HIGH» (проходит при нулевых находках уровня high и выше), «SAST (AST)», «Taint-поток», «Недоделанное», «Доки/Спека актуальны», «Контракт API не сломан». Мягкие оси не блокируют, но видны: «Запахи кода», «Анти-паттерны», «Циклы зависимостей», «Мёртвый код», «Изменение со спекой».
-
-Три оси профильные: их наличие и жёсткость определяет паспорт проекта. Ось «Комплаенс РФ» по умолчанию мягкая (регуляторные риски эвристичны, окончательно решает юрист), но у проекта с русскоязычной базой и признаками персональных данных становится жёсткой. Ось «Безопасность ИИ» появляется только у проекта с обращениями к нейросетям и сразу жёсткая. Ось «Доступность UI» появляется только у проекта с интерфейсом и остаётся мягкой.
-
-Вердикт честный и имеет три состояния. Подтверждён, когда все жёсткие оси реально выполнились и не дали блокирующих находок. Провален, когда жёсткая ось дала блокирующую находку. Не подтверждён, когда жёсткая ось не запускалась или охват нулевой (пустой или несорсовый репозиторий не даёт зелёный вердикт без оснований). Анализ заражения и структурный анализ имеют тир предприятия и обычным гейтом отсекаются по тиру, но Definition of Done обязан включать их по имени как пол безопасности и исполняет каждый в отдельном потоке с ограничением 180 секунд.
-
-## SARIF и verify-проход
-
-`ailc sarif <путь>` выдаёт отчёт SARIF 2.1.0 для непрерывной интеграции и вкладки безопасности в GitHub или GitLab. В отчёт попадают только подтверждённые находки: verify-проход состязательно опровергает ложные (секрет в комментарии, значение-плейсхолдер, защищённый XML-парсер, строка с определением самого правила, inline-подавление маркером `ailc:ignore`). Число опровергнутых и список пропусков с причинами видны в свойствах отчёта. В балл качества и блокировку идут только находки с флагом `verified` и привязкой к файлу и строке: это стена против накрутки. Отдельная метрика Rigor Score измеряет тщательность, то есть долю реально выполненных проверок из попытанных, и при нуле выполненных равна нулю.
-
-## Языки и экосистемы
-
-Глубокий анализ (структурный разбор и заражение) работает на пятнадцати языках: Python, JavaScript, TypeScript, Go, Java, Ruby, PHP, C#, Rust, Kotlin, Scala, C, C++, Swift, Dart. Слой код-интеллекта трёхуровневый: основной разбор по дереву (`tree-sitter`), запасной разбор по регулярным выражениям при сбое парсера.
-
-Сверка зависимостей с базой уязвимостей OSV идёт офлайн по двенадцати экосистемам lock-файлов: `requirements.txt` и `poetry.lock` и `Pipfile.lock` (Python), `Cargo.lock` (Rust), `package-lock.json` и `yarn.lock` и `pnpm-lock.yaml` (Node), `go.sum` (Go), `gradle.lockfile` (Gradle), `pubspec.lock` (Dart и Flutter), `Podfile.lock` (CocoaPods), `composer.lock` (PHP). Экосистемы без записей в базе помечаются явно: «не покрыто» это не то же самое, что «чисто».
-
-Про сам снимок базы следует сказать прямо, поскольку от его качества зависит смысл результата. Снимок собирается из ОФИЦИАЛЬНЫХ выгрузок OSV.dev по десяти экосистемам скриптом `tools/update-osv.py`, хранится в репозитории построчным текстом (`crates/ailc-core/assets/osv/snapshot.tsv`), сжимается на этапе сборки и попадает в бинарь примерно полутора мегабайтами. Обновляется он рабочим процессом `.github/workflows/osv-update.yml` еженедельно и автоматически, с коммитом в репозиторий: чтобы получить свежую базу, достаточно обновить репозиторий и пересобрать бинарь. Пересобрать снимок вручную можно одной командой:
+**Building from source.** You need stable Rust (the version is pinned in `rust-toolchain.toml`):
 
 ```sh
-python3 tools/update-osv.py
+cargo build --release              # produces target/release/ailc (about 31 MB)
+./target/release/ailc dod .        # quick check
+cargo test --workspace             # more than a thousand tests
 ```
 
-Объём и дата снимка печатаются в сводке проверки, поэтому результат читается однозначно. Записи о вредоносных пакетах (идентификаторы вида `MAL-*`) в снимок намеренно не входят: их сотни тысяч в одной только экосистеме npm, они раздули бы поставку на порядки, а в файл блокировок такой пакет обычно не попадает, поскольку его снимают с реестра. Для аудита именно этого класса угроз, а также для проверки по самым свежим записям, запускайте штатный аудитор экосистемы (`cargo audit`, `npm audit`, `pip-audit`, `osv-scanner`); ailc подхватывает результат внешнего аудитора, когда тот установлен, и дополняет им свой.
+The binary contains 15 `tree-sitter` grammars and the compressed OSV snapshot, so it needs no network at run time. There is no embedding model inside: tool selection uses a deterministic synonym match, and when unsure the whole catalog (about 20 KB) goes to the editor's model, which reads the answer anyway. The `release` profile is tuned for size and safety (`opt-level = "z"`, `lto = true`, `codegen-units = 1`, `panic = "unwind"` so that `catch_unwind` isolation works, `strip = true`).
 
-Покрытие платформ: веб и бэкенд, мобильные (Flutter, Android, iOS, Swift), настольные (.NET, Tauri, Electron, C++). Обход дерева честный: скрытые файлы, служебные каталоги, крупные блобы (более одного мегабайта), символические ссылки и пределы глубины считаются и видны в сводке.
+## Architecture
 
-## Архитектура
+A tool is a triple of family, engine and config. Engines are written once; capabilities are configs over them.
 
-Инструмент это тройка из семейства, движка и конфига. Движки реализованы один раз, возможности это конфиги над ними.
+```mermaid
+flowchart TD
+    Bin["ailc<br/>binary, MCP transport, custodian, compliance wizard"] --> Caps["ailc-capabilities<br/>88 capability configs"]
+    Bin --> Core
+    Caps --> Core["ailc-core<br/>engines, orchestrator, planner, router, verify, governance"]
+    Core --> Contracts["ailc-contracts<br/>shared types"]
+    Caps --> Contracts
+```
 
-| Слой | Крейт |
-|---|---|
-| Контракты (типы) | `ailc-contracts` |
-| Движки, оркестратор, планировщик, роутер, verify, governance | `ailc-core` |
-| Возможности (конфиги поверх движков) | `ailc-capabilities` |
-| Бинарь, транспорт MCP, custodian, мастер комплаенса | `ailc` |
+The nine engines: `Scan` (rule search and structural analysis), `CodeIntel` (extraction from the syntax tree), `Gate` (governance), `Runner` (external tools with a timeout), `Generator` (documents and diagrams), `Store` (records), `Metric` (metrics and trends), `Diagram` (model to Mermaid), `Index` (lexical index behind `code.intel/search`).
 
-Девять движков: `Scan` (поиск по правилам и структурный анализ), `CodeIntel` (извлечение по дереву разбора), `Gate` (governance), `Runner` (внешние инструменты с таймаутом), `Generator` (документы и диаграммы), `Store` (хранение записей), `Metric` (метрики и тренды), `Diagram` (модель в Mermaid), `Index` (лексический индекс постингов по дереву исходников, питает инструмент `code.intel/search`; прежней встроенной модели эмбеддингов в нём больше нет). Извлечение поверхности (эндпоинты, переменные окружения, сервисы, модели) питает код-интеллект.
+More detail (in Russian): [docs/АРХИТЕКТУРА.md](docs/АРХИТЕКТУРА.md), [docs/C4.md](docs/C4.md), [docs/РУКОВОДСТВО-ПОЛЬЗОВАТЕЛЯ.md](docs/РУКОВОДСТВО-ПОЛЬЗОВАТЕЛЯ.md), [docs/ГЛОССАРИЙ.md](docs/ГЛОССАРИЙ.md).
 
-## Непрерывный присмотр (custodian)
+## Honest limitations
 
-`ailc custodian <путь> [сек] [--fix] [--once]` запускает цикл: наблюдай за изменениями, прогоняй быстрые детерминированные проверки, при флаге `--fix` чини формат и линт, идемпотентно обновляй документацию, эскалируй человеку. Флаг `--once` делает один проход и выходит. Статус и события пишутся в `.ailc/custodian/`, файл `ALERT.md` поднимается в чат среды разработки, на macOS приходят уведомления. Останов через файл-выключатель `.ailc/custodian/STOP`. Команда `ailc custodian install <путь> [сек]` ставит автозапуск через `launchd` на macOS (по умолчанию каждые 15 минут), `uninstall` снимает его.
+Automatic fixing is limited to formatting and lint; security and logic are decided by a human. Each pipeline step is limited to 180 seconds: a stuck check is marked as timed out instead of blocking the run. Paths from MCP input are validated and cannot escape the project root. Scanning a security tool's own files can produce self-matches, as with any scanner. Taint analysis is inter-procedural and flow-sensitive inside a function, but branches do not split the state (a conservative trade-off for fewer false alarms), and sanitizers from the curated list are treated as context-independent. Russian legal checks (152-FZ, 242-FZ, 187-FZ, GOST) are **signals for review, not a legal guarantee**. Things that are narrow or only scaffolded are listed in [ROADMAP.md](ROADMAP.md).
 
-## Честные ограничения
+## Tests and CI
 
-Автоматическая починка ограничена форматом и линтом своими фиксерами; безопасность и логику решает человек. Слой код-интеллекта основан на разборе по дереву, регулярные выражения это запасной вариант. Шаг пайплайна ограничен 180 секундами: зависшая проверка получает явную отметку о превышении лимита, а не блокирует прогон. Цель из входа MCP валидируется, относительные переходы и абсолютные пути не выводят сканирование за корень проекта. При самосканировании инструмента безопасности своих же файлов возможны само-срабатывания, как у любого сканера; на реальных проектах их нет. Анализ заражения межпроцедурный по функциям-источникам, внутри функции поток-чувствительный, но ветвления не раздваивают состояние (консервативный компромисс ради меньшего числа ложных срабатываний), а санитайзеры из курируемого списка считаются контекст-независимыми. Проверки соответствия требованиям российского законодательства (152-ФЗ, 242-ФЗ, 187-ФЗ и ГОСТ) это **сигналы для ревью, а не юридическая гарантия**; ответственность за соблюдение закона остаётся на организации.
+More than a thousand tests, including the taint matrix for 15 languages, the unfinished-code guard, documentation generation and drift, a false-positive regression corpus, project passport, debt baseline, server memory and verifier self-learning. CI (`.github/workflows/ci.yml`) builds release and runs the tests on every push and pull request; clippy runs as information only.
 
-Что сделано узко или каркасом, зафиксировано отдельно в файле `ROADMAP.md`.
+## License
 
-## Тесты и непрерывная интеграция
-
-В проекте более тысячи тестов, включая матрицу заражения по пятнадцати языкам, стража недоделанного, генерацию и дрейф документации, регрессионный корпус ложных срабатываний, паспорт проекта, базовую линию долга, серверную память и самообучение верификатора. Непрерывная интеграция (workflow `.github/workflows/ci.yml`) собирает release и гоняет тесты на каждый push и запрос на слияние; clippy запускается информационно и не блокирует.
-
-## Лицензия
-
-Открытое ядро (движок анализа, интерфейс командной строки, локальные режимы, интеграция со средами разработки) распространяется под лицензией **Apache 2.0** (файл `LICENSE`). Корпоративные и комплаенс-модули (поддерживаемые пакеты соответствия, управляющий слой предприятия, аттестационный отчёт) распространяются по отдельной коммерческой лицензии и в этот репозиторий не входят.
+The open core (analysis engine, CLI, local modes, editor integration) is licensed under **Apache 2.0** (see [LICENSE](LICENSE)). Enterprise and compliance modules (maintained compliance packs, enterprise control layer, attestation report) are under a separate commercial license and are not part of this repository.
