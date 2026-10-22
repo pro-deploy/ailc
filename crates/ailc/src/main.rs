@@ -57,6 +57,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "compliance-ru",
     "doctor",
     "baseline",
+    "stage",
 ];
 
 /// Справка. Один разбор на все подкоманды: прежде `--help` трактовался как позиционный
@@ -101,10 +102,19 @@ fn print_help(cmd: Option<&str>) {
         Some("cap") => println!("ailc cap <id> [путь] [query]\n\nПрогнать одну capability по идентификатору."),
         Some("skills") => println!("ailc skills [папка]\n\nЭкспорт возможностей как agentskills-пака."),
         Some("serve") => println!("ailc serve\n\nMCP-сервер поверх stdio для подключения в IDE."),
+        Some("stage") => println!(
+            "ailc stage <действие> [путь] [ключ=значение ...]\n\n\
+             Процесс поставки из девяти этапов и план работ.\n\
+             Действия: status, resume, advance, approve, return, change, accept, scenario,\n\
+             plan, plan_add, step_begin, step_done.\n\
+             Пример: ailc stage approve . reason=\"да, согласую\"\n\
+             ailc stage hooks: печатает настройку хуков Claude Code для автоматического\n\
+             вызова resume в начале сессии и status на каждое сообщение."
+        ),
         _ => println!(
             "ailc {v} — автономная проверка качества\n\n\
              Команды: serve · dod · sarif · fix · custodian · doctor · baseline ·\n\
-             compliance-ru · pulse · design · cap · skills\n\
+             compliance-ru · pulse · design · cap · skills · stage\n\
              Справка по команде: ailc <команда> --help\n\
              Свободное намерение: ailc <путь> \"<запрос>\" (адаптивная петля доступна в IDE через serve)"
         ),
@@ -184,6 +194,11 @@ fn main() -> ExitCode {
     // `ailc pulse <путь>`. Дешёвый детерминированный сигнал «всё ли ок».
     if args.get(1).map(String::as_str) == Some("pulse") {
         return run_pulse(&args);
+    }
+
+    // Процесс поставки: `ailc stage <действие> [путь] [ключ=значение ...]`
+    if args.get(1).map(String::as_str) == Some("stage") {
+        return run_stage(&args);
     }
 
     // Проектирование новой фичи: `ailc design "<что хочу>" [путь]`
@@ -326,12 +341,37 @@ fn run_baseline(args: &[String]) -> ExitCode {
     }
 }
 
+/// Таблица замеров в поток ошибок (`AILC_TIMINGS`): стандартный вывод вердикта остаётся
+/// неизменным, и сценарии, разбирающие его, замер не ломает. Пустая таблица при ненулевом
+/// общем времени означает, что гейт отдал результат из кэша прогонов.
+fn print_timings(total: std::time::Duration) {
+    let rows = ailc_core::timing::take();
+    eprintln!("ЗАМЕР ВРЕМЕНИ (dod, всего {:.2} с)", total.as_secs_f64());
+    for t in &rows {
+        let share = 100.0 * t.elapsed.as_secs_f64() / total.as_secs_f64().max(1e-9);
+        eprintln!(
+            "  {:>8.2} с  {:>5.1}%  {:<11} {}",
+            t.elapsed.as_secs_f64(),
+            share,
+            t.phase,
+            t.id
+        );
+    }
+    if rows.iter().all(|t| t.phase == "фаза") {
+        eprintln!("  (проверки гейта не исполнялись: результат взят из кэша прогонов)");
+    }
+}
+
 fn run_dod(args: &[String]) -> ExitCode {
     let root = args.get(2).cloned().unwrap_or_else(|| ".".to_string());
     let mut reg = Registry::new();
     ailc_capabilities::register_core(&mut reg);
     let ctx = Ctx::new(&root);
+    let started = std::time::Instant::now();
     let report = Orchestrator::dod(&reg, &ctx, &RunInput::default());
+    if ailc_core::timing::enabled() {
+        print_timings(started.elapsed());
+    }
 
     println!("DOD CHECK — Definition of Done ({root})");
     println!(
@@ -477,6 +517,61 @@ fn run_pulse(args: &[String]) -> ExitCode {
 }
 
 /// Проектирование новой фичи «как в ИТ принято»: заготовка спеки + ADR.
+/// Настройка хуков Claude Code. Печатается, а не записывается: файл настроек принадлежит
+/// человеку, и молча менять его инструмент не вправе.
+const STAGE_HOOKS: &str = r#"{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "ailc stage resume \"$CLAUDE_PROJECT_DIR\"" } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "ailc stage status \"$CLAUDE_PROJECT_DIR\"" } ] }
+    ]
+  }
+}"#;
+
+fn run_stage(args: &[String]) -> ExitCode {
+    let action = args.get(2).map(String::as_str).unwrap_or("status");
+    if action == "hooks" {
+        println!(
+            "Добавьте в .claude/settings.json проекта (или объедините с существующим разделом \
+             hooks):\n\n{STAGE_HOOKS}\n\nВ начале каждой сессии модель получит пакет \
+             возобновления, а на каждое сообщение короткий статус этапа."
+        );
+        return ExitCode::from(EXIT_OK);
+    }
+    // Путь: третий аргумент, если это не пара ключ=значение.
+    let (path, rest) = match args.get(3) {
+        Some(p) if !p.contains('=') => (p.clone(), &args[4.min(args.len())..]),
+        _ => (".".to_string(), &args[3.min(args.len())..]),
+    };
+    let mut obj = serde_json::Map::new();
+    obj.insert(
+        "action".into(),
+        serde_json::Value::String(action.to_string()),
+    );
+    for kv in rest {
+        if let Some((k, v)) = kv.split_once('=') {
+            obj.insert(
+                k.trim().to_string(),
+                serde_json::Value::String(v.to_string()),
+            );
+        }
+    }
+    let ctx = Ctx::new(&path);
+    if !ctx.root.is_dir() {
+        eprintln!("ailc stage: каталога {path} нет");
+        return ExitCode::from(EXIT_ERROR);
+    }
+    let profile = ailc_core::profile::ensure(&ctx);
+    let _ = ailc_core::process::init(&ctx, &profile);
+    let mut reg = Registry::new();
+    ailc_capabilities::register_core(&mut reg);
+    let r = ailc_core::process::handle(&ctx, Some(&reg), &serde_json::Value::Object(obj));
+    println!("{}", r.text);
+    ExitCode::from(if r.error { EXIT_FAILED } else { EXIT_OK })
+}
+
 fn run_design(args: &[String]) -> ExitCode {
     let feature = match args.get(2) {
         Some(f) if !f.trim().is_empty() => f.clone(),

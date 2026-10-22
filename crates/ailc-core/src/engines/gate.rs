@@ -104,6 +104,7 @@ impl GateRunner {
         pack: &PolicyPack,
         exclude: &[&str],
     ) -> GateReport {
+        let _sources = crate::source_cache::RunScope::enter();
         // Инкрементальность (T24): статический прогон гейта переиспользуется, когда дерево,
         // политика и версия бинаря не изменились. Ключ включает состав политики, поэтому
         // ослабление или ужесточение правил кэш обесценивает. Проверки семейства verify
@@ -137,49 +138,74 @@ impl GateRunner {
         let mut checks_skipped = Vec::new();
         let mut tools_failed = Vec::new();
 
-        for cap in reg.all() {
-            let m = cap.manifest();
-            if m.mutates {
-                continue;
-            }
-            // Явно исключённые вызывающим capability не исполняются: их прямой прогон
-            // делает сам вызывающий (путь DoD), а двойное исполнение тяжёлого анализа
-            // недопустимо.
-            if exclude.contains(&m.id) {
-                continue;
-            }
-            // Глубокий sast/taint включаем по ИМЕНИ как пол безопасности даже при
-            // Tier::Enterprise (T36); прочие не-Core capability в авто-гейт не идут, чтобы
-            // тяжёлый разбор не запускался в каждом цикле.
-            let is_floor = SECURITY_FLOOR_IDS.contains(&m.id);
-            if m.tier != Tier::Core && !is_floor {
-                continue;
-            }
-            // Фильтр по семействам политики применяется и к полу безопасности: если старший
-            // явно исключил Security из families, навязывать глубокий скан мы не вправе.
-            if !policy.families.is_empty() && !policy.families.contains(&m.family) {
-                continue;
-            }
-
-            // Глубокие анализаторы исполняем под таймаутом шага (T36): тяжёлый разбор не
-            // должен завесить детерминированный цикл. Прочие capability дешёвые, зовём
-            // напрямую. Полу безопасности берём ВЛАДЕЮЩИЙ хэндл (Arc), чтобы передать его в
-            // отсоединённый поток: по таймауту мы перестаём ждать, не блокируясь на join
-            // зависшего шага (как в pipeline).
-            let result = if is_floor {
-                match reg.get_arc(m.id) {
-                    Some(owned) => run_with_timeout(owned, ctx, input, SECURITY_FLOOR_TIMEOUT),
-                    // Хэндл по id обязан существовать (мы только что взяли его из all()),
-                    // но на всякий случай не паникуем, а зовём напрямую.
-                    None => cap.run(ctx, input).map_err(|e| e.to_string()),
+        // Отбор применимых capability. Порядок отбора сохраняется и при параллельном
+        // исполнении ниже, поэтому состав и порядок находок от него не зависят.
+        let selected: Vec<(&std::sync::Arc<dyn crate::Capability>, bool)> = reg
+            .all()
+            .iter()
+            .filter_map(|cap| {
+                let m = cap.manifest();
+                if m.mutates {
+                    return None;
                 }
+                // Явно исключённые вызывающим capability не исполняются: их прямой прогон
+                // делает сам вызывающий (путь DoD), а двойное исполнение тяжёлого анализа
+                // недопустимо.
+                if exclude.contains(&m.id) {
+                    return None;
+                }
+                // Глубокий sast/taint включаем по ИМЕНИ как пол безопасности даже при
+                // Tier::Enterprise (T36); прочие не-Core capability в авто-гейт не идут,
+                // чтобы тяжёлый разбор не запускался в каждом цикле.
+                let is_floor = SECURITY_FLOOR_IDS.contains(&m.id);
+                if m.tier != Tier::Core && !is_floor {
+                    return None;
+                }
+                // Фильтр по семействам политики применяется и к полу безопасности: если
+                // старший явно исключил Security из families, навязывать глубокий скан мы
+                // не вправе.
+                if !policy.families.is_empty() && !policy.families.contains(&m.family) {
+                    return None;
+                }
+                Some((cap, is_floor))
+            })
+            .collect();
+
+        // Исполнение ПАРАЛЛЕЛЬНОЕ (ширина не больше числа ядер). Прежде проверки шли строго
+        // одна за другой, и время гейта равнялось сумме времён всех проверок; замер
+        // (`AILC_TIMINGS`) показал, что так гейт занимал около четверти прогона DoD.
+        // Проверки гейта немутирующие, поэтому одновременное исполнение безопасно, а
+        // повторное чтение и разбор одних и тех же файлов снимает общий кэш исходников.
+        //
+        // Глубокие анализаторы исполняем под таймаутом шага (T36): тяжёлый разбор не
+        // должен завесить детерминированный цикл. Полу безопасности берём ВЛАДЕЮЩИЙ хэндл
+        // (Arc), чтобы передать его в отсоединённый поток: по таймауту мы перестаём ждать,
+        // не блокируясь на join зависшего шага (как в pipeline). Паника прочих capability
+        // ловится помощником `par_map` и, как и паника пола безопасности, считается сбоем
+        // инструмента, а не обрывает весь гейт.
+        let results = crate::pipeline::par_map(&selected, |(cap, is_floor)| {
+            let id = cap.manifest().id;
+            let started = Instant::now();
+            let result = if *is_floor {
+                run_with_timeout(
+                    std::sync::Arc::clone(cap),
+                    ctx,
+                    input,
+                    SECURITY_FLOOR_TIMEOUT,
+                )
             } else {
                 cap.run(ctx, input).map_err(|e| e.to_string())
             };
+            crate::timing::record("гейт", id, started.elapsed());
+            result
+        });
 
+        for ((cap, _), result) in selected.iter().zip(results) {
+            let id = cap.manifest().id;
+            let result = result.unwrap_or_else(|p| Err(crate::pipeline::panic_message(p.as_ref())));
             match result {
                 Ok(out) => Self::record_outcome(
-                    m.id,
+                    id,
                     &out,
                     &mut findings,
                     &mut checks_run,
@@ -191,8 +217,8 @@ impl GateRunner {
                 // Score и человек отличали поломку от «нечего проверять», и учитываем в
                 // `tools_failed`, чтобы сбой снимал вердикт, а не выглядел чистым прогоном.
                 Err(e) => {
-                    checks_skipped.push((m.id.to_string(), format!("сбой инструмента: {e}")));
-                    tools_failed.push((m.id.to_string(), e));
+                    checks_skipped.push((id.to_string(), format!("сбой инструмента: {e}")));
+                    tools_failed.push((id.to_string(), e));
                 }
             }
         }
@@ -453,9 +479,15 @@ fn run_with_timeout(
     let deadline = Instant::now() + budget;
     let (tx, rx) = mpsc::channel();
     let (ctx2, input2) = (ctx.clone(), input.clone());
+    // Флаг кооперативной отмены: по таймауту поднимается, и обход файлов внутри
+    // анализатора прекращается, освобождая ядро, вместо того чтобы отсоединённый поток
+    // дорабатывал результат, который уже никто не ждёт.
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cancel2 = std::sync::Arc::clone(&cancel);
     std::thread::spawn(move || {
-        let outcome =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cap.run(&ctx2, &input2)));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::pipeline::with_cancel(&cancel2, || cap.run(&ctx2, &input2))
+        }));
         // Получатель мог уже уйти по таймауту: ошибку отправки игнорируем.
         let _ = tx.send(outcome);
     });
@@ -464,10 +496,13 @@ fn run_with_timeout(
         Ok(Ok(Ok(out))) => Ok(out),
         Ok(Ok(Err(e))) => Err(e.to_string()),
         Ok(Err(_panic)) => Err("глубокий анализатор паниковал".to_string()),
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
-            "глубокий анализатор превысил лимит времени ({}с)",
-            budget.as_secs()
-        )),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            Err(format!(
+                "глубокий анализатор превысил лимит времени ({}с)",
+                budget.as_secs()
+            ))
+        }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             Err("глубокий анализатор прерван без результата".to_string())
         }

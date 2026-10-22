@@ -714,7 +714,12 @@ fn install_agent_rule(req: &Value) {
         перед сдачей?»). ailc адаптивно построит план, прогонит проверки, при нехватке\n\
         довызовет ещё инструменты, безопасно починит формат/линт и вынесет ДЕТЕРМИНИРОВАННЫЙ\n\
         вердикт (гарантию даёт гейт, не нейросеть). Быстрый детерминированный статус без LLM —\n\
-        инструменты `dod` (готово?) и `sarif` (полный скан для CI).";
+        инструменты `dod` (готово?) и `sarif` (полный скан для CI).\n\n\
+        Работа идёт по процессу из девяти этапов (идея, ландшафт, ADR, критерии,\n\
+        согласование, разработка, проверка качества, развёртывание, приёмка). В начале\n\
+        каждой сессии вызови инструмент ailc `stage` с action=resume: он скажет этап,\n\
+        точку остановки и одно следующее действие. Не решай сам, что делать дальше,\n\
+        и не меняй требования после согласования: для этого есть action=change.";
 
     // Пишем строго фиксированные имена напрямую под каноническим корнем. Контейнмент:
     // итоговый путь обязан лежать ВНУТРИ корня, иначе пропускаем (защита от подмены через
@@ -755,6 +760,21 @@ fn install_agent_rule(req: &Value) {
     // Паспорт проекта: определяется и пишется в .ailc/profile.md при каждом подключении
     // (идемпотентный авто-блок). От него зависят умолчания проверок и жёсткость осей DoD.
     let profile = ailc_core::profile::ensure(&ctx);
+
+    // Процесс поставки: шаблоны в .ailc/templates/ и состояние этапа. Идемпотентно:
+    // правки команды в шаблонах не перезаписываются, устаревшие получают рядом `.new`.
+    let tpl = ailc_core::process::init(&ctx, &profile);
+    if !tpl.outdated.is_empty() {
+        ailc_core::memory_log::note(
+            &ctx,
+            "templates",
+            "",
+            &format!(
+                "вышли новые версии шаблонов: {}. Рядом лежат файлы .new, перенесите нужное вручную",
+                tpl.outdated.join(", ")
+            ),
+        );
+    }
 
     // Бутстрап рабочей памяти: активный контекст получает паспорт вместо пустой
     // заглушки. Дальше журнал ведёт сам сервер при каждом вызове инструмента.
@@ -854,6 +874,7 @@ fn handle_tool_call(
         "dod" => run_dod_tool(reg, &args),
         "sarif" => run_sarif_tool(reg, &args),
         "design" => run_design_tool(reg, &args),
+        "stage" => run_stage_tool(reg, &args),
         other => return Err((-32602, format!("неизвестный инструмент: {other}"))),
     };
     // Серверная память: след о вызове оставляет сам сервер, не агент. Побочный
@@ -889,15 +910,53 @@ fn handle_fast(method: &str, params: Option<&Value>) -> Result<Value, (i64, Stri
         }
         // Готовые промпты среды: «введи меня в курс дела» появляется у пользователя
         // в списке команд редактора и опирается на память, которую ведёт сервер.
-        "prompts/list" => Ok(json!({ "prompts": [{
-            "name": "onboarding",
-            "description": "Введи меня в курс дела: что за проект, что сделано, что дальше (по памяти AILC)"
-        }] })),
+        "prompts/list" => {
+            let mut prompts = vec![json!({
+                "name": "onboarding",
+                "description": "Введи меня в курс дела: что за проект, что сделано, что дальше (по памяти AILC)"
+            })];
+            prompts.push(json!({
+                "name": "resume",
+                "description": "Продолжить работу с точки остановки (этап процесса, прерванный шаг, следующее действие)"
+            }));
+            for st in &ailc_core::process::STAGES {
+                prompts.push(json!({
+                    "name": format!("stage-{}", st.number),
+                    "description": format!("Этап {}: {}", st.number, st.title)
+                }));
+            }
+            Ok(json!({ "prompts": prompts }))
+        }
         "prompts/get" => {
             let name = params
                 .and_then(|p| p.get("name"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
+            if name == "resume" {
+                return Ok(json!({ "messages": [{
+                    "role": "user",
+                    "content": { "type": "text", "text":
+                        "Вызови MCP-инструмент ailc `stage` с action=resume и выполни раздел \
+                         «СДЕЛАЙ СЕЙЧАС» из ответа. Не трать контекст на чтение истории: всё \
+                         нужное уже в пакете возобновления, остальное подгружай по ссылкам." }
+                }] }));
+            }
+            if let Some(n) = name
+                .strip_prefix("stage-")
+                .and_then(|n| n.parse::<u8>().ok())
+                .filter(|n| (1..=9).contains(n))
+            {
+                let st = ailc_core::process::stage_info(n);
+                return Ok(json!({ "messages": [{
+                    "role": "user",
+                    "content": { "type": "text", "text": format!(
+                        "Работаем по этапу {n} «{}». Прочитай карточку .ailc/templates/{} \
+                         и вызови инструмент ailc `stage` с action=status, чтобы узнать, что \
+                         осталось до перехода. Выполняй шаги карточки по порядку.",
+                        st.title, st.card
+                    ) }
+                }] }));
+            }
             if name != "onboarding" {
                 return Err((-32602, format!("неизвестный промпт: {name}")));
             }
@@ -920,6 +979,7 @@ fn handle_fast(method: &str, params: Option<&Value>) -> Result<Value, (i64, Stri
             dod_schema(),
             sarif_schema(),
             design_schema(),
+            stage_schema(),
         ] })),
         "ping" => Ok(json!({})),
         // Уведомления (в том числе `notifications/initialized`) ответа не имеют вовсе:
@@ -1424,6 +1484,49 @@ fn run_capability(reg: &Registry, args: &Value) -> Value {
 // ───────────────────── Гибрид-инструменты (агент IDE зовёт как шаги) ─────────────────────
 // Унификация «за рамками оркестратора»: dod/sarif/design — детерминированные действия,
 // которые модель IDE может ставить шагом своего пайплайна, а не только ailc внутри plan.
+
+fn stage_schema() -> Value {
+    json!({
+        "name": "stage",
+        "description": "Процесс поставки из 9 этапов (идея, ландшафт, ADR, критерии, согласование, разработка, проверка качества, развёртывание, приёмка) и план работ. В НАЧАЛЕ КАЖДОЙ СЕССИИ вызывай action=resume: получишь этап, точку остановки, прерванный шаг и одно следующее действие. Переход между этапами разрешает детерминированный гейт. После согласования требования заморожены: новое оформляется только action=change.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Путь к проекту (по умолчанию текущая папка)" },
+                "action": { "type": "string", "enum": ["status", "resume", "advance", "approve", "return", "change", "accept", "scenario", "plan", "plan_add", "step_begin", "step_done"], "description": "resume: где остановились и что делать; status: что осталось до перехода; advance: перейти дальше (проверяет гейт); approve: согласование на этапе 5 (только по словам человека); return: возврат по циклу; change: запрос на изменение требований; accept: замеры критериев на этапе 9; plan_add/step_begin/step_done: план из мелких шагов" },
+                "reason": { "type": "string", "description": "Причина или дословные слова человека (обязательно для approve, return, change и подписи приёмки)" },
+                "cycle": { "type": "string", "description": "Для return: А (не согласовано), В (гейт качества не пройден), Г (критерий приёмки не выполнен)" },
+                "version": { "type": "string", "description": "Для advance с этапа 8: развёрнутая версия vX.Y.Z (новая, с git-тегом)" },
+                "scenario": { "type": "string", "enum": ["mvp", "feature"], "description": "Для action=scenario" },
+                "title": { "type": "string", "description": "Для plan_add и change: название шага или запроса" },
+                "task": { "type": "string", "description": "Для plan_add: задача, к которой относится шаг" },
+                "files": { "type": "array", "items": { "type": "string" }, "description": "Для plan_add: файлы, которые меняет шаг (не больше трёх)" },
+                "read_first": { "type": "array", "items": { "type": "string" }, "description": "Для plan_add: что прочитать перед шагом" },
+                "check": { "type": "string", "description": "Для plan_add: команда или cap:<id>, успех которой означает, что шаг сделан" },
+                "step": { "type": "integer", "description": "Для step_begin и step_done: номер шага" },
+                "note": { "type": "string", "description": "Для step_done: короткая заметка о сделанном" },
+                "budget_tokens": { "type": "integer", "description": "Для resume: бюджет пакета в токенах (по умолчанию 6000)" }
+            }
+        }
+    })
+}
+
+fn run_stage_tool(reg: &Registry, args: &Value) -> Value {
+    let path = args.get("path").and_then(Value::as_str).unwrap_or(".");
+    let ctx = Ctx::new(path);
+    if !ctx.root.is_dir() {
+        return json!({ "content": [{ "type": "text", "text": format!("ОШИБКА: каталога {path} нет") }], "isError": true });
+    }
+    let r = ailc_core::process::handle(&ctx, Some(reg), args);
+    let mut out = json!({
+        "content": [{ "type": "text", "text": r.text }],
+        "structuredContent": r.data
+    });
+    if r.error {
+        out["isError"] = json!(true);
+    }
+    out
+}
 
 fn dod_schema() -> Value {
     json!({
@@ -1930,8 +2033,8 @@ mod tests {
         let tools = handle_fast("tools/list", None).expect("список инструментов отдаётся");
         assert_eq!(
             tools["tools"].as_array().map(Vec::len),
-            Some(7),
-            "перечислены все семь инструментов: {tools}"
+            Some(8),
+            "перечислены все восемь инструментов: {tools}"
         );
 
         let init = handle_fast(

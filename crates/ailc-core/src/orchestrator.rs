@@ -441,6 +441,7 @@ impl Orchestrator {
     /// Verifier'ом и возвращает только подтверждённые. Без intent-роутинга —
     /// исчерпывающее покрытие для отчётов (SARIF) и CI.
     pub fn scan_all(reg: &Registry, ctx: &Ctx, input: &RunInput) -> ScanReport {
+        let _sources = crate::source_cache::RunScope::enter();
         // Инкрементальность: если дерево, политика и версия бинаря не изменились с
         // прошлого прогона, результат берётся из кэша. Кэш применяется только при
         // ПОЛНОМ совпадении отпечатка, поэтому ускоряет повторный вызов и не способен
@@ -635,6 +636,9 @@ impl Orchestrator {
     /// нулевой). Третье состояние не даёт пустому/несорсовому репозиторию или
     /// прогону без тулчейна выдать ложно-зелёный вердикт.
     pub fn dod(reg: &Registry, ctx: &Ctx, input: &RunInput) -> DodReport {
+        // Одна область кэша исходников на весь вердикт: гейт и прямой прогон осей пола
+        // безопасности читают и разбирают каждый файл один раз (см. `source_cache`).
+        let _sources = crate::source_cache::RunScope::enter();
         let (pack, policy_note) = policy::load(&ctx.root);
         // Паспорт проекта: от него зависит, какие профильные оси считать жёсткими
         // (доступность у UI-проекта, комплаенс у проекта с признаками РФ и ПДн,
@@ -682,7 +686,63 @@ impl Orchestrator {
             "security.scan/sast",
             "security.scan/taint",
         ];
-        let mut report = GateRunner::run_excluding(reg, ctx, input, &policy, DIRECT_SECURITY_CAPS);
+        // Прямые оси: пол безопасности (см. T36) и verify-оси (см. T86). verify/test стоит
+        // первым намеренно: это самая долгая ось (прогон тестов проекта), и при числе ядер
+        // меньше числа осей она должна стартовать сразу, а не после статических проверок.
+        const DIRECT_AXES: [&str; 7] = [
+            "verify/test",
+            "security.scan/secret",
+            "security.scan/sast",
+            "security.scan/taint",
+            "verify/lint",
+            "verify/coverage",
+            "verify/api-break",
+        ];
+
+        // Гейт и прямые оси исполняются ОДНОВРЕМЕННО. Прежде прямые оси запускались только
+        // после гейта и друг за другом, поэтому статические проверки и прогон тестов
+        // складывались по времени. Оси не зависят от отчёта гейта: каждая считает свои
+        // находки в СОБСТВЕННЫЕ счётчики, которые сливаются ниже, поэтому итог не зависит
+        // от порядка завершения потоков. Оба потребителя работают в одной области кэша
+        // исходников, открытой в начале `dod`, и делят прочитанные файлы.
+        let (mut report, axis_runs) = std::thread::scope(|s| {
+            let gate = crate::pipeline::spawn_scoped(s, || {
+                crate::timing::measure("фаза", "гейт целиком", || {
+                    GateRunner::run_excluding(reg, ctx, input, &policy, DIRECT_SECURITY_CAPS)
+                })
+            });
+            let axes = crate::pipeline::par_map(&DIRECT_AXES, |&id| {
+                let heavy = SECURITY_FLOOR_IDS.contains(&id);
+                // Долг применим только к статическим сканерам; verify-оси (тесты, линт,
+                // покрытие, контракт API) обязаны проходить всегда, их долг не спасает.
+                let base_for_axis = if id.starts_with("verify/") {
+                    None
+                } else {
+                    Some(&base)
+                };
+                let mut local: HashMap<&str, (usize, usize)> = HashMap::new();
+                let mut local_debt = 0usize;
+                let (outcome, refuted) = crate::timing::measure("прямая ось", id, || {
+                    Self::run_axis_direct(
+                        reg,
+                        ctx,
+                        input,
+                        id,
+                        heavy,
+                        &mut local,
+                        base_for_axis,
+                        &mut local_debt,
+                    )
+                });
+                // run_axis_direct пишет находки только под собственный id оси.
+                let counts = local
+                    .into_values()
+                    .fold((0, 0), |(t, h), (dt, dh)| (t + dt, h + dh));
+                (outcome, refuted, counts, local_debt)
+            });
+            let report = gate.join().unwrap_or_else(|p| std::panic::resume_unwind(p));
+            (report, axes)
+        });
         GateRunner::escalate_unfinished(&mut report);
 
         // Оси, исход которых считаем НАПРЯМУЮ из выхода capability, а не из агрегата
@@ -743,42 +803,36 @@ impl Orchestrator {
             }
         }
 
-        // Прямой прогон осей: пол безопасности (см. T36) и verify-оси (см. T86).
-        // Исполняем capability напрямую, классифицируем исход через
-        // `CapabilityOutput::outcome` (Ran/Skipped/Failed), подмешиваем верифицированные
-        // находки в by_src. Тяжёлый SAST/taint защищён таймаутом.
+        // Слияние результатов прямых осей (исполнены выше одновременно с гейтом).
+        // Исход классифицирован через `CapabilityOutput::outcome` (Ran/Skipped/Failed),
+        // верифицированные находки оси подмешиваются в by_src под её id. Паника оси
+        // считается сбоем инструмента этой оси, а не обрывает весь вердикт.
         let mut direct_outcomes: HashMap<&str, CheckOutcome> = HashMap::new();
         // Число опровергнутых верификатором находок по оси (см. T03 для secret).
         let mut direct_refuted: HashMap<&str, usize> = HashMap::new();
-        for id in [
-            "security.scan/secret",
-            "security.scan/sast",
-            "security.scan/taint",
-            "verify/test",
-            "verify/lint",
-            "verify/coverage",
-            "verify/api-break",
-        ] {
-            let heavy = SECURITY_FLOOR_IDS.contains(&id);
-            // Долг применим только к статическим сканерам; verify-оси (тесты, линт,
-            // покрытие, контракт API) обязаны проходить всегда, их долг не спасает.
-            let base_for_axis = if id.starts_with("verify/") {
-                None
-            } else {
-                Some(&base)
-            };
-            let (outcome, refuted) = Self::run_axis_direct(
-                reg,
-                ctx,
-                input,
-                id,
-                heavy,
-                &mut by_src,
-                base_for_axis,
-                &mut debt,
-            );
-            direct_outcomes.insert(id, outcome);
-            direct_refuted.insert(id, refuted);
+        for (id, run) in DIRECT_AXES.iter().copied().zip(axis_runs) {
+            match run {
+                Ok((outcome, refuted, (total, high), local_debt)) => {
+                    // Запись создаётся и при нуле находок: прежде run_axis_direct заводил
+                    // её для каждой выполненной оси, и наличие ключа сохраняется.
+                    if outcome.did_run() {
+                        let e = by_src.entry(id).or_default();
+                        e.0 += total;
+                        e.1 += high;
+                    }
+                    debt += local_debt;
+                    direct_outcomes.insert(id, outcome);
+                    direct_refuted.insert(id, refuted);
+                }
+                Err(p) => {
+                    let msg = crate::pipeline::panic_message(p.as_ref());
+                    direct_outcomes.insert(
+                        id,
+                        CheckOutcome::Failed(format!("{id}: анализатор паниковал: {msg}")),
+                    );
+                    direct_refuted.insert(id, 0);
+                }
+            }
         }
 
         let ran = |id: &str| report.checks_run.iter().any(|x| x == id);
@@ -901,6 +955,27 @@ impl Orchestrator {
                 Some("не выполнялась".into())
             },
         });
+
+        // Ось процесса «Требования заморожены» появляется только после согласования
+        // (этап 5) и до новой итерации. Она жёсткая: сдача кода, написанного по тихо
+        // изменённым требованиям, означает сдачу не того, что согласовал заказчик.
+        if let Some(st) = crate::process::load(ctx).filter(|s| s.frozen) {
+            let v = crate::process::frozen_violations(ctx, &st);
+            if !v.is_empty() {
+                hard_failed = true;
+            }
+            axes.push(DodAxis {
+                name: "Требования заморожены",
+                hard: true,
+                ran: true,
+                findings: v.len(),
+                high: 0,
+                ok: v.is_empty(),
+                refuted: 0,
+                out_of_scope: 0,
+                not_run_reason: None,
+            });
+        }
 
         // Профильная ось «Доступность UI» — сумма по quality.ui/*; появляется только у
         // проекта с интерфейсом.
@@ -1137,15 +1212,21 @@ impl Orchestrator {
             let ctx_owned = ctx.clone();
             let input_owned = input.clone();
             let (tx, rx) = mpsc::channel();
+            // Флаг кооперативной отмены, поднимаемый по таймауту (см. gate::run_with_timeout).
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let cancel2 = std::sync::Arc::clone(&cancel);
             std::thread::spawn(move || {
-                let res = cap.run(&ctx_owned, &input_owned);
+                let res =
+                    crate::pipeline::with_cancel(&cancel2, || cap.run(&ctx_owned, &input_owned));
                 // Получатель мог уйти по таймауту — ошибку отправки игнорируем.
                 let _ = tx.send(res);
             });
             match rx.recv_timeout(SECURITY_FLOOR_TIMEOUT) {
                 Ok(r) => r,
-                // Зависание сверх бюджета: фиксируем как сбой инструмента, не выполнение.
+                // Зависание сверх бюджета: фиксируем как сбой инструмента, не выполнение,
+                // и просим анализатор кооперативно прекратить работу.
                 Err(_) => {
+                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                     return (
                         CheckOutcome::Failed(format!(
                             "{id}: превышен таймаут {} c (глубокий анализ не завершился)",

@@ -21,7 +21,6 @@ use ailc_core::engines::scan::{Matcher, Rule, SOURCE_CODE};
 use ailc_core::engines::walk::{is_test_path, walk_stats, WalkStats, MAX_SCAN_BYTES};
 use ailc_core::registry::Registry;
 use ailc_core::Capability;
-use std::fs;
 use std::path::Path;
 
 use crate::{scan_manifest, ScanCapability, TARGET_SCHEMA};
@@ -301,7 +300,7 @@ impl Capability for LlmTaintCapability {
                 if !is_source_ext(path) {
                     return;
                 }
-                let content = match fs::read_to_string(path) {
+                let content = match ailc_core::source_cache::read_to_string(path) {
                     Ok(c) => c,
                     Err(_) => return,
                 };

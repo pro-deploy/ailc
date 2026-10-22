@@ -269,6 +269,12 @@ fn walk_inner(
     };
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
+        // Кооперативная отмена: шаг, чей бюджет истёк, прекращает обход между записями
+        // вместо того, чтобы дорабатывать вхолостую (результат его уже никто не ждёт).
+        // Вне отменяемого контекста опрос всегда даёт «не отменено» и ничего не меняет.
+        if crate::pipeline::cancellation_requested() {
+            return Ok(());
+        }
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -795,6 +801,30 @@ mod tests {
             stats.unreadable
         );
         assert!(!stats.note().contains("НЕ ПРОЧИТАНО"));
+    }
+
+    #[test]
+    fn обход_прекращается_по_флагу_отмены() {
+        let t = TempTree::new("walk-отмена");
+        for i in 0..20 {
+            t.write(&format!("src/f{i:02}.rs"), "fn f() {}");
+        }
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut seen = 0usize;
+        crate::pipeline::with_cancel(&flag, || {
+            walk(t.path(), &mut |_| {
+                seen += 1;
+                // После третьего файла бюджет «истекает».
+                if seen == 3 {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            })
+            .unwrap();
+        });
+        assert_eq!(seen, 3, "после отмены обход не должен отдавать файлы");
+        // Без отмены обход полный.
+        let (all, _) = collect(t.path(), WalkMode::Code);
+        assert_eq!(all.len(), 20);
     }
 
     #[test]

@@ -107,11 +107,12 @@ impl Capability for FeatureSpec {
         // ADR (Nygard) — отдельной записью в журнал решений, со ссылкой на фичу.
         let adr_name = Store::alloc_id(ctx, "decisions", "md")?;
         let number = adr_name.split('.').next().unwrap_or(&adr_name);
-        let adr = format!(
-            "# ADR-{number}: {feature}\n\n- Статус: предложено\n\n\
-## Контекст\n_Силы и обстоятельства: что в проекте сейчас, почему нужна фича — заполни._\n\n\
-## Решение\n_Что решено сделать — заполни._\n\n\
-## Последствия\n_Что станет проще/сложнее после — заполни._\n"
+        let adr = ailc_core::process::templates::render_adr(
+            ctx,
+            number,
+            &feature,
+            &ailc_core::answers::today(),
+            "нет",
         );
         Store::write(ctx, "decisions", &adr_name, &adr)?;
         let adr_rel = format!(".ailc/decisions/{adr_name}");

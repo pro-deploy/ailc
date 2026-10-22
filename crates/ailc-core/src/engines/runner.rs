@@ -194,7 +194,18 @@ impl Runner {
         if !Self::available(bin) {
             return ToolResult::skipped(format!("инструмент `{bin}` не установлен"));
         }
-        let mut child = match Command::new(bin)
+        let mut cmd = Command::new(bin);
+        // Собственные настройки инструмента (`AILC_*`) в инструменты проекта НЕ
+        // передаются. Они управляют самим ailc, а унаследованные дочерним процессом меняют
+        // поведение чужих тестов: прогон `ailc dod` с `AILC_NO_CACHE=1` ронял тесты кэша
+        // в проекте, который сам использует эти переменные, и ось тестов показывала сбой,
+        // вызванный не кодом, а окружением проверяющего.
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("AILC_") {
+                cmd.env_remove(&key);
+            }
+        }
+        let mut child = match cmd
             .args(args)
             .current_dir(&ctx.root)
             .stdin(Stdio::null())

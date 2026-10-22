@@ -516,7 +516,7 @@ impl Capability for AntipatternCheck {
                 Ok(_) => {}
                 Err(_) => return,
             }
-            let content = match fs::read_to_string(path) {
+            let content = match ailc_core::source_cache::read_to_string(path) {
                 Ok(c) => c,
                 Err(_) => return,
             };

@@ -157,16 +157,10 @@ impl ApiDoc {
 /// грамматика недоступна либо разбор не состоялся: отсутствие описаний честнее
 /// приблизительных описаний.
 fn items_of_file(lang: &str, content: &str, rel: &str) -> Vec<ApiItem> {
-    use tree_sitter::Parser;
-
     let Some(language) = ts_language(lang) else {
         return Vec::new();
     };
-    let mut parser = Parser::new();
-    if parser.set_language(&language).is_err() {
-        return Vec::new();
-    }
-    let Some(tree) = parser.parse(content, None) else {
+    let Some(tree) = crate::source_cache::parse(content, &language) else {
         return Vec::new();
     };
 

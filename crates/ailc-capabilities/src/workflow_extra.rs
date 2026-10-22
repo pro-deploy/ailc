@@ -93,17 +93,17 @@ impl Capability for GenerateAdr {
         let superseded = superseded_ref(title);
         let title_clean = strip_supersede_clause(title);
 
-        let body = format!(
-            "# ADR-{number}: {title_clean}\n\n\
-             - Статус: предложено\n\
-             - Дата: {date}\n\
-             - Заменяет: {replaces}\n\
-             - Заменено: нет\n\n\
-             ## Контекст\n\n## Решение\n\n## Последствия\n",
-            date = today(),
-            replaces = superseded
-                .map(|n| format!("ADR-{n}"))
-                .unwrap_or_else(|| "нет".to_string()),
+        // Запись строится по шаблону проекта .ailc/templates/adr.md (или встроенному):
+        // разделы с подсказками ведут слабую модель, а гейт процесса проверяет их заполнение.
+        let replaces = superseded
+            .map(|n| format!("ADR-{n}"))
+            .unwrap_or_else(|| "нет".to_string());
+        let body = ailc_core::process::templates::render_adr(
+            ctx,
+            &number.to_string(),
+            &title_clean,
+            &today(),
+            &replaces,
         );
         Store::write(ctx, NS_DECISIONS, &name, &body)?;
 

@@ -1346,6 +1346,23 @@ pub fn some_tests_passed(blob: &str) -> bool {
     false
 }
 
+/// Признак сбоя САМОГО инструмента тестов (сборка, импорт, тулчейн) по выводу прогона.
+///
+/// Прогон, в котором тесты доказанно исполнялись (ненулевое число пройденных), сбоем
+/// инструмента не считается никогда, независимо от кода выхода: при нулевом коде это
+/// пройденные тесты, при ненулевом это упавшие тесты, то есть находка о коде, а не
+/// поломка инструмента. Ошибка компиляции останавливает cargo до запуска тестов, поэтому
+/// пройденных в её выводе нет, и она по-прежнему распознаётся как сбой. Маркеры сбоя ищутся подстрокой по всему выводу, а
+/// успешный прогон законно содержит их сам: тесты, проверяющие изоляцию сбоев через
+/// `catch_unwind`, печатают «thread ... panicked», тесты файловых операций печатают «No
+/// such file or directory», а имена тестов попадают в вывод дословно. Прежде из-за этого
+/// полностью зелёный прогон классифицировался как «инструмент не отработал», и ось тестов
+/// Definition of Done не засчитывалась. Настоящий сбой сборки даёт ненулевой код выхода
+/// и распознаётся, как и раньше.
+fn test_tool_failed(blob: &str) -> bool {
+    !some_tests_passed(&blob.to_lowercase()) && looks_like_tool_failure(blob)
+}
+
 pub struct TestRun {
     manifest: CapabilityManifest,
 }
@@ -1409,7 +1426,7 @@ impl Capability for TestRun {
         // состоялась. Классифицируем его как осознанный пропуск со причиной-сбоем,
         // который агрегатор Волны 2 через CapabilityOutput::outcome() распознает как
         // Failed (а не Skipped и не Ran), потому что looks_like_tool_failure истинна.
-        if looks_like_tool_failure(&blob) {
+        if test_tool_failed(&blob) {
             let reason = format!(
                 "verify/test ({label}): инструмент не отработал (сборка/импорт), прогон тестов не состоялся"
             );
@@ -2108,6 +2125,26 @@ mod tests {
             "running 0 tests\ntest result: ok. 0 passed; 0 failed"
         ));
         assert!(!some_tests_passed("no tests ran in 0.01s"));
+    }
+
+    #[test]
+    fn зелёный_прогон_с_паникой_внутри_тестов_не_сбой_инструмента() {
+        // Вывод полностью успешного `cargo test`, в котором тест намеренно паникует под
+        // catch_unwind. Прежде он давал «инструмент не отработал».
+        let green = "running 2 tests\n\
+                     thread 'tests::изоляция' panicked at src/lib.rs:10:5:\nсбой\n\
+                     test tests::изоляция ... ok\n\
+                     test result: ok. 2 passed; 0 failed; 0 ignored";
+        assert!(!test_tool_failed(green));
+        // Тот же вывод с ненулевым кодом означает упавшие тесты, а не поломку инструмента.
+        let red = "thread 'tests::a' panicked at src/lib.rs:3:5\n\
+                   test result: FAILED. 5 passed; 1 failed; 0 ignored";
+        assert!(!test_tool_failed(red));
+        // Ошибка сборки распознаётся, как и раньше.
+        let broken = "error[E0277]: trait bound not satisfied\ncould not compile `crate`";
+        assert!(test_tool_failed(broken));
+        // Вывод без пройденных тестов не доказывает их исполнения.
+        assert!(test_tool_failed("running 0 tests\nthread 'main' panicked"));
     }
 
     #[test]

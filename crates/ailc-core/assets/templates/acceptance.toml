@@ -1,0 +1,36 @@
+# ailc-template: acceptance v1
+#
+# Критерии приёмки. Каждый блок [[criterion]] это одно измеримое требование.
+# Подсказка для модели: каждая строка обязана иметь порог (threshold), оператор (op),
+# единицу (unit) и команду замера (command). Слова «быстро», «удобно», «надёжно» без
+# числа гейт не принимает. Команда выполняется в корне проекта через sh -c, а число
+# извлекается из её вывода регулярным выражением extract с одной группой захвата.
+# Для ручной проверки укажи command = "manual": такой критерий подтверждает человек.
+#
+# Поля: id, kind (performance | functional | security | accessibility | regression |
+# compliance | ai-safety), title, threshold, op (<= | >= | == | < | >), unit, command,
+# extract, confirmed_by (кто подтверждает: заказчик, команда).
+#
+# Ниже примеры. Замени их на свои или удали лишние.
+
+[[criterion]]
+id = "perf-api-latency"
+kind = "performance"
+title = "Ответ API записи при 100 запросах в секунду"
+threshold = 300
+op = "<="
+unit = "мс"
+command = "echo 'p95=210'"
+extract = "p95=([0-9.]+)"
+confirmed_by = "заказчик"
+
+[[criterion]]
+id = "func-tests-green"
+kind = "functional"
+title = "Все автотесты проходят"
+threshold = 0
+op = "=="
+unit = "упавших тестов"
+command = "echo 'failed=0'"
+extract = "failed=([0-9]+)"
+confirmed_by = "команда"

@@ -1,0 +1,13 @@
+# ailc-template: step v1
+#
+# Шаг плана. Подсказка для модели: один шаг это одно законченное изменение, которое
+# можно проверить. Если шаг затрагивает больше трёх файлов, разбей его. Поле check
+# обязательно: это команда (выполняется через sh -c) или идентификатор проверки ailc
+# с префиксом "cap:" (например "cap:security.scan/secret"). Шаг считается выполненным
+# только когда check проходит; решение принимает ailc, а не модель.
+
+title = "Добавить модель Appointment и миграцию"
+task = "Хранение записей"
+files = ["src/models/appointment.rs", "migrations/0003_appointments.sql"]
+read_first = ["docs/brief.md", ".ailc/decisions/1.md"]
+check = "cargo test appointment"

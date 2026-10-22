@@ -448,7 +448,7 @@ impl Capability for ConstitutionCheck {
             if !is_source_ext(ext) {
                 return;
             }
-            let content = match fs::read_to_string(path) {
+            let content = match ailc_core::source_cache::read_to_string(path) {
                 Ok(c) => c,
                 Err(_) => return,
             };

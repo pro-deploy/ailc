@@ -103,7 +103,7 @@ pub fn cancellation_requested() -> bool {
 /// Установить клон флага отмены для текущего потока на время вызова `f`, а после
 /// гарантированно снять его. Гарантия снятия (через guard, срабатывающий и при панике
 /// внутри `f`) не оставляет чужой флаг переиспользуемому потоку.
-fn with_cancel<R>(flag: &Arc<AtomicBool>, f: impl FnOnce() -> R) -> R {
+pub(crate) fn with_cancel<R>(flag: &Arc<AtomicBool>, f: impl FnOnce() -> R) -> R {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
@@ -113,6 +113,68 @@ fn with_cancel<R>(flag: &Arc<AtomicBool>, f: impl FnOnce() -> R) -> R {
     CANCEL.with(|c| *c.borrow_mut() = Some(Arc::clone(flag)));
     let _reset = Reset;
     f()
+}
+
+/// Параллельно применить `f` к каждому элементу `items`, сохранив порядок результатов.
+///
+/// Ширина ограничена числом доступных ядер, как и у волны пайплайна: рабочие потоки
+/// разбирают общую очередь по индексу. Потоки областные (`thread::scope`), поэтому
+/// элементы и замыкание можно заимствовать. Паника на одном элементе ловится и
+/// возвращается как `Err` именно этого элемента, остальные доисполняются. Флаг
+/// кооперативной отмены вызывающего потока (если он исполняется шагом пайплайна)
+/// переносится в рабочие потоки, иначе долгие проверки внутри перестали бы его видеть.
+///
+/// Результат детерминирован: i-й элемент выхода всегда соответствует i-му входу, вне
+/// зависимости от того, в каком порядке потоки завершили работу.
+pub(crate) fn par_map<T: Sync, R: Send>(
+    items: &[T],
+    f: impl Fn(&T) -> R + Sync,
+) -> Vec<std::thread::Result<R>> {
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(items.len().max(1));
+    let cancel = CANCEL.with(|c| c.borrow().clone());
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let slots: Vec<Mutex<Option<std::thread::Result<R>>>> =
+        items.iter().map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let Some(item) = items.get(i) else {
+                    break;
+                };
+                let job = || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(item)));
+                let out = match &cancel {
+                    Some(flag) => with_cancel(flag, job),
+                    None => job(),
+                };
+                *slots[i].lock().unwrap_or_else(|e| e.into_inner()) = Some(out);
+            });
+        }
+    });
+    slots
+        .into_iter()
+        .map(|m| {
+            m.into_inner()
+                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(|| Err(Box::new("элемент не исполнен")))
+        })
+        .collect()
+}
+
+/// Исполнить `f` в отдельном областном потоке `s`, перенеся в него флаг кооперативной
+/// отмены вызывающего потока (см. [`par_map`]).
+pub(crate) fn spawn_scoped<'scope, R: Send + 'scope>(
+    s: &'scope std::thread::Scope<'scope, '_>,
+    f: impl FnOnce() -> R + Send + 'scope,
+) -> std::thread::ScopedJoinHandle<'scope, R> {
+    let cancel = CANCEL.with(|c| c.borrow().clone());
+    s.spawn(move || match &cancel {
+        Some(flag) => with_cancel(flag, f),
+        None => f(),
+    })
 }
 
 /// Простой счётный семафор на std (Mutex плюс Condvar), чтобы ограничить число
@@ -254,6 +316,9 @@ impl PipelineEngine {
         pipeline: &Pipeline,
         step_timeout: Duration,
     ) -> (Vec<StepResult>, usize) {
+        // Область общего кэша исходников: шаги всех волн читают и разбирают каждый файл
+        // один раз (см. `source_cache`).
+        let _sources = crate::source_cache::RunScope::enter();
         // Ширина волны: не больше числа доступных ядер. Если запросить не удалось
         // (экзотическая платформа), берём 1, то есть последовательное исполнение, что
         // корректно и безопасно по памяти.
@@ -561,6 +626,14 @@ impl PipelineEngine {
             }
             results.extend(wave);
 
+            // Мутатор мог переписать файлы, причём не сдвинув ни размер, ни время изменения
+            // (грубое разрешение времени у файловой системы). Читатели следующей волны
+            // обязаны увидеть результат мутатора, поэтому общий кэш исходников прогона
+            // сбрасывается целиком.
+            if this_wave.iter().any(|s| is_mutating(&s.capability)) {
+                crate::source_cache::invalidate_all();
+            }
+
             // Отложенные на следующие волны (мутаторы/читатели) плюс ещё не готовые.
             remaining = deferred.into_iter().chain(not_ready).collect();
         }
@@ -570,7 +643,7 @@ impl PipelineEngine {
 }
 
 /// Извлечь человекочитаемое сообщение из payload пойманной паники.
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         format!("шаг паниковал: {s}")
     } else if let Some(s) = payload.downcast_ref::<String>() {
@@ -954,6 +1027,38 @@ mod tests {
             waves_mut, 2,
             "мутатор обязан идти отдельной волной, а читатели следующей"
         );
+    }
+
+    #[test]
+    fn par_map_сохраняет_порядок_и_изолирует_панику() {
+        let items: Vec<u64> = (0..64).collect();
+        let out = par_map(&items, |&i| {
+            // Неравные задержки перемешивают порядок завершения потоков.
+            std::thread::sleep(Duration::from_millis((64 - i) % 7));
+            if i == 13 {
+                panic!("сбой на тринадцатом");
+            }
+            i * 2
+        });
+        assert_eq!(out.len(), items.len());
+        for (i, r) in out.into_iter().enumerate() {
+            match r {
+                Ok(v) => assert_eq!(v, i as u64 * 2),
+                Err(p) => {
+                    assert_eq!(i, 13);
+                    assert!(panic_message(p.as_ref()).contains("тринадцатом"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn par_map_переносит_флаг_отмены_в_рабочие_потоки() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let seen = with_cancel(&flag, || par_map(&[(); 8], |_| cancellation_requested()));
+        assert!(seen.into_iter().all(|r| r.unwrap()));
+        let none = par_map(&[(); 8], |_| cancellation_requested());
+        assert!(none.into_iter().all(|r| !r.unwrap()));
     }
 
     #[test]

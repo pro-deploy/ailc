@@ -14,7 +14,6 @@
 use super::walk::{is_test_path, walk_mode, WalkMode, WalkStats};
 use ailc_contracts::{CapabilityOutput, Ctx, Finding, Location, Result, RunInput, Severity};
 use regex::Regex;
-use std::fs;
 
 /// Предельная длина одной физической строки, после которой она считается
 /// вне охвата. Минифицированные бандлы (один JS-файл в десятки тысяч символов на
@@ -815,7 +814,7 @@ impl ScanEngine {
                     return;
                 }
                 // Бинарь/нечитаемое: пропуск конкретного файла (не всего capability).
-                let content = match fs::read_to_string(path) {
+                let content = match crate::source_cache::read_to_string(path) {
                     Ok(c) => c,
                     Err(_) => return,
                 };

@@ -41,7 +41,6 @@ use ailc_core::engines::walk::{is_test_path, walk_stats, WalkStats};
 use ailc_core::registry::Registry;
 use ailc_core::Capability;
 use regex::Regex;
-use std::fs;
 use std::sync::OnceLock;
 
 /// Единая JSON-схема входа для проверок «по проекту» (тот же контракт, что у прочих
@@ -276,7 +275,7 @@ impl Capability for UiCapability {
                 if is_test_path(&rel) {
                     return;
                 }
-                let content = match fs::read_to_string(path) {
+                let content = match ailc_core::source_cache::read_to_string(path) {
                     Ok(c) => c,
                     Err(_) => return,
                 };

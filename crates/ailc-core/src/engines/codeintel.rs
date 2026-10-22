@@ -10,7 +10,6 @@ use super::walk::{ext_of, walk};
 use ailc_contracts::{Ctx, Result, RunInput, Symbol, SymbolKind};
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -34,9 +33,11 @@ pub const MAX_REFERENCES: usize = 500;
 /// перевода строки (LF) не разбивается методом `str::lines`, поэтому старый
 /// macOS-файл читается как одна строка с неверной нумерацией; приводим CRLF и
 /// одиночный CR к LF.
-pub(crate) fn read_source(path: &Path) -> Option<String> {
-    let bytes = fs::read(path).ok()?;
-    Some(decode_source(&bytes))
+///
+/// Чтение идёт через общий кэш прогона ([`crate::source_cache`]): в пределах одного прогона
+/// файл читается и декодируется один раз для всех проверок.
+pub(crate) fn read_source(path: &Path) -> Option<std::sync::Arc<str>> {
+    crate::source_cache::read_source(path)
 }
 
 /// Чистое декодирование байтов в нормализованную строку (вынесено для юнит-тестов).
@@ -1397,12 +1398,8 @@ pub(crate) fn ts_language(lang: &str) -> Option<tree_sitter::Language> {
 }
 
 fn ts_symbols(lang: &str, content: &str, rel: &str) -> Option<Vec<Symbol>> {
-    use tree_sitter::Parser;
-
     let language = ts_language(lang)?;
-    let mut parser = Parser::new();
-    parser.set_language(&language).ok()?;
-    let tree = parser.parse(content, None)?;
+    let tree = crate::source_cache::parse(content, &language)?;
     let lines: Vec<&str> = content.lines().collect();
     let bytes = content.as_bytes();
 
@@ -1755,11 +1752,8 @@ fn collect_calls(
     defs: &mut Vec<CallDef>,
     raw: &mut Vec<(String, String)>,
 ) -> Option<()> {
-    use tree_sitter::Parser;
     let language = ts_language(lang)?;
-    let mut parser = Parser::new();
-    parser.set_language(&language).ok()?;
-    let tree = parser.parse(content, None)?;
+    let tree = crate::source_cache::parse(content, &language)?;
     let bytes = content.as_bytes();
     let lines: Vec<&str> = content.lines().collect();
 

@@ -9,8 +9,7 @@ use super::codeintel::{callee_name, is_call_node, lang_for_ext, ts_language};
 use super::walk::{ext_of, walk};
 use ailc_contracts::{Ctx, Finding, Location, Result, RunInput, Severity};
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
 
 /// Предел глубины рекурсии taint-обхода (T13): на типичном исходнике AST редко
 /// глубже нескольких десятков уровней, поэтому порог 256 заведомо не режет реальные
@@ -49,19 +48,14 @@ pub fn scan(ctx: &Ctx, input: &RunInput) -> Result<SastReport> {
             }
             return;
         };
-        let content = match fs::read_to_string(path) {
+        let content = match crate::source_cache::read_to_string(path) {
             Ok(c) => c,
             Err(_) => {
                 rep.skipped_read += 1;
                 return;
             }
         };
-        let mut parser = Parser::new();
-        if parser.set_language(&language).is_err() {
-            rep.skipped_parse += 1;
-            return;
-        }
-        let Some(tree) = parser.parse(&content, None) else {
+        let Some(tree) = crate::source_cache::parse(&content, &language) else {
             rep.skipped_parse += 1;
             return;
         };
@@ -561,19 +555,14 @@ pub fn scan_pii_logs(ctx: &Ctx, input: &RunInput) -> Result<SastReport> {
             }
             return;
         };
-        let content = match fs::read_to_string(path) {
+        let content = match crate::source_cache::read_to_string(path) {
             Ok(c) => c,
             Err(_) => {
                 rep.skipped_read += 1;
                 return;
             }
         };
-        let mut parser = Parser::new();
-        if parser.set_language(&language).is_err() {
-            rep.skipped_parse += 1;
-            return;
-        }
-        let Some(tree) = parser.parse(&content, None) else {
+        let Some(tree) = crate::source_cache::parse(&content, &language) else {
             rep.skipped_parse += 1;
             return;
         };
@@ -1352,7 +1341,7 @@ pub fn scan_taint(ctx: &Ctx, input: &RunInput) -> Result<SastReport> {
     // диск и чтобы межпроцедурная сводка считалась глобально на наборе одного языка).
     struct FileSrc {
         rel: String,
-        content: String,
+        content: std::sync::Arc<str>,
     }
     let mut by_lang: HashMap<&'static str, Vec<FileSrc>> = HashMap::new();
 
@@ -1368,7 +1357,7 @@ pub fn scan_taint(ctx: &Ctx, input: &RunInput) -> Result<SastReport> {
             rep.skipped_lang += 1;
             return;
         }
-        let content = match fs::read_to_string(path) {
+        let content = match crate::source_cache::read_to_string(path) {
             Ok(c) => c,
             Err(_) => {
                 rep.skipped_read += 1;
@@ -1394,12 +1383,7 @@ pub fn scan_taint(ctx: &Ctx, input: &RunInput) -> Result<SastReport> {
         // Отбираем разбираемые файлы языка (валидность грамматики/parse — один раз).
         let mut ok: Vec<&FileSrc> = Vec::new();
         for s in srcs {
-            let mut parser = Parser::new();
-            if parser.set_language(&language).is_err() {
-                rep.skipped_parse += 1;
-                continue;
-            }
-            if parser.parse(&s.content, None).is_none() {
+            if crate::source_cache::parse(&s.content, &language).is_none() {
                 rep.skipped_parse += 1;
                 continue;
             }
@@ -1411,21 +1395,17 @@ pub fn scan_taint(ctx: &Ctx, input: &RunInput) -> Result<SastReport> {
         }
 
         // Межпроцедурная сводка по всему набору файлов языка (T09): source-функции +
-        // sink-параметры. Парсим каждый файл заново внутри (tree-sitter Tree самоссылочно,
-        // дёшево перепарсить, чем хранить дерево рядом с источником через unsafe).
+        // sink-параметры. Деревья берутся из общего кэша прогона (`source_cache`), поэтому
+        // повторное обращение к файлу внутри сводки и при поиске потоков разбора не повторяет.
         let inter = collect_interproc(
-            &ok.iter().map(|s| s.content.as_str()).collect::<Vec<_>>(),
+            &ok.iter().map(|s| &*s.content).collect::<Vec<_>>(),
             &language,
             lang,
         );
 
         // Поиск потоков с учётом сводки.
         for s in &ok {
-            let mut parser = Parser::new();
-            if parser.set_language(&language).is_err() {
-                continue;
-            }
-            let Some(tree) = parser.parse(&s.content, None) else {
+            let Some(tree) = crate::source_cache::parse(&s.content, &language) else {
                 continue;
             };
             let bytes = s.content.as_bytes();
@@ -1464,11 +1444,7 @@ fn collect_interproc(contents: &[&str], language: &tree_sitter::Language, lang: 
     // Деревья держим живыми на всё время сбора, чтобы Node оставались валидными.
     let mut trees: Vec<tree_sitter::Tree> = Vec::new();
     for c in contents {
-        let mut parser = Parser::new();
-        if parser.set_language(language).is_err() {
-            continue;
-        }
-        if let Some(t) = parser.parse(c, None) {
+        if let Some(t) = crate::source_cache::parse(c, language) {
             trees.push(t);
         }
     }

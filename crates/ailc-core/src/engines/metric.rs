@@ -168,17 +168,11 @@ fn is_branch_node(kind: &str) -> bool {
 /// нули, если грамматики для языка нет: выдумывать величину, которую не удалось измерить,
 /// недопустимо, поскольку на неё смотрит человек при решении о качестве.
 fn cognitive_of(ext: &str, content: &str) -> (u32, u32) {
-    use tree_sitter::Parser;
-
     let lang = super::codeintel::lang_for_ext(ext);
     let Some(language) = super::codeintel::ts_language(lang) else {
         return (0, 0);
     };
-    let mut parser = Parser::new();
-    if parser.set_language(&language).is_err() {
-        return (0, 0);
-    }
-    let Some(tree) = parser.parse(content, None) else {
+    let Some(tree) = crate::source_cache::parse(content, &language) else {
         return (0, 0);
     };
 

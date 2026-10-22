@@ -18,14 +18,17 @@ pub mod model;
 pub mod orchestrator;
 pub mod pipeline;
 pub mod policy;
+pub mod process;
 pub mod profile;
 pub mod re;
 pub mod registry;
 pub mod sarif;
 pub mod skills;
+pub mod source_cache;
 pub mod stack;
 pub mod standards;
 pub mod tasks;
+pub mod timing;
 pub mod verify;
 
 use ailc_contracts::{CapabilityManifest, CapabilityOutput, Ctx, Result, RunInput};
