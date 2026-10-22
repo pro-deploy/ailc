@@ -338,6 +338,24 @@ fn toml_str(v: &toml::Value, path: &[&str]) -> Option<String> {
     cur.as_str().map(str::to_string)
 }
 
+/// Имя репозитория из адреса `remote.origin.url`: последний сегмент пути без `.git`.
+/// Понимает адреса https и ssh (`git@host:owner/name.git`).
+fn repo_name_from_origin(root: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["config", "--get", "remote.origin.url"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    repo_name_from_url(String::from_utf8_lossy(&out.stdout).trim())
+}
+
+fn repo_name_from_url(url: &str) -> Option<String> {
+    let last = url.trim_end_matches('/').rsplit(['/', ':']).next()?;
+    let name = last.strip_suffix(".git").unwrap_or(last);
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 fn identity(ctx: &Ctx, gaps: &mut Vec<Gap>) -> Identity {
     let mut id = Identity::default();
     let root = &ctx.root;
@@ -476,6 +494,19 @@ fn identity(ctx: &Ctx, gaps: &mut Vec<Gap>) -> Identity {
                     }
                 }
             }
+        }
+    }
+
+    // Манифест имени не объявляет (например у рабочего пространства Rust своего имени
+    // нет): берём имя репозитория из адреса origin. Оно одинаково в любой выгрузке, тогда
+    // как имя каталога зависит от того, куда выгрузили репозиторий, и прежде документы,
+    // собранные в каталоге `ailc-main`, считались разошедшимися с кодом в выгрузке `ailc`.
+    if id.name.is_none() {
+        if let Some(n) = repo_name_from_origin(root) {
+            id.name = Some(Fact::new(
+                n,
+                Origin::derived("git-remote", Certainty::Heuristic),
+            ));
         }
     }
 
@@ -1109,6 +1140,23 @@ mod tests {
         assert_eq!(m.identity.name.map(|n| n.value).as_deref(), Some("учёт"));
         assert_eq!(m.identity.authors.len(), 1);
         let _ = std::fs::remove_dir_all(&ctx.root);
+    }
+
+    #[test]
+    fn имя_репозитория_из_адреса_origin() {
+        assert_eq!(
+            repo_name_from_url("https://github.com/pro-deploy/ailc.git").as_deref(),
+            Some("ailc")
+        );
+        assert_eq!(
+            repo_name_from_url("git@github.com:pro-deploy/ailc.git").as_deref(),
+            Some("ailc")
+        );
+        assert_eq!(
+            repo_name_from_url("https://example.com/x/proj/").as_deref(),
+            Some("proj")
+        );
+        assert_eq!(repo_name_from_url(""), None);
     }
 
     /// В рабочем пространстве артефакты объявлены у участников, а не в корне: корневой
