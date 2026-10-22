@@ -886,7 +886,11 @@ impl Ctx {
             None => Ok(self.root.clone()),
             Some(t) => {
                 let p = std::path::Path::new(t);
+                // `has_root` дополняет `is_absolute` на Windows: путь вида `/etc` или
+                // `\\dir` там не абсолютный (нет буквы диска), но начинается от корня
+                // текущего диска и так же выводит сканирование за корень проекта.
                 let escapes = p.is_absolute()
+                    || p.has_root()
                     || p.components()
                         .any(|c| matches!(c, std::path::Component::ParentDir));
                 if escapes {

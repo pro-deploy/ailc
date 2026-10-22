@@ -1095,7 +1095,10 @@ mod tests {
         );
         t.write("src/a.rs", "fn a() {}\n");
         let out = run_const(t.path());
-        assert!(matches!(out.outcome(), ailc_contracts::CheckOutcome::Ran), "{out:?}");
+        assert!(
+            matches!(out.outcome(), ailc_contracts::CheckOutcome::Ran),
+            "{out:?}"
+        );
         assert!(out.summary.contains("правил нет"), "{}", out.summary);
     }
 
