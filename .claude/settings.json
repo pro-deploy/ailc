@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "/Users/home/Desktop/ailc-main/target/debug/ailc stage resume \"$CLAUDE_PROJECT_DIR\"" } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "/Users/home/Desktop/ailc-main/target/debug/ailc stage status \"$CLAUDE_PROJECT_DIR\"" } ] }
+    ]
+  }
+}
