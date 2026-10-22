@@ -37,7 +37,6 @@ const STATE: &str = "state.toml";
 pub const NEXT: &str = ".ailc/process/NEXT.md";
 pub const BRIEF: &str = "docs/brief.md";
 pub const LANDSCAPE: &str = "docs/landscape.md";
-const DECISIONS: &str = ".ailc/decisions";
 /// Начиная с этого числа файлов репозиторий считается большой кодовой базой.
 const LARGE_REPO_FILES: usize = 400;
 
@@ -239,24 +238,13 @@ fn read(ctx: &Ctx, rel: &str) -> Option<String> {
 
 /// ADR проекта: путь относительно корня и текст.
 pub fn decisions(ctx: &Ctx) -> Vec<(String, String)> {
-    let mut v: Vec<(String, String)> = std::fs::read_dir(ctx.root.join(DECISIONS))
+    // Оба каталога журнала решений (см. `crate::adr`): новые записи в docs/adr/, прежние в
+    // .ailc/decisions/. Прежние остаются на своём месте и под своим путём, поэтому снимок
+    // заморозки у уже согласованных проектов не меняется.
+    crate::adr::list(ctx)
         .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            let text = std::fs::read_to_string(e.path()).ok()?;
-            Some((format!("{DECISIONS}/{name}"), text))
-        })
-        .collect();
-    v.sort_by_key(|(p, _)| {
-        p.rsplit('/')
-            .next()
-            .and_then(|f| f.trim_end_matches(".md").parse::<u32>().ok())
-            .unwrap_or(u32::MAX)
-    });
-    v
+        .filter_map(|r| Some((r.rel, std::fs::read_to_string(&r.path).ok()?)))
+        .collect()
 }
 
 pub fn adr_status(text: &str) -> Option<String> {
@@ -279,7 +267,22 @@ fn adr_ready(text: &str) -> bool {
     if st != "предложено" && st != "принято" {
         return false;
     }
-    let marked = text.replace("## Решение\n", "## Решение (обязательно)\n");
+    // Обязательные разделы задаются списком (см. `templates::ADR_REQUIRED`): у записей,
+    // созданных до снятия пометки «(обязательно)» с заголовков, она по-прежнему есть, у
+    // новых её нет, и проверка одинакова для обоих. Записи старого формата без раздела
+    // «Рассмотренные варианты» проходят по тем разделам, которые в них есть.
+    let mut marked = String::with_capacity(text.len() + 64);
+    for line in text.lines() {
+        let required = line
+            .strip_prefix("## ")
+            .map(str::trim)
+            .filter(|h| templates::ADR_REQUIRED.contains(h));
+        match required {
+            Some(h) => marked.push_str(&format!("## {h} (обязательно)")),
+            None => marked.push_str(line),
+        }
+        marked.push('\n');
+    }
     templates::missing_required(&marked).is_empty()
 }
 
@@ -985,6 +988,23 @@ fn accept(ctx: &Ctx, reg: Option<&Registry>, st: &mut State) -> Result<Reply> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn гейт_adr_проверяет_разделы_по_списку_без_пометок_в_заголовках() {
+        let ctx = Ctx::new(std::env::temp_dir().join("ailc-proc-adr-ready-nonexistent"));
+        let empty = templates::render_adr(&ctx, "1", "БД", "2026-01-01", "нет");
+        assert!(!empty.contains("(обязательно)"));
+        assert!(!adr_ready(&empty), "пустые разделы не должны проходить гейт");
+        let mut filled = String::new();
+        for line in empty.lines() {
+            filled.push_str(line);
+            filled.push('\n');
+            if line.starts_with("## ") {
+                filled.push_str("Текст раздела.\n");
+            }
+        }
+        assert!(adr_ready(&filled), "{filled}");
+    }
+
     fn tmp(name: &str) -> Ctx {
         let dir = std::env::temp_dir().join(format!("ailc-proc-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1014,7 +1034,7 @@ mod tests {
         assert!(!call(&ctx, json!({"action":"advance"})).error);
         std::fs::write(ctx.root.join(LANDSCAPE), "# К\n## Системы и интеграции (обязательно)\nМИС.\n## Ограничения безопасности и инфраструктуры (обязательно)\nРФ.\n## Риски (обязательно)\nНет; принят.\n").unwrap();
         assert!(!call(&ctx, json!({"action":"advance"})).error);
-        std::fs::create_dir_all(ctx.root.join(DECISIONS)).unwrap();
+        std::fs::create_dir_all(ctx.root.join(crate::adr::LEGACY_DIR)).unwrap();
         std::fs::write(
             ctx.root.join(".ailc/decisions/1.md"),
             "# ADR-1: БД\n\n- Статус: предложено\n\n## Контекст\nх\n## Решение\nPostgreSQL.\n",

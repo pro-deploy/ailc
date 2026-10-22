@@ -9,5 +9,5 @@
 title = "Добавить модель Appointment и миграцию"
 task = "Хранение записей"
 files = ["src/models/appointment.rs", "migrations/0003_appointments.sql"]
-read_first = ["docs/brief.md", ".ailc/decisions/1.md"]
+read_first = ["docs/brief.md", "docs/adr/1.md"]
 check = "cargo test appointment"

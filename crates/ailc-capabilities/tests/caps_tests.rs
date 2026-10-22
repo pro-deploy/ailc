@@ -804,7 +804,7 @@ fn feature_design_scaffolds_spec_and_adr() {
     let doc = std::fs::read_to_string(ctx.root.join("docs/фичи/корзина-покупок.md")).unwrap();
     assert!(doc.contains("Критерии приёмки"), "секция DoD есть");
     assert!(doc.contains("Затрагиваемые части"), "карта кода есть");
-    let adr = std::fs::read_to_string(ctx.root.join(".ailc/decisions/1.md")).unwrap();
+    let adr = std::fs::read_to_string(ailc_core::adr::find(&ctx, 1).unwrap().path).unwrap();
     assert!(
         adr.contains("## Решение") && adr.contains("корзина покупок"),
         "ADR Nygard"
@@ -816,7 +816,7 @@ fn feature_design_scaffolds_spec_and_adr() {
         "повторное проектирование не дублирует"
     );
     assert!(
-        !ctx.root.join(".ailc/decisions/2.md").exists(),
+        ailc_core::adr::find(&ctx, 2).is_none(),
         "лишний ADR не создан"
     );
 }
@@ -1188,7 +1188,7 @@ fn workflow_adr_branchname_setup() {
         .unwrap()
         .run(&ctx, &q("Выбор хранилища"))
         .unwrap();
-    let adr = std::fs::read_to_string(ctx.root.join(".ailc/decisions/1.md")).unwrap();
+    let adr = std::fs::read_to_string(ailc_core::adr::find(&ctx, 1).unwrap().path).unwrap();
     assert!(
         adr.contains("Выбор хранилища") && adr.contains("## Решение"),
         "ADR Nygard: {adr}"

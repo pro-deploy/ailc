@@ -148,12 +148,34 @@ pub fn load(ctx: &Ctx, rel: &str) -> Option<String> {
         .or_else(|| builtin(rel).map(str::to_string))
 }
 
+/// Обязательные разделы записи ADR. Гейт этапа 3 проверяет их заполненность по этому
+/// списку, а не по пометке «(обязательно)» в заголовке: пометка нужна в шаблоне брифа и
+/// карты, но в готовом решении, которое читает и утверждает человек, она лишняя.
+pub const ADR_REQUIRED: &[&str] = &[
+    "Контекст",
+    "Рассмотренные варианты",
+    "Решение",
+    "Причина выбора",
+    "Последствия",
+];
+
 /// Текст новой записи ADR по шаблону проекта (или встроенному). Строка-заголовок
 /// версии шаблона в запись не попадает: это служебная пометка шаблона, а не решения.
+/// Пометка «(обязательно)» снимается с заголовков разделов (в том числе в копиях шаблона,
+/// уже разложенных в проекты прежними версиями): прежде она попадала в готовый документ
+/// и делала его заголовки служебными. Подсказки в HTML-комментариях остаются: при
+/// просмотре Markdown они не видны, а модели при заполнении помогают.
 pub fn render_adr(ctx: &Ctx, number: &str, title: &str, date: &str, replaces: &str) -> String {
     let tpl = load(ctx, "adr.md").unwrap_or_default();
     tpl.lines()
         .filter(|l| !l.contains("ailc-template:"))
+        .map(|l| match l.strip_prefix("## ") {
+            Some(h) => format!(
+                "## {}",
+                h.trim_end().trim_end_matches("(обязательно)").trim_end()
+            ),
+            None => l.to_string(),
+        })
         .collect::<Vec<_>>()
         .join("\n")
         .trim_start()
@@ -330,7 +352,11 @@ mod tests {
         assert!(t.starts_with("# ADR-7: БД"));
         assert!(t.contains("- Статус: предложено") && t.contains("- Заменено: нет"));
         assert!(!t.contains("ailc-template"));
-        assert!(missing_required(&t).contains(&"Решение".to_string()));
+        // Заголовки готового решения без служебной пометки «(обязательно)»: обязательные
+        // разделы ADR гейт берёт из списка ADR_REQUIRED.
+        assert!(t.contains("\n## Решение\n"), "{t}");
+        assert!(!t.contains("(обязательно)"), "{t}");
+        assert!(ADR_REQUIRED.contains(&"Решение"));
     }
 
     #[test]

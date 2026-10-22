@@ -2,6 +2,7 @@
 //! (planner / router / executor / verify_supervisor / rigor_scorer / escalation),
 //! который живёт в модуле [`orchestrator`].
 
+pub mod adr;
 pub mod agent;
 pub mod answers;
 pub mod autofix;

@@ -17,7 +17,6 @@ use ailc_contracts::{
     CapabilityManifest, CapabilityOutput, Ctx, EngineKind, Family, Result, RunInput, Tier,
 };
 use ailc_core::engines::codeintel::CodeIntelEngine;
-use ailc_core::engines::store::Store;
 use ailc_core::registry::Registry;
 use ailc_core::Capability;
 use std::fs;
@@ -105,17 +104,12 @@ impl Capability for FeatureSpec {
         }
 
         // ADR (Nygard) — отдельной записью в журнал решений, со ссылкой на фичу.
-        let adr_name = Store::alloc_id(ctx, "decisions", "md")?;
-        let number = adr_name.split('.').next().unwrap_or(&adr_name);
-        let adr = ailc_core::process::templates::render_adr(
-            ctx,
-            number,
-            &feature,
-            &ailc_core::answers::today(),
-            "нет",
-        );
-        Store::write(ctx, "decisions", &adr_name, &adr)?;
-        let adr_rel = format!(".ailc/decisions/{adr_name}");
+        // Запись создаётся в видимом docs/adr/ рядом со спекой (см. ailc_core::adr).
+        let date = ailc_core::answers::today();
+        let adr_rec = ailc_core::adr::create(ctx, feature, |n| {
+            ailc_core::process::templates::render_adr(ctx, &n.to_string(), feature, &date, "нет")
+        })?;
+        let adr_rel = adr_rec.rel;
 
         // Карта кода — куда встраивать (снимок на момент проектирования).
         let stats = CodeIntelEngine::module_stats(ctx, input)?;

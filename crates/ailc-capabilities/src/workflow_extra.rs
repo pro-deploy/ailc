@@ -11,7 +11,6 @@ use ailc_contracts::{
     RunInput, Severity, Tier,
 };
 use ailc_core::engines::runner::Runner;
-use ailc_core::engines::store::Store;
 use ailc_core::registry::Registry;
 use ailc_core::Capability;
 
@@ -22,7 +21,6 @@ const QUERY_SCHEMA: &str =
 const EMPTY_SCHEMA: &str = r#"{"type":"object","properties":{}}"#;
 
 /// Пространство имён журнала решений (каталог под `.ailc/`).
-const NS_DECISIONS: &str = "decisions";
 
 // ───────────────────────── generate/adr ─────────────────────────
 
@@ -76,20 +74,6 @@ impl Capability for GenerateAdr {
             }
         };
 
-        // Атомарно выделяем номер-файл, затем наполняем его шаблоном.
-        let name = Store::alloc_id(ctx, NS_DECISIONS, "md")?;
-        // Номер берём из имени файла «<n>.md»: до точки — число записи.
-        let number = name.split('.').next().unwrap_or(name.as_str());
-
-        // Статус и связи — часть записи, а не приписка на полях. Без них журнал решений
-        // превращается в свалку: непонятно, какое решение действует, какое отменено и чем
-        // именно оно заменено. Новая запись всегда рождается предложенной: принятие есть
-        // отдельное человеческое действие, и подменять его фактом создания файла нельзя.
-        //
-        // Замена оформляется в одном вызове: если в запросе указано «заменяет ADR-N», то
-        // новая запись ссылается на прежнюю, а прежняя переводится в статус «заменено» со
-        // встречной ссылкой. Двусторонняя связь важна: односторонняя оставляет читателя
-        // отменённого решения в неведении.
         let superseded = superseded_ref(title);
         let title_clean = strip_supersede_clause(title);
 
@@ -98,14 +82,19 @@ impl Capability for GenerateAdr {
         let replaces = superseded
             .map(|n| format!("ADR-{n}"))
             .unwrap_or_else(|| "нет".to_string());
-        let body = ailc_core::process::templates::render_adr(
-            ctx,
-            &number.to_string(),
-            &title_clean,
-            &today(),
-            &replaces,
-        );
-        Store::write(ctx, NS_DECISIONS, &name, &body)?;
+        // Номер выделяется атомарно, запись создаётся в видимом docs/adr/ (см. ailc_core::adr).
+        let date = today();
+        let rec = ailc_core::adr::create(ctx, &title_clean, |n| {
+            ailc_core::process::templates::render_adr(
+                ctx,
+                &n.to_string(),
+                &title_clean,
+                &date,
+                &replaces,
+            )
+        })?;
+        let number = rec.number.to_string();
+        let number = number.as_str();
 
         // Встречная ссылка в заменяемом решении.
         let mut note = String::new();
@@ -117,7 +106,7 @@ impl Capability for GenerateAdr {
             }
         }
 
-        let artifact = format!(".ailc/{NS_DECISIONS}/{name}");
+        let artifact = rec.rel.clone();
         out.artifacts.push(artifact.clone());
         out.summary =
             format!("generate/adr: ADR-{number} записан (статус «предложено») → {artifact}{note}");
@@ -188,11 +177,9 @@ fn strip_supersede_clause(title: &str) -> String {
 /// признак «запись найдена»: молчаливое отсутствие связи недопустимо, вызывающий обязан
 /// сообщить об этом человеку.
 fn mark_superseded(ctx: &Ctx, old_number: u32, by_number: &str) -> Result<bool> {
-    let path = ctx
-        .root
-        .join(".ailc")
-        .join(NS_DECISIONS)
-        .join(format!("{old_number}.md"));
+    let Some(path) = ailc_core::adr::find(ctx, old_number).map(|r| r.path) else {
+        return Ok(false);
+    };
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };
@@ -669,32 +656,25 @@ impl Capability for AdrLifecycle {
 
     fn run(&self, ctx: &Ctx, _input: &RunInput) -> Result<CapabilityOutput> {
         let mut out = CapabilityOutput::default();
-        let dir = ctx.root.join(".ailc").join(NS_DECISIONS);
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            out.skipped = Some("журнал решений отсутствует (.ailc/decisions)".into());
+        // Записи обоих каталогов: новые в docs/adr/, прежние в .ailc/decisions/ (см.
+        // ailc_core::adr), по возрастанию номера.
+        let records = ailc_core::adr::list(ctx);
+        if records.is_empty() {
+            out.skipped = Some(format!(
+                "журнал решений отсутствует ({} и {})",
+                ailc_core::adr::DIR,
+                ailc_core::adr::LEGACY_DIR
+            ));
             out.summary = "verify/adr-lifecycle: пропущено (нет журнала решений)".into();
             return Ok(out);
-        };
-
-        // Устойчивый порядок: номера решений сортируются как числа, а не как строки.
-        let mut numbers: Vec<u32> = entries
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                name.strip_suffix(".md")?.parse::<u32>().ok()
-            })
-            .collect();
-        numbers.sort_unstable();
-        if numbers.is_empty() {
-            out.skipped = Some("в журнале решений нет записей".into());
-            out.summary = "verify/adr-lifecycle: пропущено (журнал пуст)".into();
-            return Ok(out);
         }
+        let numbers: Vec<u32> = records.iter().map(|r| r.number).collect();
 
         let known: std::collections::BTreeSet<u32> = numbers.iter().copied().collect();
-        for n in &numbers {
-            let rel = format!(".ailc/{NS_DECISIONS}/{n}.md");
-            let Ok(text) = std::fs::read_to_string(dir.join(format!("{n}.md"))) else {
+        for rec in &records {
+            let n = &rec.number;
+            let rel = rec.rel.clone();
+            let Ok(text) = std::fs::read_to_string(&rec.path) else {
                 continue;
             };
             let field = |name: &str| -> Option<String> {
@@ -838,8 +818,8 @@ mod tests {
             out.summary
         );
 
-        let one = std::fs::read_to_string(ctx.root.join(".ailc/decisions/1.md")).unwrap();
-        let two = std::fs::read_to_string(ctx.root.join(".ailc/decisions/2.md")).unwrap();
+        let one = std::fs::read_to_string(ailc_core::adr::find(&ctx, 1).unwrap().path).unwrap();
+        let two = std::fs::read_to_string(ailc_core::adr::find(&ctx, 2).unwrap().path).unwrap();
         assert!(
             one.contains("- Статус: заменено"),
             "прежнее решение отменено: {one}"
